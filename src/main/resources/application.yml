@@ -1,0 +1,12 @@
+spring:
+  application.name: ouf-udp-object-resolution
+  datasource:
+    url: ${OUF_UDP_DB_URL}
+    username: ${OUF_UDP_DB_USER}
+    password: ${OUF_UDP_DB_PASSWORD}
+  flyway:
+    schemas: ouf_udp
+    default-schema: ouf_udp
+    create-schemas: true
+management.endpoints.web.exposure.include: health,info,metrics
+server.port: ${PORT:8080}
