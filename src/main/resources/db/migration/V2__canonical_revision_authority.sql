@@ -4,6 +4,7 @@ create table ouf_udp.object_revision(
   revision_no bigint not null,
   canonical_hash text not null,
   authority_hash text not null,
+  authority_state jsonb not null,
   canonical_payload jsonb not null,
   access_labels jsonb not null,
   source_handoff_id text not null references ouf_udp.handoff_intake on delete restrict,
