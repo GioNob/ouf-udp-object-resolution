@@ -11,7 +11,10 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | UDP-E2E-05 deterministic MATCH NEW REVIEW decision | IMPLEMENTED BASELINE | `ObjectResolutionService`, append-only decision and ambiguity tests |
 | ResolutionDecision required evidence and configured strategy references | IMPLEMENTED BASELINE | V1 and `ObjectResolutionService` |
 | Human-governed resolution issue lifecycle | PARTIAL | ambiguity is persisted; THS authorization and resolution commands remain open |
-| Canonical revision materialization and authority engine | OPEN | next increment |
+| Canonical revision materialization and authority engine | IMPLEMENTED BASELINE | V2, `CanonicalMaterializer`, materializer runtime tests |
+| Property-level provenance and DataAccessLabel | IMPLEMENTED BASELINE | contribution/value tables and provenance test |
+| Repeated observation without material change | IMPLEMENTED | canonical and authority hashes; observation-only test |
+| Property authority and conflict without last-write-wins | IMPLEMENTED BASELINE | configured per-property priority and conflict test |
 | Relationship and spatial resolution including `QUARANTINE_RELATION` | OPEN | requires Ingestion unresolved-relationship input contract alignment |
 | Property-level DataAccessLabel enforcement | OPEN | later serving/security increment |
 | Serving, graph/spatial query governor and MCP capability projection | OPEN | later increments |
