@@ -7,7 +7,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgis/postgis:17-3.5-alpine
         env: {POSTGRES_DB: ouf_udp, POSTGRES_USER: ouf_udp, POSTGRES_PASSWORD: ci-only-password}
         ports: ['5432:5432']
         options: >-

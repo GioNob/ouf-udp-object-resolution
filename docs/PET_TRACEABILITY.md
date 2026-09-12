@@ -18,7 +18,9 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Relationship input and configured strategy refs | IMPLEMENTED BASELINE | canonical payload input + pinned `relationshipResolutionStrategyRefs` |
 | Relationship resolution and `QUARANTINE_RELATION` | IMPLEMENTED BASELINE | V3, `RelationshipMaterializer`, zero/multiple-match tests |
 | Stable edge identity, immutable revisions and deduplication | IMPLEMENTED BASELINE | V3 natural edge key, evidence hash and append-only tests |
-| Spatial relationship resolution | OPEN | PostGIS predicates, CRS normalization and geometry evidence remain a later tranche |
+| PostGIS spatial relationship resolution | IMPLEMENTED BASELINE | V4, `SpatialMaterializer`, `INTERSECTS/WITHIN/CONTAINS/NEAREST/OVERLAP_RATIO` |
+| CRS, invalid geometry and normalization evidence | IMPLEMENTED BASELINE | explicit CRS guard, no silent repair, versioned geometry evidence |
+| Multiple spatial match handling | IMPLEMENTED | `SPATIAL_MULTIPLE_MATCHES`, candidate evidence, no arbitrary edge |
 | Property-level DataAccessLabel enforcement | OPEN | later serving/security increment |
 | Serving, graph/spatial query governor and MCP capability projection | OPEN | later increments |
 | Lake object lifecycle, retention, compaction and reconciliation | OPEN | later increments |
