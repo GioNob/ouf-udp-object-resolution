@@ -61,3 +61,30 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with: {name: 'udp-dr-evidence-${{ github.run_id }}', path: 'target/dr-evidence/', retention-days: 30}
+  performance-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgis/postgis:17-3.5-alpine
+        env: {POSTGRES_DB: ouf_udp_perf, POSTGRES_USER: ouf_udp, POSTGRES_PASSWORD: ci-only-password}
+        ports: ['55434:5432']
+        options: >-
+          --health-cmd "pg_isready -U ouf_udp -d ouf_udp_perf" --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      OUF_UDP_DB_URL: jdbc:postgresql://127.0.0.1:55434/ouf_udp_perf
+      OUF_UDP_DB_USER: ouf_udp
+      OUF_UDP_DB_PASSWORD: ci-only-password
+      OUF_UDP_LAKE_REQUIRED: 'false'
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: '4'
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Execute reproducible performance gate
+        run: timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -Dtest=PerformanceBaselineIT test
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: 'udp-performance-evidence-${{ github.run_id }}', path: 'target/performance-evidence/', retention-days: 30}
