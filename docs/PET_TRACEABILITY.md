@@ -25,7 +25,11 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Split dry-run, explicit binding allocation and edge review | IMPLEMENTED BASELINE | allocation completeness guard, unresolved binding/relationship issues |
 | Historical identity alias and redirect | IMPLEMENTED BASELINE | `object_identity_history`, `redirect_to`, current/historical identity lookup |
 | Trusted Human Surface boundary for identity governance | IMPLEMENTED BASELINE | server-side request attributes, actor-header rejection, non-MCP execute operations |
-| Property-level DataAccessLabel enforcement | OPEN | later serving/security increment |
-| Serving, graph/spatial query governor and MCP capability projection | OPEN | later increments |
+| Property-level DataAccessLabel enforcement | IMPLEMENTED BASELINE | V7, `GovernedServingService`, omission-before-serialization and audit test |
+| Current/history/as-of and exact-type search | IMPLEMENTED BASELINE | opaque cursor, page cap, indexed filter and tenant anti-enumeration tests |
+| Relationship-level enforcement without degree leakage | IMPLEMENTED BASELINE | label-filtered SQL and no-hidden-cursor test |
+| Lineage redaction | IMPLEMENTED BASELINE | source/raw references require separate capabilities |
+| Serving API and MCP capability projection | IMPLEMENTED BASELINE | `ServingApi`, `openapi-serving.yaml` |
+| Graph/spatial query governor | OPEN | later increment |
 | Lake object lifecycle, retention, compaction and reconciliation | OPEN | later increments |
 | Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |
