@@ -36,5 +36,6 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Spatial query governor | IMPLEMENTED BASELINE | V9, typed nearby/intersects/within/intersection-search, PostGIS bbox prefilter, CRS/radius/area/result gates and cumulative budget tests |
 | Lake object lifecycle and two-phase deletion | IMPLEMENTED BASELINE | V10, immutable logical identity, verified durability protocol, deletion guard, lease and lifecycle tests |
 | Lake compaction and reconciliation | IMPLEMENTED BASELINE | immutable verified manifest, label/retention boundary, checksum/missing/orphan findings and no destructive adoption |
-| S3-compatible production adapter and shadow rebuild | OPEN | storage SPI is defined; provider binding and rebuild/cut-over remain later increments |
+| S3-compatible production adapter and RAW durable ACK | IMPLEMENTED BASELINE | AWS SDK v2 adapter, workload credential chain, immutable key/hash metadata, V11 handoff reference and failure tests |
+| Shadow rebuild and controlled cut-over | OPEN | rebuild planning, historical-reference gate and shadow validation remain later increments |
 | Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |

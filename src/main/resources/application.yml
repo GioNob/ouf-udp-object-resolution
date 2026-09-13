@@ -10,3 +10,14 @@ spring:
     create-schemas: true
 management.endpoints.web.exposure.include: health,info,metrics
 server.port: ${PORT:8080}
+ouf.udp.lake:
+  required: ${OUF_UDP_LAKE_REQUIRED:true}
+  raw-retention-days: ${OUF_UDP_RAW_RETENTION_DAYS:0}
+  raw-retention-class: ${OUF_UDP_RAW_RETENTION_CLASS:}
+  raw-access-label: ${OUF_UDP_RAW_ACCESS_LABEL:}
+  tenant-id: ${OUF_UDP_TENANT_ID:}
+  s3:
+    bucket: ${OUF_UDP_S3_BUCKET:}
+    endpoint: ${OUF_UDP_S3_ENDPOINT:}
+    region: ${OUF_UDP_S3_REGION:us-east-1}
+    path-style: ${OUF_UDP_S3_PATH_STYLE:false}
