@@ -16,6 +16,7 @@ jobs:
       OUF_UDP_DB_URL: jdbc:postgresql://127.0.0.1:5432/ouf_udp
       OUF_UDP_DB_USER: ouf_udp
       OUF_UDP_DB_PASSWORD: ci-only-password
+      OUF_UDP_LAKE_REQUIRED: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
