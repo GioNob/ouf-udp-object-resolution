@@ -39,6 +39,6 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | S3-compatible production adapter and RAW durable ACK | IMPLEMENTED BASELINE | AWS SDK v2 adapter, workload credential chain, immutable key/hash metadata, V11 handoff reference and failure tests |
 | Real S3-compatible acceptance path | IMPLEMENTED BASELINE | pinned MinIO CI service; real SDK `PUT/HEAD/GET/LIST/DELETE`, metadata, missing/checksum/orphan reconciliation and shadow cutover tests |
 | Scheduled storage integrity scan and reconciliation | IMPLEMENTED BASELINE | V12 durable schedule/attempt history, leased `SKIP LOCKED` worker, bounded retry backoff, metrics and concurrency/recovery tests |
-| Shadow rebuild and controlled cut-over | IMPLEMENTED BASELINE | V13 frozen tenant/tier plan, isolated copy and durability verification, reference-integrity gate, optimistic human cutover and immutable audit |
+| Shadow rebuild and controlled cut-over | IMPLEMENTED BASELINE | V13–V14 frozen tenant/tier plan, resumable generation-fenced copy, renewable lease, durability/reference gates, optimistic human cutover and rollback, immutable audit |
 | PostgreSQL PITR and object-storage restore | IMPLEMENTED BASELINE | executable PostgreSQL 17 WAL recovery-target drill, independent MinIO restore, cross-store checksum and post-restore reconciliation evidence |
 | Production recovery, performance, SBOM and deployment evidence | PARTIAL | CI restore baseline implemented; infrastructure acceptance, performance, SBOM and deployment evidence remain open |
