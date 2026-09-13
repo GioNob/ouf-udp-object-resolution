@@ -14,6 +14,13 @@ paths:
       x-ouf-mcp-eligible: false
       x-ouf-trusted-human-only: true
       responses: {'200': {description: Governed physical locator cutover}}
+  /api/udp/v1/governance/lake/shadow-rebuilds/{id}/rollback:
+    post:
+      operationId: rollbackLakeShadowRebuild
+      x-ouf-capability: lake.shadow.rollback
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Governed rollback to frozen source locators}}
   /api/udp/v1/governance/lake/objects/{id}/deletion:
     post:
       operationId: authorizeLakeObjectDeletion
