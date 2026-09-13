@@ -10,5 +10,6 @@ public class LakeShadowRebuildApi {
   @PostMapping LakeShadowRebuildService.Plan plan(@RequestBody PlanRequest body,HttpServletRequest request){return service.plan(body.tier(),TrustedHumanApi.trusted(request));}
   @GetMapping("/{id}") LakeShadowRebuildService.Plan get(@PathVariable UUID id,HttpServletRequest request){var actor=TrustedHumanApi.trusted(request);actor.require("lake.shadow.read");return service.get(id,actor.tenantId());}
   @PostMapping("/{id}/cutover") LakeShadowRebuildService.Plan cutover(@PathVariable UUID id,@RequestBody CutoverRequest body,HttpServletRequest request){return service.cutover(id,body.expectedVersion(),body.reason(),TrustedHumanApi.trusted(request));}
+  @PostMapping("/{id}/rollback") LakeShadowRebuildService.Plan rollback(@PathVariable UUID id,@RequestBody CutoverRequest body,HttpServletRequest request){return service.rollback(id,body.expectedVersion(),body.reason(),TrustedHumanApi.trusted(request));}
   record PlanRequest(String tier){}record CutoverRequest(long expectedVersion,String reason){}
 }
