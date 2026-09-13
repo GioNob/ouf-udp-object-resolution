@@ -1,0 +1,36 @@
+openapi: 3.1.0
+info: {title: OUF UDP Trusted Human Governance API, version: 1.0.0}
+paths:
+  /api/udp/v1/governance/merge/plans:
+    post:
+      operationId: planMerge
+      x-ouf-capability: urban.merge.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Immutable impact plan}}
+  /api/udp/v1/governance/merge/plans/{id}/execute:
+    post:
+      operationId: executeMerge
+      x-ouf-capability: urban.object.merge
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Executed merge}}
+  /api/udp/v1/governance/split/plans:
+    post:
+      operationId: planSplit
+      x-ouf-capability: urban.split.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Immutable impact plan}}
+  /api/udp/v1/governance/split/plans/{id}/execute:
+    post:
+      operationId: executeSplit
+      x-ouf-capability: urban.object.split
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Executed split}}
+  /api/udp/v1/governance/resolution/issues/{id}/decisions:
+    post:
+      operationId: decideResolutionIssue
+      x-ouf-capability: resolution.match.approve
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Human decision recorded}}

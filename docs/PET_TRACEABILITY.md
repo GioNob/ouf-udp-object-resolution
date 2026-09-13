@@ -10,7 +10,7 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Leased asynchronous materialization claim with `SKIP LOCKED` | IMPLEMENTED | `ResolutionRepository` |
 | UDP-E2E-05 deterministic MATCH NEW REVIEW decision | IMPLEMENTED BASELINE | `ObjectResolutionService`, append-only decision and ambiguity tests |
 | ResolutionDecision required evidence and configured strategy references | IMPLEMENTED BASELINE | V1 and `ObjectResolutionService` |
-| Human-governed resolution issue lifecycle | PARTIAL | ambiguity is persisted; THS authorization and resolution commands remain open |
+| Human-governed resolution issue lifecycle | IMPLEMENTED BASELINE | V5, append-only human decision, trusted context and optimistic-lock tests |
 | Canonical revision materialization and authority engine | IMPLEMENTED BASELINE | V2, `CanonicalMaterializer`, materializer runtime tests |
 | Property-level provenance and DataAccessLabel | IMPLEMENTED BASELINE | contribution/value tables and provenance test |
 | Repeated observation without material change | IMPLEMENTED | canonical and authority hashes; observation-only test |
@@ -21,6 +21,10 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | PostGIS spatial relationship resolution | IMPLEMENTED BASELINE | V4, `SpatialMaterializer`, `INTERSECTS/WITHIN/CONTAINS/NEAREST/OVERLAP_RATIO` |
 | CRS, invalid geometry and normalization evidence | IMPLEMENTED BASELINE | explicit CRS guard, no silent repair, versioned geometry evidence |
 | Multiple spatial match handling | IMPLEMENTED | `SPATIAL_MULTIPLE_MATCHES`, candidate evidence, no arbitrary edge |
+| Merge dry-run, impact and human execution | IMPLEMENTED BASELINE | `IdentityGovernanceService`, immutable impact plan, idempotency and alias test |
+| Split dry-run, explicit binding allocation and edge review | IMPLEMENTED BASELINE | allocation completeness guard, unresolved binding/relationship issues |
+| Historical identity alias and redirect | IMPLEMENTED BASELINE | `object_identity_history`, `redirect_to`, current/historical identity lookup |
+| Trusted Human Surface boundary for identity governance | IMPLEMENTED BASELINE | server-side request attributes, actor-header rejection, non-MCP execute operations |
 | Property-level DataAccessLabel enforcement | OPEN | later serving/security increment |
 | Serving, graph/spatial query governor and MCP capability projection | OPEN | later increments |
 | Lake object lifecycle, retention, compaction and reconciliation | OPEN | later increments |
