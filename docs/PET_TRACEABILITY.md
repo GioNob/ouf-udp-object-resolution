@@ -38,5 +38,5 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Lake compaction and reconciliation | IMPLEMENTED BASELINE | immutable verified manifest, label/retention boundary, checksum/missing/orphan findings and no destructive adoption |
 | S3-compatible production adapter and RAW durable ACK | IMPLEMENTED BASELINE | AWS SDK v2 adapter, workload credential chain, immutable key/hash metadata, V11 handoff reference and failure tests |
 | Scheduled storage integrity scan and reconciliation | IMPLEMENTED BASELINE | V12 durable schedule/attempt history, leased `SKIP LOCKED` worker, bounded retry backoff, metrics and concurrency/recovery tests |
-| Shadow rebuild and controlled cut-over | OPEN | rebuild planning, historical-reference gate and shadow validation remain later increments |
+| Shadow rebuild and controlled cut-over | IMPLEMENTED BASELINE | V13 frozen tenant/tier plan, isolated copy and durability verification, reference-integrity gate, optimistic human cutover and immutable audit |
 | Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |

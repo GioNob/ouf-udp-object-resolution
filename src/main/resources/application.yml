@@ -26,3 +26,8 @@ ouf.udp.lake:
     poll-ms: ${OUF_UDP_LAKE_MAINTENANCE_POLL_MS:60000}
     initial-delay-ms: ${OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS:300000}
     lease-seconds: ${OUF_UDP_LAKE_MAINTENANCE_LEASE_SECONDS:900}
+  shadow:
+    worker-id: ${OUF_UDP_LAKE_SHADOW_WORKER_ID:}
+    poll-ms: ${OUF_UDP_LAKE_SHADOW_POLL_MS:60000}
+    initial-delay-ms: ${OUF_UDP_LAKE_SHADOW_INITIAL_DELAY_MS:300000}
+    lease-seconds: ${OUF_UDP_LAKE_SHADOW_LEASE_SECONDS:1800}

@@ -1,6 +1,19 @@
 openapi: 3.1.0
 info: {title: OUF UDP Trusted Human Governance API, version: 1.0.0}
 paths:
+  /api/udp/v1/governance/lake/shadow-rebuilds:
+    post:
+      operationId: planLakeShadowRebuild
+      x-ouf-capability: lake.shadow.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Frozen tenant and tier rebuild plan}}
+  /api/udp/v1/governance/lake/shadow-rebuilds/{id}/cutover:
+    post:
+      operationId: cutoverLakeShadowRebuild
+      x-ouf-capability: lake.shadow.cutover
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Governed physical locator cutover}}
   /api/udp/v1/governance/lake/objects/{id}/deletion:
     post:
       operationId: authorizeLakeObjectDeletion
