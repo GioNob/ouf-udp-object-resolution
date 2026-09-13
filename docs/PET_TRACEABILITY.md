@@ -33,6 +33,6 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | PostgreSQL cumulative Query Complexity Budget | IMPLEMENTED BASELINE | V8, atomic conditional upsert, TTL and concurrency test |
 | Graph neighbors and recursive traversal guardrails | IMPLEMENTED BASELINE | typed DTO, indexed adjacency/recursive CTE, label filtering and limits |
 | Capability misuse/orchestration budget | IMPLEMENTED BASELINE | purpose guard and persisted mismatch counter |
-| Spatial query governor | OPEN | nearby/intersects serving cost gate remains a later increment |
+| Spatial query governor | IMPLEMENTED BASELINE | V9, typed nearby/intersects/within/intersection-search, PostGIS bbox prefilter, CRS/radius/area/result gates and cumulative budget tests |
 | Lake object lifecycle, retention, compaction and reconciliation | OPEN | later increments |
 | Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |
