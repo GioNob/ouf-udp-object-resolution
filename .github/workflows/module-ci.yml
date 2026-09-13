@@ -46,3 +46,18 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with: {name: 'udp-evidence-${{ github.run_id }}', path: 'target/surefire-reports/', retention-days: 30}
+  disaster-recovery-drill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Package recovery subject
+        run: mvn -B -ntp -DskipTests package
+      - name: Execute PostgreSQL PITR and MinIO restore drill
+        run: bash scripts/ci/pitr-minio-restore-drill.sh
+      - name: Upload disaster recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: 'udp-dr-evidence-${{ github.run_id }}', path: 'target/dr-evidence/', retention-days: 30}

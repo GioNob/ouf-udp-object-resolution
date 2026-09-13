@@ -40,4 +40,5 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Real S3-compatible acceptance path | IMPLEMENTED BASELINE | pinned MinIO CI service; real SDK `PUT/HEAD/GET/LIST/DELETE`, metadata, missing/checksum/orphan reconciliation and shadow cutover tests |
 | Scheduled storage integrity scan and reconciliation | IMPLEMENTED BASELINE | V12 durable schedule/attempt history, leased `SKIP LOCKED` worker, bounded retry backoff, metrics and concurrency/recovery tests |
 | Shadow rebuild and controlled cut-over | IMPLEMENTED BASELINE | V13 frozen tenant/tier plan, isolated copy and durability verification, reference-integrity gate, optimistic human cutover and immutable audit |
-| Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |
+| PostgreSQL PITR and object-storage restore | IMPLEMENTED BASELINE | executable PostgreSQL 17 WAL recovery-target drill, independent MinIO restore, cross-store checksum and post-restore reconciliation evidence |
+| Production recovery, performance, SBOM and deployment evidence | PARTIAL | CI restore baseline implemented; infrastructure acceptance, performance, SBOM and deployment evidence remain open |
