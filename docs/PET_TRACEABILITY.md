@@ -21,7 +21,7 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | PostGIS spatial relationship resolution | IMPLEMENTED BASELINE | V4, `SpatialMaterializer`, `INTERSECTS/WITHIN/CONTAINS/NEAREST/OVERLAP_RATIO` |
 | CRS, invalid geometry and normalization evidence | IMPLEMENTED BASELINE | explicit CRS guard, no silent repair, versioned geometry evidence |
 | Multiple spatial match handling | IMPLEMENTED | `SPATIAL_MULTIPLE_MATCHES`, candidate evidence, no arbitrary edge |
-| Merge dry-run, impact and human execution | IMPLEMENTED BASELINE | `IdentityGovernanceService`, immutable impact plan, idempotency and alias test |
+| Merge dry-run, impact and human execution | IMPLEMENTED BASELINE | V5–V6, immutable impact plan, binding transfer, edge repoint/dedup, contribution reevaluation links |
 | Split dry-run, explicit binding allocation and edge review | IMPLEMENTED BASELINE | allocation completeness guard, unresolved binding/relationship issues |
 | Historical identity alias and redirect | IMPLEMENTED BASELINE | `object_identity_history`, `redirect_to`, current/historical identity lookup |
 | Trusted Human Surface boundary for identity governance | IMPLEMENTED BASELINE | server-side request attributes, actor-header rejection, non-MCP execute operations |
