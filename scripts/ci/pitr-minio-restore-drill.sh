@@ -123,6 +123,11 @@ done
 [[ "$scan_ok" -ge 1 ]]
 step reconciliation_verified
 
+kill "$app_pid"
+wait "$app_pid" 2>/dev/null || true
+app_pid=""
+step restored_application_stopped
+
 cat >"$evidence_dir/DR_RESULT.txt" <<EOF
 result=PASS
 postgres_version=17
