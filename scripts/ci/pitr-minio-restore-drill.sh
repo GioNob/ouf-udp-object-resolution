@@ -104,8 +104,9 @@ step restored_systems_ready
 
 retained="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select count(*) from ouf_udp.lake_object_event where event_type='DR_RETAINED'")"
 excluded="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select count(*) from ouf_udp.lake_object_event where event_type='DR_EXCLUDED'")"
-migration="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select max(version) from ouf_udp.flyway_schema_history where success")"
+migration="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select max(version::integer) from ouf_udp.flyway_schema_history where success")"
 restored_hash="$(AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_DEFAULT_REGION=us-east-1 aws --endpoint-url http://127.0.0.1:59001 s3api head-object --bucket ouf-udp-dr --key dr/object.json --query 'Metadata."ouf-content-hash"' --output text)"
+printf 'retained=%s\nexcluded=%s\nflyway=%s\nrestored_hash=%s\nexpected_hash=%s\n' "$retained" "$excluded" "$migration" "$restored_hash" "$content_hash" >"$evidence_dir/DR_VALIDATION.txt"
 [[ "$retained" == "1" && "$excluded" == "0" && "$migration" == "13" && "$restored_hash" == "$content_hash" ]]
 step recovery_target_verified
 
