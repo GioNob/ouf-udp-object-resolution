@@ -11,3 +11,7 @@ paths:
     get: {operationId: readRelationships, x-ouf-capability: urban.relationship.read, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized edges without hidden degree}}}
   /api/udp/v1/objects/{id}/lineage:
     get: {operationId: readObjectLineage, x-ouf-capability: lineage.object.read, x-ouf-max-results: 200, x-ouf-mcp-eligible: true, responses: {'200': {description: Redacted lineage}}}
+  /api/udp/v1/graph/neighbors:
+    post: {operationId: graphNeighbors, x-ouf-capability: urban.graph.neighbors, x-ouf-max-nodes: 200, x-ouf-max-edges: 500, x-ouf-mcp-eligible: true, responses: {'200': {description: Bounded one-hop adjacency}}}
+  /api/udp/v1/graph/traverse:
+    post: {operationId: graphTraverse, x-ouf-capability: urban.graph.traverse, x-ouf-use-when: recursive hierarchy only, x-ouf-do-not-use-when: exploratory or cross-domain correlation, x-ouf-max-depth: 4, x-ouf-max-nodes: 500, x-ouf-max-edges: 1000, x-ouf-mcp-eligible: true, responses: {'200': {description: Bounded recursive traversal}}}

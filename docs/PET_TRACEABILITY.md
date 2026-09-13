@@ -30,6 +30,9 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Relationship-level enforcement without degree leakage | IMPLEMENTED BASELINE | label-filtered SQL and no-hidden-cursor test |
 | Lineage redaction | IMPLEMENTED BASELINE | source/raw references require separate capabilities |
 | Serving API and MCP capability projection | IMPLEMENTED BASELINE | `ServingApi`, `openapi-serving.yaml` |
-| Graph/spatial query governor | OPEN | later increment |
+| PostgreSQL cumulative Query Complexity Budget | IMPLEMENTED BASELINE | V8, atomic conditional upsert, TTL and concurrency test |
+| Graph neighbors and recursive traversal guardrails | IMPLEMENTED BASELINE | typed DTO, indexed adjacency/recursive CTE, label filtering and limits |
+| Capability misuse/orchestration budget | IMPLEMENTED BASELINE | purpose guard and persisted mismatch counter |
+| Spatial query governor | OPEN | nearby/intersects serving cost gate remains a later increment |
 | Lake object lifecycle, retention, compaction and reconciliation | OPEN | later increments |
 | Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |
