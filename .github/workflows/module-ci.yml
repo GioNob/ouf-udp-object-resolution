@@ -84,6 +84,9 @@ jobs:
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Execute reproducible performance gate
         run: timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -Dtest=PerformanceBaselineIT test
+      - name: Freeze performance evidence checksums
+        if: always()
+        run: if test -f target/performance-evidence/PERFORMANCE_RESULT.json; then (cd target/performance-evidence && sha256sum PERFORMANCE_RESULT.json PERFORMANCE_RESULT.md >SHA256SUMS); fi
       - name: Upload performance evidence
         if: always()
         uses: actions/upload-artifact@v4
