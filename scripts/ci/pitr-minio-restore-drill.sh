@@ -136,5 +136,4 @@ post_restore_reconciliation=SUCCEEDED
 reconciliation_findings=0
 restore_elapsed_seconds=$((restore_completed-restore_started))
 EOF
-sha256sum "$evidence_dir/DR_RESULT.txt" "$evidence_dir/primary-migration.log" "$evidence_dir/restored-application.log" >"$evidence_dir/SHA256SUMS"
-
+(cd "$evidence_dir" && sha256sum DR_RESULT.txt primary-migration.log restored-application.log >SHA256SUMS)
