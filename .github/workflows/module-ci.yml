@@ -23,8 +23,8 @@ jobs:
       AWS_SECRET_ACCESS_KEY: minio-ci-secret
       AWS_REGION: us-east-1
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Start MinIO acceptance service
         run: |
@@ -44,14 +44,14 @@ jobs:
         run: docker build -t ouf-udp:${{ github.sha }} . && test "$(docker image inspect ouf-udp:${{ github.sha }} --format '{{.Config.User}}')" = "10004:10004"
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: {name: 'udp-evidence-${{ github.run_id }}', path: 'target/surefire-reports/', retention-days: 30}
   disaster-recovery-drill:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Package recovery subject
         run: mvn -B -ntp -DskipTests package
@@ -59,7 +59,7 @@ jobs:
         run: bash scripts/ci/pitr-minio-restore-drill.sh
       - name: Upload disaster recovery evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: {name: 'udp-dr-evidence-${{ github.run_id }}', path: 'target/dr-evidence/', retention-days: 30}
   performance-baseline:
     runs-on: ubuntu-24.04
@@ -79,8 +79,8 @@ jobs:
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: '4'
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: '0'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Execute reproducible performance gate
         run: timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -Dtest=PerformanceBaselineIT test
@@ -89,5 +89,16 @@ jobs:
         run: if test -f target/performance-evidence/PERFORMANCE_RESULT.json; then (cd target/performance-evidence && sha256sum PERFORMANCE_RESULT.json PERFORMANCE_RESULT.md >SHA256SUMS); fi
       - name: Upload performance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with: {name: 'udp-performance-evidence-${{ github.run_id }}', path: 'target/performance-evidence/', retention-days: 30}
+  supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build, scan, validate and freeze evidence
+        run: bash scripts/ci/supply-chain-evidence.sh
+      - name: Upload supply-chain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with: {name: 'udp-supply-chain-evidence-${{ github.run_id }}', path: 'target/supply-chain-evidence/', retention-days: 30}
