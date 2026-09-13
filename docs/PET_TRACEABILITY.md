@@ -34,5 +34,7 @@ Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PA
 | Graph neighbors and recursive traversal guardrails | IMPLEMENTED BASELINE | typed DTO, indexed adjacency/recursive CTE, label filtering and limits |
 | Capability misuse/orchestration budget | IMPLEMENTED BASELINE | purpose guard and persisted mismatch counter |
 | Spatial query governor | IMPLEMENTED BASELINE | V9, typed nearby/intersects/within/intersection-search, PostGIS bbox prefilter, CRS/radius/area/result gates and cumulative budget tests |
-| Lake object lifecycle, retention, compaction and reconciliation | OPEN | later increments |
+| Lake object lifecycle and two-phase deletion | IMPLEMENTED BASELINE | V10, immutable logical identity, verified durability protocol, deletion guard, lease and lifecycle tests |
+| Lake compaction and reconciliation | IMPLEMENTED BASELINE | immutable verified manifest, label/retention boundary, checksum/missing/orphan findings and no destructive adoption |
+| S3-compatible production adapter and shadow rebuild | OPEN | storage SPI is defined; provider binding and rebuild/cut-over remain later increments |
 | Production recovery, performance, SBOM and deployment evidence | OPEN | acceptance phase |
