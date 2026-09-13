@@ -19,10 +19,25 @@ jobs:
       OUF_UDP_LAKE_REQUIRED: 'false'
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: '4'
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: '0'
+      AWS_ACCESS_KEY_ID: minio-ci-access
+      AWS_SECRET_ACCESS_KEY: minio-ci-secret
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Start MinIO acceptance service
+        run: |
+          docker run -d --name udp-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          docker logs udp-minio
+          exit 1
       - name: Verify and package
         run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Build non-root container
