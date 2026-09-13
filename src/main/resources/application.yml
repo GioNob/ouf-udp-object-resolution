@@ -21,3 +21,8 @@ ouf.udp.lake:
     endpoint: ${OUF_UDP_S3_ENDPOINT:}
     region: ${OUF_UDP_S3_REGION:us-east-1}
     path-style: ${OUF_UDP_S3_PATH_STYLE:false}
+  maintenance:
+    worker-id: ${OUF_UDP_LAKE_MAINTENANCE_WORKER_ID:}
+    poll-ms: ${OUF_UDP_LAKE_MAINTENANCE_POLL_MS:60000}
+    initial-delay-ms: ${OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS:300000}
+    lease-seconds: ${OUF_UDP_LAKE_MAINTENANCE_LEASE_SECONDS:900}
