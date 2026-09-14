@@ -25,9 +25,20 @@ public class CapabilityRouter {
     TraversalPurpose purpose = intent == null ? null : intent.purpose();
     if (purpose == null) throw new IllegalArgumentException("UDP_TRAVERSAL_PURPOSE_REQUIRED");
     if (purpose == TraversalPurpose.RECURSIVE_HIERARCHY) return;
+    if (purpose == TraversalPurpose.ANALYTICAL_COMPOSITE) {
+      budgets.mismatch(auth, "GRAPH");
+      throw new AnalyticalCapabilityRequiredException(new AnalyticalCapabilityResponse(
+          "QUERY_REQUIRES_ANALYTICAL_CAPABILITY", "urban.graph.traverse",
+          "COMPOSITE_ANALYTICAL_PATTERN_OUTSIDE_OPERATIONAL_SERVING",
+          "ANALYTICAL_OR_GOVERNED_ASYNC_JOB", false, false,
+          List.of("NARROW_TO_OPERATIONAL_QUERY", "USE_APPROVED_ANALYTICAL_CAPABILITY_WHEN_AVAILABLE",
+              "SUBMIT_GOVERNED_ASYNC_JOB_WHEN_AVAILABLE", "STOP"),
+          new BudgetImpact("NONE", "ONE_ANALYTICAL_REJECTION")));
+    }
 
     Remediation remediation = switch (purpose) {
-      case RECURSIVE_HIERARCHY -> throw new IllegalStateException("UDP_ROUTER_UNREACHABLE_RECURSIVE_CASE");
+      case RECURSIVE_HIERARCHY, ANALYTICAL_COMPOSITE ->
+          throw new IllegalStateException("UDP_ROUTER_UNREACHABLE_PURPOSE");
       case CROSS_DOMAIN_RELATIONSHIP -> mismatch(
           "urban.object.related_search",
           List.of("startObjectId", "relationTypes"),
@@ -83,7 +94,8 @@ public class CapabilityRouter {
     RECURSIVE_HIERARCHY,
     CROSS_DOMAIN_RELATIONSHIP,
     CROSS_DOMAIN_SPATIAL,
-    EXPLORATORY_ONE_HOP
+    EXPLORATORY_ONE_HOP,
+    ANALYTICAL_COMPOSITE
   }
 
   public record TraversalIntent(UUID startObjectId, List<String> relationTypes,
@@ -107,5 +119,11 @@ public class CapabilityRouter {
                                 int attempts, int threshold, boolean retryable,
                                 List<String> governedActions, BudgetImpact budgetImpact) {
     public StalledResponse { governedActions = List.copyOf(governedActions); }
+  }
+  public record AnalyticalCapabilityResponse(
+      String code, String requestedCapability, String reason, String requiredCapabilityClass,
+      boolean asynchronousJobAvailable, boolean retryable, List<String> governedActions,
+      BudgetImpact budgetImpact) {
+    public AnalyticalCapabilityResponse { governedActions = List.copyOf(governedActions); }
   }
 }
