@@ -36,3 +36,5 @@ ouf.udp.lake:
     poll-ms: ${OUF_UDP_LAKE_SHADOW_POLL_MS:60000}
     initial-delay-ms: ${OUF_UDP_LAKE_SHADOW_INITIAL_DELAY_MS:300000}
     lease-seconds: ${OUF_UDP_LAKE_SHADOW_LEASE_SECONDS:1800}
+ouf.udp.historical-contracts:
+  catalog-path: ${OUF_UDP_HISTORICAL_CONTRACT_CATALOG_PATH:}

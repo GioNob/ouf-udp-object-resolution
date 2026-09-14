@@ -25,9 +25,9 @@
     "requirement": "Una revisione vecchia resta risolvibile dopo attivazione di nuovi bundle/schema.",
     "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
     "matrix_id": "UDP-E2E-03",
-    "status": "PARTIAL",
-    "implementation": "contractRefs persistiti nelle revisioni; nessun resolver storico/version-switch test",
-    "evidence": "Presenza dati, non prova end-to-end"
+    "status": "VERIFIED",
+    "implementation": "HistoricalContractCatalog; HistoricalReplayService; HistoricalReplayRuntimeTest#reproducePinsHistoricalBaselineAndCreatesIdempotentDurableWork",
+    "evidence": "Vecchi riferimenti risolti e utilizzati anche in presenza di bundle/schema successivi"
   },
   {
     "id": "UDP-E2E-04",
@@ -115,9 +115,9 @@
     "requirement": "Reproduce usa contratti originali; rebuild shadow valida prima del cut-over.",
     "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
     "matrix_id": "UDP-E2E-12",
-    "status": "PARTIAL",
-    "implementation": "LakeShadowRebuildService e test completi; REPRODUCE con contratti originali assente",
-    "evidence": "Solo metà del criterio"
+    "status": "VERIFIED",
+    "implementation": "HistoricalReplayService + HistoricalReplayRuntimeTest; LakeShadowRebuildService + LakeShadowRebuildRuntimeTest",
+    "evidence": "REPRODUCE storico e rebuild shadow coperti separatamente con gate prima dell'esecuzione/cut-over"
   },
   {
     "id": "UDP-E2E-13",
@@ -325,9 +325,9 @@
     "requirement": "REPRODUCE usa schema/bundle/mapping/publication set originali.",
     "origin": "PET v1.3 §105 / matrice acceptance v1.0",
     "matrix_id": "UDP-A17",
-    "status": "OPEN",
-    "implementation": "Nessuna implementazione REPRODUCE",
-    "evidence": "Bloccante recovery/replay"
+    "status": "VERIFIED",
+    "implementation": "HistoricalContractCatalog; HistoricalReplayService; HistoricalReplayRuntimeTest",
+    "evidence": "Schema, bundle, adapter, mapping e semantic publication originali sono pinning immutabile; nessun fallback ACTIVE"
   },
   {
     "id": "UDP-A18",

@@ -105,9 +105,10 @@ step restored_systems_ready
 retained="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select count(*) from ouf_udp.lake_object_event where event_type='DR_RETAINED'")"
 excluded="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select count(*) from ouf_udp.lake_object_event where event_type='DR_EXCLUDED'")"
 migration="$(docker exec -e PGPASSWORD="$db_password" "$restored_db" psql -U ouf_udp -d ouf_udp -Atc "select max(version::integer) from ouf_udp.flyway_schema_history where success")"
+expected_migration="$(find src/main/resources/db/migration -maxdepth 1 -type f -name 'V*__*.sql' -printf '%f\n' | sed -E 's/^V([0-9]+)__.*/\1/' | sort -n | tail -1)"
 restored_hash="$(AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_DEFAULT_REGION=us-east-1 aws --endpoint-url http://127.0.0.1:59001 s3api head-object --bucket ouf-udp-dr --key dr/object.json --query 'Metadata."ouf-content-hash"' --output text)"
-printf 'retained=%s\nexcluded=%s\nflyway=%s\nrestored_hash=%s\nexpected_hash=%s\n' "$retained" "$excluded" "$migration" "$restored_hash" "$content_hash" >"$evidence_dir/DR_VALIDATION.txt"
-[[ "$retained" == "1" && "$excluded" == "0" && "$migration" == "14" && "$restored_hash" == "$content_hash" ]]
+printf 'retained=%s\nexcluded=%s\nflyway=%s\nexpected_flyway=%s\nrestored_hash=%s\nexpected_hash=%s\n' "$retained" "$excluded" "$migration" "$expected_migration" "$restored_hash" "$content_hash" >"$evidence_dir/DR_VALIDATION.txt"
+[[ "$retained" == "1" && "$excluded" == "0" && "$migration" == "$expected_migration" && "$restored_hash" == "$content_hash" ]]
 step recovery_target_verified
 
 OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:55433/ouf_udp?sslmode=disable' OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false OUF_UDP_S3_BUCKET=ouf-udp-dr OUF_UDP_S3_ENDPOINT=http://127.0.0.1:59001 OUF_UDP_S3_REGION=us-east-1 OUF_UDP_S3_PATH_STYLE=true OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS=1000 OUF_UDP_LAKE_MAINTENANCE_POLL_MS=1000 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_REGION=us-east-1 \
