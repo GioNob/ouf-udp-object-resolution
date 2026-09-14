@@ -4,8 +4,8 @@ COPY pom.xml .
 COPY src src
 COPY contracts contracts
 RUN mvn -B -ntp -DskipTests package
-FROM eclipse-temurin:21-jre
-RUN groupadd -g 10004 ouf && useradd -r -u 10004 -g ouf ouf
+FROM eclipse-temurin:21-jre-alpine
+RUN addgroup -g 10004 ouf && adduser -S -D -H -u 10004 -G ouf ouf
 WORKDIR /app
 COPY --from=build /build/target/udp-object-resolution-*.jar app.jar
 USER 10004:10004

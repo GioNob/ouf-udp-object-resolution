@@ -46,7 +46,7 @@ docker run -d --name "$primary_db" -p 55432:5432 \
 wait_postgres "$primary_db"
 step postgres_primary_ready
 
-OUF_UDP_DB_URL=jdbc:postgresql://127.0.0.1:55432/ouf_udp OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false \
+OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:55432/ouf_udp?sslmode=disable' OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false \
   java -jar target/udp-object-resolution-*.jar --server.port=18081 >"$evidence_dir/primary-migration.log" 2>&1 &
 app_pid="$!"
 wait_http http://127.0.0.1:18081/actuator/health
@@ -110,7 +110,7 @@ printf 'retained=%s\nexcluded=%s\nflyway=%s\nrestored_hash=%s\nexpected_hash=%s\
 [[ "$retained" == "1" && "$excluded" == "0" && "$migration" == "14" && "$restored_hash" == "$content_hash" ]]
 step recovery_target_verified
 
-OUF_UDP_DB_URL=jdbc:postgresql://127.0.0.1:55433/ouf_udp OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false OUF_UDP_S3_BUCKET=ouf-udp-dr OUF_UDP_S3_ENDPOINT=http://127.0.0.1:59001 OUF_UDP_S3_REGION=us-east-1 OUF_UDP_S3_PATH_STYLE=true OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS=1000 OUF_UDP_LAKE_MAINTENANCE_POLL_MS=1000 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_REGION=us-east-1 \
+OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:55433/ouf_udp?sslmode=disable' OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false OUF_UDP_S3_BUCKET=ouf-udp-dr OUF_UDP_S3_ENDPOINT=http://127.0.0.1:59001 OUF_UDP_S3_REGION=us-east-1 OUF_UDP_S3_PATH_STYLE=true OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS=1000 OUF_UDP_LAKE_MAINTENANCE_POLL_MS=1000 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_REGION=us-east-1 \
   java -jar target/udp-object-resolution-*.jar --server.port=18082 >"$evidence_dir/restored-application.log" 2>&1 &
 app_pid="$!"
 wait_http http://127.0.0.1:18082/actuator/health
