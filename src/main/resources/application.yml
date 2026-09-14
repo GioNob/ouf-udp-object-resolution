@@ -8,8 +8,13 @@ spring:
     schemas: ouf_udp
     default-schema: ouf_udp
     create-schemas: true
-management.endpoints.web.exposure.include: health,info,metrics
-server.port: ${PORT:8080}
+management:
+  endpoints.web.exposure.include: health,info,metrics
+  endpoint.health.probes.enabled: true
+server:
+  port: ${PORT:8080}
+  shutdown: graceful
+spring.lifecycle.timeout-per-shutdown-phase: ${OUF_UDP_SHUTDOWN_TIMEOUT:45s}
 ouf.udp.lake:
   required: ${OUF_UDP_LAKE_REQUIRED:true}
   raw-retention-days: ${OUF_UDP_RAW_RETENTION_DAYS:0}
