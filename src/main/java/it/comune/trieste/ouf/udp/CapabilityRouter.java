@@ -15,6 +15,7 @@ public class CapabilityRouter {
     if (purpose == TraversalPurpose.RECURSIVE_HIERARCHY) return;
 
     Remediation remediation = switch (purpose) {
+      case RECURSIVE_HIERARCHY -> throw new IllegalStateException("UDP_ROUTER_UNREACHABLE_RECURSIVE_CASE");
       case CROSS_DOMAIN_RELATIONSHIP -> mismatch(
           "urban.object.related_search",
           List.of("startObjectId", "relationTypes"),
