@@ -435,9 +435,9 @@
     "requirement": "urban.graph.traverse rifiuta pattern non ricorsivi quando esiste una capability specialistica equivalente.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A26",
-    "status": "PARTIAL",
-    "implementation": "GraphQueryService rifiuta CROSS_DOMAIN_JOIN",
-    "evidence": "Reason/remediation non conformi al contratto PET"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouter typed TraversalPurpose enforcement before GraphQueryService datastore access",
+    "evidence": "GraphQueryRuntimeTest rejects cross-domain relationship patterns with PET remediation"
   },
   {
     "id": "UDP-A27",
@@ -485,9 +485,9 @@
     "requirement": "Quando la richiesta esprime un pattern cross-domain noto, il planner/tool routing preferisce urban.object.related_search o urban.spatial.intersection_search rispetto a una catena di traversal equivalente.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A31",
-    "status": "OPEN",
-    "implementation": "related_search/tool routing assenti",
-    "evidence": "Capability specialistica incompleta"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouter maps typed cross-domain relationship/spatial forms to their specialist capability",
+    "evidence": "Router contract and runtime tests verify specialist recommendation without execution"
   },
   {
     "id": "UDP-A32",
@@ -495,9 +495,9 @@
     "requirement": "MCP Capability Router rifiuta urban.graph.traverse per un pattern cross-domain non ricorsivo e restituisce QUERY_CAPABILITY_MISMATCH senza eseguire SQL sul datastore.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A32",
-    "status": "OPEN",
-    "implementation": "Rifiuto generico USE_NEIGHBORS_OR_SPECIALIST",
-    "evidence": "Manca QUERY_CAPABILITY_MISMATCH con nessuna esecuzione SQL provata"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouter runs before visibility lookup/planner and throws CapabilityMismatchException",
+    "evidence": "A nonexistent anchor returns QUERY_CAPABILITY_MISMATCH; execution counters remain zero"
   },
   {
     "id": "UDP-A33",
@@ -505,9 +505,9 @@
     "requirement": "Una tool call rifiutata non viene automaticamente riscritta/eseguita con una capability alternativa; la nuova invocazione resta esplicita e soggetta ad authz e budget.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A33",
-    "status": "PARTIAL",
-    "implementation": "nessun redirect automatico osservato",
-    "evidence": "Contratto authz/budget della nuova invocazione non testato"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouterErrorHandler returns 422 without Location; no alternative service invocation",
+    "evidence": "Runtime test requires an explicit authorized related_search call and preserves the same correlation budget"
   },
   {
     "id": "UDP-A34",
@@ -625,9 +625,9 @@
     "requirement": "Capability remediation: QUERY_CAPABILITY_MISMATCH restituisce reason, recommendedCapability, reusable/missing arguments e schema ref senza eseguire redirect implicito.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A45",
-    "status": "OPEN",
-    "implementation": "Payload remediation PET non implementato",
-    "evidence": "Mancano reason, recommendedCapability, argomenti e schema ref"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouter.Remediation and CapabilityRouterErrorHandler",
+    "evidence": "Contract/runtime tests cover reason, recommendation, reusable/missing arguments, schema ref and no redirect"
   },
   {
     "id": "UDP-A46",
@@ -645,9 +645,9 @@
     "requirement": "Budget separation: una chiamata rifiutata prima del DB consuma Agent Orchestration Budget ma non incrementa dbExecutionTime/nodesObserved/edgesObserved.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A47",
-    "status": "PARTIAL",
-    "implementation": "mismatch counter separato dai campi execution",
-    "evidence": "Semantica budgetImpact e test dedicato assenti"
+    "status": "VERIFIED",
+    "implementation": "Remediation BudgetImpact plus QueryBudgetStore mismatch accounting",
+    "evidence": "Runtime test proves ONE_MISMATCH while queryExecution is NONE and query/node/edge/DB-time counters stay zero"
   },
   {
     "id": "UDP-A48",
