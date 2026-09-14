@@ -1,47 +1,65 @@
 # UDP PET traceability
 
-Status is evidence-based. `IMPLEMENTED` requires executable code and a test; `PARTIAL` and `OPEN` remain explicit.
+This repository is audited against
+`OUF_PET_Data_Lake_UDP_Urban_Object_Registry_v1_3_Development_Ready.docx`
+from `OUF_Reality_Baseline_Package_v1_5.zip`.
 
-| Requirement | Status | Evidence |
+The PET is the normative source. A successful CI run proves only the checks that
+were actually executed; it does not imply complete PET acceptance.
+
+## Current conformance baseline
+
+Audit baseline: commit `2c3dcb25aa7a1270b7eadba64993b685e465e6ca`, GitHub
+Actions run `34813883857`.
+
+| Status | Requirements |
+|---|---:|
+| `VERIFIED` | 23 |
+| `VERIFIED-LAB` | 2 |
+| `PARTIAL` | 26 |
+| `OPEN` | 16 |
+| `EXTERNAL-OPEN` | 2 |
+
+Overall status: **NOT READY FOR FULL PET ACCEPTANCE**.
+
+The complete requirement-to-code-to-test-to-evidence mapping is maintained in
+[`pet-traceability-v1.3.json`](pet-traceability-v1.3.json). CI validates its
+structure, status vocabulary, row count and identifier disambiguation.
+
+## PET identifier erratum
+
+The PET reuses `UDP-A21` and `UDP-A22` for different acceptance criteria:
+
+| Matrix key used here | PET location | Meaning |
 |---|---|---|
-| UDP-E2E-01 and UDP-A01 durable ACK after persistent intake | IMPLEMENTED | `HandoffIntakeService`, V1, `UdpRuntimeTest` |
-| UDP-E2E-02 idempotent duplicate handoff | IMPLEMENTED | unique `handoff_id`, hash conflict detection, runtime test |
-| HandoffPayload rc3 validation | IMPLEMENTED | frozen contract copy, `FrozenContractValidator`, negative test |
-| Leased asynchronous materialization claim with `SKIP LOCKED` | IMPLEMENTED | `ResolutionRepository` |
-| UDP-E2E-05 deterministic MATCH NEW REVIEW decision | IMPLEMENTED BASELINE | `ObjectResolutionService`, append-only decision and ambiguity tests |
-| ResolutionDecision required evidence and configured strategy references | IMPLEMENTED BASELINE | V1 and `ObjectResolutionService` |
-| Human-governed resolution issue lifecycle | IMPLEMENTED BASELINE | V5, append-only human decision, trusted context and optimistic-lock tests |
-| Canonical revision materialization and authority engine | IMPLEMENTED BASELINE | V2, `CanonicalMaterializer`, materializer runtime tests |
-| Property-level provenance and DataAccessLabel | IMPLEMENTED BASELINE | contribution/value tables and provenance test |
-| Repeated observation without material change | IMPLEMENTED | canonical and authority hashes; observation-only test |
-| Property authority and conflict without last-write-wins | IMPLEMENTED BASELINE | configured per-property priority and conflict test |
-| Relationship input and configured strategy refs | IMPLEMENTED BASELINE | canonical payload input + pinned `relationshipResolutionStrategyRefs` |
-| Relationship resolution and `QUARANTINE_RELATION` | IMPLEMENTED BASELINE | V3, `RelationshipMaterializer`, zero/multiple-match tests |
-| Stable edge identity, immutable revisions and deduplication | IMPLEMENTED BASELINE | V3 natural edge key, evidence hash and append-only tests |
-| PostGIS spatial relationship resolution | IMPLEMENTED BASELINE | V4, `SpatialMaterializer`, `INTERSECTS/WITHIN/CONTAINS/NEAREST/OVERLAP_RATIO` |
-| CRS, invalid geometry and normalization evidence | IMPLEMENTED BASELINE | explicit CRS guard, no silent repair, versioned geometry evidence |
-| Multiple spatial match handling | IMPLEMENTED | `SPATIAL_MULTIPLE_MATCHES`, candidate evidence, no arbitrary edge |
-| Merge dry-run, impact and human execution | IMPLEMENTED BASELINE | V5–V6, immutable impact plan, binding transfer, edge repoint/dedup, contribution reevaluation links |
-| Split dry-run, explicit binding allocation and edge review | IMPLEMENTED BASELINE | allocation completeness guard, unresolved binding/relationship issues |
-| Historical identity alias and redirect | IMPLEMENTED BASELINE | `object_identity_history`, `redirect_to`, current/historical identity lookup |
-| Trusted Human Surface boundary for identity governance | IMPLEMENTED BASELINE | server-side request attributes, actor-header rejection, non-MCP execute operations |
-| Property-level DataAccessLabel enforcement | IMPLEMENTED BASELINE | V7, `GovernedServingService`, omission-before-serialization and audit test |
-| Current/history/as-of and exact-type search | IMPLEMENTED BASELINE | opaque cursor, page cap, indexed filter and tenant anti-enumeration tests |
-| Relationship-level enforcement without degree leakage | IMPLEMENTED BASELINE | label-filtered SQL and no-hidden-cursor test |
-| Lineage redaction | IMPLEMENTED BASELINE | source/raw references require separate capabilities |
-| Serving API and MCP capability projection | IMPLEMENTED BASELINE | `ServingApi`, `openapi-serving.yaml` |
-| PostgreSQL cumulative Query Complexity Budget | IMPLEMENTED BASELINE | V8, atomic conditional upsert, TTL and concurrency test |
-| Graph neighbors and recursive traversal guardrails | IMPLEMENTED BASELINE | typed DTO, indexed adjacency/recursive CTE, label filtering and limits |
-| Capability misuse/orchestration budget | IMPLEMENTED BASELINE | purpose guard and persisted mismatch counter |
-| Spatial query governor | IMPLEMENTED BASELINE | V9, typed nearby/intersects/within/intersection-search, PostGIS bbox prefilter, CRS/radius/area/result gates and cumulative budget tests |
-| Lake object lifecycle and two-phase deletion | IMPLEMENTED BASELINE | V10, immutable logical identity, verified durability protocol, deletion guard, lease and lifecycle tests |
-| Lake compaction and reconciliation | IMPLEMENTED BASELINE | immutable verified manifest, label/retention boundary, checksum/missing/orphan findings and no destructive adoption |
-| S3-compatible production adapter and RAW durable ACK | IMPLEMENTED BASELINE | AWS SDK v2 adapter, workload credential chain, immutable key/hash metadata, V11 handoff reference and failure tests |
-| Real S3-compatible acceptance path | IMPLEMENTED BASELINE | pinned MinIO CI service; real SDK `PUT/HEAD/GET/LIST/DELETE`, metadata, missing/checksum/orphan reconciliation and shadow cutover tests |
-| Scheduled storage integrity scan and reconciliation | IMPLEMENTED BASELINE | V12 durable schedule/attempt history, leased `SKIP LOCKED` worker, bounded retry backoff, metrics and concurrency/recovery tests |
-| Shadow rebuild and controlled cut-over | IMPLEMENTED BASELINE | V13–V14 frozen tenant/tier plan, resumable generation-fenced copy, renewable lease, durability/reference gates, optimistic human cutover and rollback, immutable audit |
-| PostgreSQL PITR and object-storage restore | IMPLEMENTED BASELINE | executable PostgreSQL 17 WAL recovery-target drill, independent MinIO restore, cross-store checksum and post-restore reconciliation evidence |
-| Reproducible performance regression baseline | IMPLEMENTED BASELINE | dedicated PostGIS 17 CI job; fixed warm-up/cardinality; intake, resolution, materialization, indexed serving and spatial p50/p95/max/throughput gates with JSON evidence |
-| Supply-chain SBOM and vulnerability gate | IMPLEMENTED BASELINE | CycloneDX aggregate SBOM, Trivy HIGH/CRITICAL image gate, machine-readable reports and SHA-256 evidence in dedicated CI job |
-| Deployment manifest, probes and graceful shutdown | IMPLEMENTED BASELINE | OUF-aligned Helm chart, immutable image digest, external secret/config bindings, default-deny network policy, PDB, startup/readiness/liveness probes, SIGTERM and bounded graceful shutdown |
-| Production recovery and capacity evidence | PARTIAL | CI restore and regression baselines implemented; infrastructure acceptance, production sizing/SLO and approved production RPO/RTO remain open |
+| `UDP-A21 [v1.0]` | §105, acceptance matrix v1.0 | Concurrency |
+| `UDP-A22 [v1.0]` | §105, acceptance matrix v1.0 | Backup/restore |
+| `UDP-A21 [v1.2]` | §105.1, addendum v1.2 | No revision for unchanged observation |
+| `UDP-A22 [v1.2]` | §105.1, addendum v1.2 | Selective `BITEMPORAL_REQUIRED` |
+
+These qualified keys are a traceability overlay only. They do not amend or
+renumber the canonical PET. Formal renumbering requires document governance and
+cross-module change control.
+
+## Evidence rules
+
+- `VERIFIED`: the complete criterion has direct executable evidence.
+- `VERIFIED-LAB`: the complete technical path was exercised in CI/lab, while
+  production targets or infrastructure acceptance remain external.
+- `PARTIAL`: implementation or tests cover only part of the criterion.
+- `OPEN`: required implementation or direct evidence is absent.
+- `EXTERNAL-OPEN`: closure requires another OUF module or governed environment.
+
+Composite requirements remain `PARTIAL` if even one normative clause lacks
+direct evidence. Presence of fields, tables, configuration or architecture alone
+does not count as an end-to-end test.
+
+## Known blocking groups
+
+1. Historical reference resolution and `REPRODUCE` with original contracts.
+2. Selective bitemporality and deterministic checkpoint/delta materialization.
+3. Capability manifest, `urban.object.related_search` and agent tool-selection tests.
+4. Machine-readable router remediation and `TOOL_SELECTION_STALLED` retry guard.
+5. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
+6. N/N+1 migration compatibility, reference-integrity gates and cross-module fixtures.
+7. Production capacity/SLO and approved RPO/RTO acceptance.

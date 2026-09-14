@@ -1,0 +1,692 @@
+[
+  {
+    "id": "UDP-E2E-01",
+    "area": "Ingestion handoff",
+    "requirement": "Durable ACK non precede la persistenza verificabile del payload e dei riferimenti di lineage.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-01",
+    "status": "VERIFIED",
+    "implementation": "HandoffIntakeService; HandoffLakeCommitRuntimeTest#ackAndJobExistOnlyAfterRawLakeObjectIsVerified",
+    "evidence": "CI su PostgreSQL 17 + MinIO reale"
+  },
+  {
+    "id": "UDP-E2E-02",
+    "area": "Idempotenza",
+    "requirement": "Replay dello stesso HandoffPayload non crea una seconda revisione equivalente.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-02",
+    "status": "VERIFIED",
+    "implementation": "HandoffIntakeService; UdpRuntimeTest#durableAckIsIdempotentAndConflictingReplayFails",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-E2E-03",
+    "area": "Historical contracts",
+    "requirement": "Una revisione vecchia resta risolvibile dopo attivazione di nuovi bundle/schema.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-03",
+    "status": "PARTIAL",
+    "implementation": "contractRefs persistiti nelle revisioni; nessun resolver storico/version-switch test",
+    "evidence": "Presenza dati, non prova end-to-end"
+  },
+  {
+    "id": "UDP-E2E-04",
+    "area": "Schema drift",
+    "requirement": "Breaking source schema non modifica né elimina gli Urban Object storici.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-04",
+    "status": "PARTIAL",
+    "implementation": "FrozenContractValidator; test negativo payload; nessun test di breaking drift su oggetti esistenti",
+    "evidence": "Gate incompleto"
+  },
+  {
+    "id": "UDP-E2E-05",
+    "area": "Object resolution",
+    "requirement": "MATCH/NEW/REVIEW è deterministico, spiegabile e tracciato.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-05",
+    "status": "VERIFIED",
+    "implementation": "ObjectResolutionService; UdpRuntimeTest (NEW/MATCH/REVIEW e append-only)",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-E2E-06",
+    "area": "Merge/Split",
+    "requirement": "Nessuna operazione perde binding, provenance o authority history.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-06",
+    "status": "VERIFIED",
+    "implementation": "IdentityGovernanceService; IdentityGovernanceRuntimeTest merge/split",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-E2E-07",
+    "area": "Spatial",
+    "requirement": "WFS/geometry correlation usa CRS/tolerance espliciti e gestisce match multipli.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-07",
+    "status": "VERIFIED",
+    "implementation": "SpatialMaterializer; SpatialMaterializerRuntimeTest",
+    "evidence": "CRS e multiple match provati"
+  },
+  {
+    "id": "UDP-E2E-08",
+    "area": "Authority",
+    "requirement": "La property current deriva dalla fonte autoritativa applicabile nel periodo.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-08",
+    "status": "VERIFIED",
+    "implementation": "CanonicalMaterializer; CanonicalMaterializerRuntimeTest#propertyAuthorityIsSpecificAndNotLastWriteWins",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-E2E-09",
+    "area": "Data access",
+    "requirement": "Property/relationship/lineage non autorizzati sono filtrati prima di MCP/consumer.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-09",
+    "status": "VERIFIED",
+    "implementation": "GovernedServingService; GovernedServingRuntimeTest",
+    "evidence": "Property, relationship e lineage filtrati"
+  },
+  {
+    "id": "UDP-E2E-10",
+    "area": "Graph navigation",
+    "requirement": "Traversal MCP rispetta maxDepth/maxNodes/maxEdges e timeout.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-10",
+    "status": "PARTIAL",
+    "implementation": "GraphQueryService; GraphQueryRuntimeTest",
+    "evidence": "Depth/nodes/budget provati; maxEdges e profilo MCP completo non dimostrati"
+  },
+  {
+    "id": "UDP-E2E-11",
+    "area": "Serving history",
+    "requirement": "current, history e asOf producono risultati coerenti con la temporalità.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-11",
+    "status": "VERIFIED",
+    "implementation": "GovernedServingService; GovernedServingRuntimeTest current/history/as-of",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-E2E-12",
+    "area": "Replay/Rebuild",
+    "requirement": "Reproduce usa contratti originali; rebuild shadow valida prima del cut-over.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-12",
+    "status": "PARTIAL",
+    "implementation": "LakeShadowRebuildService e test completi; REPRODUCE con contratti originali assente",
+    "evidence": "Solo metà del criterio"
+  },
+  {
+    "id": "UDP-E2E-13",
+    "area": "Multi-source growth",
+    "requirement": "L’aggiunta di una nuova fonte non richiede un nuovo database o un nuovo deployable.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-13",
+    "status": "PARTIAL",
+    "implementation": "codebase modulare e profilo performance",
+    "evidence": "Nessun acceptance test di aggiunta fonte/capacity gate"
+  },
+  {
+    "id": "UDP-E2E-14",
+    "area": "Backup/restore",
+    "requirement": "PITR PostgreSQL e restore object storage ricostruiscono un punto coerente.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-14",
+    "status": "VERIFIED-LAB",
+    "implementation": "scripts/ci/pitr-minio-restore-drill.sh; DR_RESULT.txt",
+    "evidence": "PITR+MinIO PASS, RTO lab 2s; RPO/RTO produzione non approvati"
+  },
+  {
+    "id": "UDP-E2E-15",
+    "area": "Observability",
+    "requirement": "correlationId/lineageId consentono di seguire una richiesta dalla source al serving.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-15",
+    "status": "PARTIAL",
+    "implementation": "correlationId/lineageId persistiti e auditati",
+    "evidence": "Nessun test unico source-to-serving"
+  },
+  {
+    "id": "UDP-E2E-16",
+    "area": "Economy gate",
+    "requirement": "Nessun componente extra entra senza trigger misurabile e approvazione architetturale.",
+    "origin": "PET v1.3 §102 End-to-End Acceptance Matrix",
+    "matrix_id": "UDP-E2E-16",
+    "status": "VERIFIED",
+    "implementation": "pom.xml, Helm e runtime senza graph DB/Redis/broker/lakehouse",
+    "evidence": "Baseline tecnologica rispettata"
+  },
+  {
+    "id": "UDP-A01",
+    "area": "Durable ACK",
+    "requirement": "ACK emesso solo dopo persistenza input/recovery metadata; watermark non avanza prima.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A01",
+    "status": "VERIFIED",
+    "implementation": "HandoffIntakeService; HandoffLakeCommitRuntimeTest",
+    "evidence": "ACK solo dopo durabilità"
+  },
+  {
+    "id": "UDP-A02",
+    "area": "No triplication invariant",
+    "requirement": "RAW persistente; NORMALIZED/CURATED possono essere selettivi senza obbligo di copia 1:1.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A02",
+    "status": "PARTIAL",
+    "implementation": "Lake tier model e RAW persistente",
+    "evidence": "Nessun test esplicito dell'invariante di non triplicazione"
+  },
+  {
+    "id": "UDP-A03",
+    "area": "Urban Object creation",
+    "requirement": "Candidate genera NEW_OBJECT o MATCH secondo resolution configurata; nessuna identity inventata.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A03",
+    "status": "VERIFIED",
+    "implementation": "ObjectResolutionService; UdpRuntimeTest#resolutionCreatesThenMatchesByDeterministicEvidence",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A04",
+    "area": "Multi-source object",
+    "requirement": "Due fonti diverse possono contribuire allo stesso Urban Object con provenance separata.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A04",
+    "status": "VERIFIED",
+    "implementation": "CanonicalMaterializer; test authority multi-source",
+    "evidence": "Contributi separati per fonte"
+  },
+  {
+    "id": "UDP-A05",
+    "area": "Property authority",
+    "requirement": "Contributi in conflitto rispettano authority per proprietà/periodo.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A05",
+    "status": "VERIFIED",
+    "implementation": "CanonicalMaterializerRuntimeTest authority/conflict",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A06",
+    "area": "Valid time",
+    "requirement": "validTo resta NULL quando non noto; expiry derivata solo da fonte/regola approvata.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A06",
+    "status": "PARTIAL",
+    "implementation": "schema/revision model",
+    "evidence": "validTo/expiry rule non coperta da acceptance test dedicato"
+  },
+  {
+    "id": "UDP-A07",
+    "area": "WFS conversational onboarding",
+    "requirement": "Discovery e proposta via chatbot; attivazione solo dopo approval.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A07",
+    "status": "EXTERNAL-OPEN",
+    "implementation": "Responsabilità Onboarding/MCP; nessuna evidenza cross-module nel repository UDP",
+    "evidence": "Da verificare con lab Onboarding"
+  },
+  {
+    "id": "UDP-A08",
+    "area": "Static GIS intake",
+    "requirement": "Dataset crea source; feature crea source-object identity; candidate/resolution funzionano.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A08",
+    "status": "EXTERNAL-OPEN",
+    "implementation": "Responsabilità Ingestion/Onboarding + UDP",
+    "evidence": "Nessun fixture GIS statico end-to-end"
+  },
+  {
+    "id": "UDP-A09",
+    "area": "Preflight contract check",
+    "requirement": "Ogni run verifica source/type/schema fingerprint prima del processing.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A09",
+    "status": "PARTIAL",
+    "implementation": "FrozenContractValidator e contractRefs",
+    "evidence": "Manca reference-integrity gate verso registry reali"
+  },
+  {
+    "id": "UDP-A10",
+    "area": "Breaking schema drift",
+    "requirement": "Run non procede silenziosamente; issue/quarantine/re-onboarding secondo policy.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A10",
+    "status": "PARTIAL",
+    "implementation": "validazione contrattuale fail-fast",
+    "evidence": "Manca workflow issue/quarantine/re-onboarding su drift breaking"
+  },
+  {
+    "id": "UDP-A11",
+    "area": "Historical readability",
+    "requirement": "Vecchie revisioni restano interpretabili tramite contract refs storici.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A11",
+    "status": "PARTIAL",
+    "implementation": "contractRefs storici persistiti",
+    "evidence": "Manca resolver storico e test dopo cambio bundle/schema"
+  },
+  {
+    "id": "UDP-A12",
+    "area": "Merge human governance",
+    "requirement": "AI può proporre/illustrare; confirm richiede human trusted approval.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A12",
+    "status": "VERIFIED",
+    "implementation": "TrustedHumanApi/IdentityGovernanceService; IdentityGovernanceRuntimeTest",
+    "evidence": "Conferma human-only"
+  },
+  {
+    "id": "UDP-A13",
+    "area": "Property-level authorization",
+    "requirement": "Dato PERSONAL/SENSITIVE non raggiunge MCP se non autorizzato.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A13",
+    "status": "VERIFIED",
+    "implementation": "GovernedServingService; currentOmitsUnauthorizedPropertyBeforeSerializationAndAuditsRedaction",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A14",
+    "area": "Lineage redaction",
+    "requirement": "Lineage mostra metadata consentiti e redige valori/raw refs non autorizzati.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A14",
+    "status": "VERIFIED",
+    "implementation": "GovernedServingRuntimeTest#lineageOmitsSourceAndRawReferencesWithoutSeparateCapabilities",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A15",
+    "area": "Graph query guardrails",
+    "requirement": "Traversal bounded rispetta maxDepth/result/timeout e non espone query language arbitrario.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A15",
+    "status": "PARTIAL",
+    "implementation": "GraphQueryService; GraphQueryRuntimeTest",
+    "evidence": "Guardrail principali presenti; contratto MCP/hard maxima incompleto"
+  },
+  {
+    "id": "UDP-A16",
+    "area": "Spatial resolution",
+    "requirement": "CRS/tolerance/strategy applicate; multiple match produce REVIEW_REQUIRED.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A16",
+    "status": "VERIFIED",
+    "implementation": "SpatialMaterializerRuntimeTest CRS/invalid/multiple matches",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A17",
+    "area": "Replay reproduce",
+    "requirement": "REPRODUCE usa schema/bundle/mapping/publication set originali.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A17",
+    "status": "OPEN",
+    "implementation": "Nessuna implementazione REPRODUCE",
+    "evidence": "Bloccante recovery/replay"
+  },
+  {
+    "id": "UDP-A18",
+    "area": "Rebuild shadow",
+    "requirement": "Full rebuild non sostituisce serving current prima di validation/cut-over.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A18",
+    "status": "VERIFIED",
+    "implementation": "LakeShadowRebuildService; LakeShadowRebuildRuntimeTest; MinioLakeAcceptanceTest",
+    "evidence": "Validation prima del cut-over"
+  },
+  {
+    "id": "UDP-A19",
+    "area": "Migration safety",
+    "requirement": "Una sola migration leader; failure blocca rollout; expand/contract verificato.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A19",
+    "status": "PARTIAL",
+    "implementation": "Flyway clean migration in CI",
+    "evidence": "Manca upgrade N→N+1 ed expand/contract/rolling compatibility test"
+  },
+  {
+    "id": "UDP-A20",
+    "area": "Capacity growth",
+    "requirement": "Nuova source ad alto volume passa capacity gate senza richiedere nuova architettura di base.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A20",
+    "status": "PARTIAL",
+    "implementation": "PerformanceBaselineIT e PERFORMANCE_RESULT",
+    "evidence": "Manca gate per nuova fonte con headroom/storage/IOPS/backlog"
+  },
+  {
+    "id": "UDP-A21",
+    "area": "Concurrency",
+    "requirement": "Multi-user/multi-worker non causa lost update, duplicate materialization o inconsistent merge.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A21 [v1.0]",
+    "status": "PARTIAL",
+    "implementation": "test concorrenza budget, worker claim e optimistic governance",
+    "evidence": "Non copre ogni lost-update/materialization/merge multi-worker"
+  },
+  {
+    "id": "UDP-A22",
+    "area": "Backup/restore",
+    "requirement": "Restore PostgreSQL + manifest/object storage ricostruisce stato coerente entro RTO/RPO concordati.",
+    "origin": "PET v1.3 §105 / matrice acceptance v1.0",
+    "matrix_id": "UDP-A22 [v1.0]",
+    "status": "VERIFIED-LAB",
+    "implementation": "DR_RESULT.txt e DR_VALIDATION.txt",
+    "evidence": "Restore coerente in CI; target produzione da concordare"
+  },
+  {
+    "id": "UDP-A21",
+    "area": "Addendum v1.2",
+    "requirement": "Repeated observation senza material change non crea una nuova Canonical Revision.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A21 [v1.2]",
+    "status": "VERIFIED",
+    "implementation": "CanonicalMaterializerRuntimeTest#identicalCanonicalObservationDoesNotCreateAnotherRevision",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A22",
+    "area": "Addendum v1.2",
+    "requirement": "BITEMPORAL_REQUIRED applica system interval completo solo sullo scope configurato; gli altri fatti usano system evidence.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A22 [v1.2]",
+    "status": "OPEN",
+    "implementation": "Nessun modello/test BITEMPORAL_REQUIRED",
+    "evidence": "System interval selettivo non implementato"
+  },
+  {
+    "id": "UDP-A23",
+    "area": "Addendum v1.2",
+    "requirement": "Payload storico cold può essere risolto tramite objectStorageRef mantenendo history/asOf e lineage.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A23",
+    "status": "PARTIAL",
+    "implementation": "objectStorageRef/lake locator disponibili",
+    "evidence": "Manca test di history/asOf/lineage da payload cold"
+  },
+  {
+    "id": "UDP-A24",
+    "area": "Addendum v1.2",
+    "requirement": "urban.object.related_search viene tradotto in piano server-side tipizzato senza query language fornito dall’Agent.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A24",
+    "status": "OPEN",
+    "implementation": "urban.object.related_search assente",
+    "evidence": "Capability richiesta dal PET"
+  },
+  {
+    "id": "UDP-A25",
+    "area": "Addendum v1.2",
+    "requirement": "urban.spatial.intersection_search usa anchor/target types e cost gate; non degrada in traversal cieco.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A25",
+    "status": "VERIFIED",
+    "implementation": "SpatialQueryService; SpatialQueryRuntimeTest#intersectionSearchIsTenantAndLabelScoped",
+    "evidence": "Piano tipizzato e cost gate"
+  },
+  {
+    "id": "UDP-A26",
+    "area": "Addendum v1.2",
+    "requirement": "urban.graph.traverse rifiuta pattern non ricorsivi quando esiste una capability specialistica equivalente.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A26",
+    "status": "PARTIAL",
+    "implementation": "GraphQueryService rifiuta CROSS_DOMAIN_JOIN",
+    "evidence": "Reason/remediation non conformi al contratto PET"
+  },
+  {
+    "id": "UDP-A27",
+    "area": "Addendum v1.2",
+    "requirement": "Complexity budget cumulativo impedisce di aggirare maxDepth tramite sequenze di tool call correlate.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A27",
+    "status": "VERIFIED",
+    "implementation": "QueryBudgetStore; GraphQueryRuntimeTest#cumulativeBudgetCannotBeResetAcrossCalls",
+    "evidence": "Surefire PASS"
+  },
+  {
+    "id": "UDP-A28",
+    "area": "Addendum v1.2",
+    "requirement": "Query planner può selezionare fixed JOIN, indexed adjacency, PostGIS o recursive CTE; l’Agent non controlla la strategia fisica.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A28",
+    "status": "PARTIAL",
+    "implementation": "piani backend graph/PostGIS",
+    "evidence": "fixed related-search assente; copertura incompleta"
+  },
+  {
+    "id": "UDP-A29",
+    "area": "Addendum v1.2",
+    "requirement": "Exploratory graph navigation usa urban.graph.neighbors come primitive preferito e richiede progressive pruning prima dell’hop successivo.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A29",
+    "status": "PARTIAL",
+    "implementation": "neighbors 1-hop disponibile",
+    "evidence": "Progressive pruning non validato"
+  },
+  {
+    "id": "UDP-A30",
+    "area": "Addendum v1.2",
+    "requirement": "Una sequenza agentica hop-by-hop che supera il budget cumulativo viene rifiutata o interrotta anche se ciascuna singola tool call rispetta i limiti locali.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A30",
+    "status": "VERIFIED",
+    "implementation": "budget cumulativo per correlation",
+    "evidence": "Test multi-call PASS"
+  },
+  {
+    "id": "UDP-A31",
+    "area": "Addendum v1.2",
+    "requirement": "Quando la richiesta esprime un pattern cross-domain noto, il planner/tool routing preferisce urban.object.related_search o urban.spatial.intersection_search rispetto a una catena di traversal equivalente.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A31",
+    "status": "OPEN",
+    "implementation": "related_search/tool routing assenti",
+    "evidence": "Capability specialistica incompleta"
+  },
+  {
+    "id": "UDP-A32",
+    "area": "Addendum v1.2",
+    "requirement": "MCP Capability Router rifiuta urban.graph.traverse per un pattern cross-domain non ricorsivo e restituisce QUERY_CAPABILITY_MISMATCH senza eseguire SQL sul datastore.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A32",
+    "status": "OPEN",
+    "implementation": "Rifiuto generico USE_NEIGHBORS_OR_SPECIALIST",
+    "evidence": "Manca QUERY_CAPABILITY_MISMATCH con nessuna esecuzione SQL provata"
+  },
+  {
+    "id": "UDP-A33",
+    "area": "Addendum v1.2",
+    "requirement": "Una tool call rifiutata non viene automaticamente riscritta/eseguita con una capability alternativa; la nuova invocazione resta esplicita e soggetta ad authz e budget.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A33",
+    "status": "PARTIAL",
+    "implementation": "nessun redirect automatico osservato",
+    "evidence": "Contratto authz/budget della nuova invocazione non testato"
+  },
+  {
+    "id": "UDP-A34",
+    "area": "Addendum v1.2",
+    "requirement": "Query Complexity Governor mantiene il budget cumulativo attraverso più tool call della stessa correlation/session e impedisce reset artificiali per-call.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A34",
+    "status": "VERIFIED",
+    "implementation": "query_budget PostgreSQL per correlation/principal/tenant/workload",
+    "evidence": "Stato condiviso persistente"
+  },
+  {
+    "id": "UDP-A35",
+    "area": "Addendum v1.2",
+    "requirement": "Un Agent che non applica progressive pruning non può superare i limiti cumulativi; la piattaforma resta stabile e protegge current read e durable ingestion.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A35",
+    "status": "PARTIAL",
+    "implementation": "hard limits e budget DB",
+    "evidence": "Protezione del path durable sotto Agent aggressivo non provata"
+  },
+  {
+    "id": "UDP-A36",
+    "area": "Addendum v1.2",
+    "requirement": "Una richiesta analitica composita non coperta dal serving operativo produce QUERY_REQUIRES_ANALYTICAL_CAPABILITY o job asincrono governato, senza decomposizione illimitata in query graph/spatial operative.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A36",
+    "status": "OPEN",
+    "implementation": "QUERY_REQUIRES_ANALYTICAL_CAPABILITY/job asincrono assenti",
+    "evidence": "Caso non implementato"
+  },
+  {
+    "id": "UDP-A37",
+    "area": "Addendum v1.2",
+    "requirement": "Ogni capability MCP tool-eligible pubblicata espone purpose, useWhen, doNotUseWhen, preferredAlternatives, operationalLimits, resultSemantics e securityNotes; la CI rifiuta manifest incompleti.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A37",
+    "status": "OPEN",
+    "implementation": "Capability manifest v1 richiesto dal PET assente",
+    "evidence": "Manca lint CI"
+  },
+  {
+    "id": "UDP-A38",
+    "area": "Addendum v1.2",
+    "requirement": "Su prompt cross-domain non ricorsivi, la descrizione di urban.graph.traverse indica esplicitamente di non usarlo e suggerisce urban.object.related_search o urban.spatial.intersection_search; il Router resta comunque l’enforcement autoritativo.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A38",
+    "status": "OPEN",
+    "implementation": "Descrizioni MCP conformi a MCP-MANIFEST-01 assenti",
+    "evidence": "Manca artefatto"
+  },
+  {
+    "id": "UDP-A39",
+    "area": "Addendum v1.2",
+    "requirement": "Regression test di tool selection verificano che prompt rappresentativi conducano alla capability specialistica corretta nella maggioranza dei casi attesi, senza trasformare tale comportamento dell’Agent in requisito di sicurezza del datastore.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A39",
+    "status": "OPEN",
+    "implementation": "Nessun regression test di tool selection su prompt",
+    "evidence": "Manca evidence"
+  },
+  {
+    "id": "UDP-A40",
+    "area": "Addendum v1.2",
+    "requirement": "Distributed governor: due Pod udp-api concorrenti consumano lo stesso correlation budget senza oversubscription; il risultato è indipendente dal Pod che riceve la richiesta.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A40",
+    "status": "PARTIAL",
+    "implementation": "concurrentBudgetConsumptionIsRaceSafe su DB condiviso",
+    "evidence": "Due thread, non due Pod/repliche"
+  },
+  {
+    "id": "UDP-A41",
+    "area": "Addendum v1.2",
+    "requirement": "Pod restart/cache miss: il budget cumulativo sopravvive al restart di un Pod e non viene ricreato da zero.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A41",
+    "status": "PARTIAL",
+    "implementation": "budget persistito in PostgreSQL",
+    "evidence": "Sopravvivenza al restart non testata esplicitamente"
+  },
+  {
+    "id": "UDP-A42",
+    "area": "Addendum v1.2",
+    "requirement": "Budget cleanup: righe query_budget scadute vengono eliminate senza long lock o crescita incontrollata; autovacuum/bloat metric restano entro soglia di collaudo.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A42",
+    "status": "PARTIAL",
+    "implementation": "cleanup opportunistico per correlation e indice expires_at",
+    "evidence": "Manca cleanup globale e prova bloat/autovacuum/long-lock"
+  },
+  {
+    "id": "UDP-A43",
+    "area": "Addendum v1.2",
+    "requirement": "High-frequency snapshot: N osservazioni identiche non producono N Canonical Revision e non richiedono parsing completo del payload precedente quando fingerprint sufficienti sono invariati.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A43",
+    "status": "PARTIAL",
+    "implementation": "nessuna revisione su osservazione identica",
+    "evidence": "Manca prova di non parsing del JSONB precedente/hash granulari"
+  },
+  {
+    "id": "UDP-A44",
+    "area": "Addendum v1.2",
+    "requirement": "Delta materialization: una singola proprietà modificata può generare una revisione/delta senza duplicazione obbligatoria dell'intero JSONB voluminoso; la ricostruzione da checkpoint + delta è deterministica.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A44",
+    "status": "OPEN",
+    "implementation": "Solo FULL_SNAPSHOT nei fixture; delta/checkpoint reconstruction assenti",
+    "evidence": "Bloccante v1.2"
+  },
+  {
+    "id": "UDP-A45",
+    "area": "Addendum v1.2",
+    "requirement": "Capability remediation: QUERY_CAPABILITY_MISMATCH restituisce reason, recommendedCapability, reusable/missing arguments e schema ref senza eseguire redirect implicito.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A45",
+    "status": "OPEN",
+    "implementation": "Payload remediation PET non implementato",
+    "evidence": "Mancano reason, recommendedCapability, argomenti e schema ref"
+  },
+  {
+    "id": "UDP-A46",
+    "area": "Addendum v1.2",
+    "requirement": "Retry-loop guard: mismatch semanticamente equivalenti oltre soglia producono TOOL_SELECTION_STALLED e nessun retry infinito.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A46",
+    "status": "OPEN",
+    "implementation": "TOOL_SELECTION_STALLED assente",
+    "evidence": "Retry-loop guard incompleto"
+  },
+  {
+    "id": "UDP-A47",
+    "area": "Addendum v1.2",
+    "requirement": "Budget separation: una chiamata rifiutata prima del DB consuma Agent Orchestration Budget ma non incrementa dbExecutionTime/nodesObserved/edgesObserved.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A47",
+    "status": "PARTIAL",
+    "implementation": "mismatch counter separato dai campi execution",
+    "evidence": "Semantica budgetImpact e test dedicato assenti"
+  },
+  {
+    "id": "UDP-A48",
+    "area": "Addendum v1.2",
+    "requirement": "BudgetStore contention: un carico concorrente superiore al bulkhead non causa esaurimento del pool HikariCP; consumeBudget termina entro il timeout dedicato o fallisce rapidamente in fail-closed.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A48",
+    "status": "OPEN",
+    "implementation": "timeout transazionale presente; bulkhead/pool dedicato e test contention assenti",
+    "evidence": "Non dimostrato fail-fast senza pool exhaustion"
+  },
+  {
+    "id": "UDP-A49",
+    "area": "Addendum v1.2",
+    "requirement": "Adversarial multi-Pod Agent: un Agent aggressivo invia richieste errate e concorrenti verso repliche Kubernetes differenti; mismatch count e orchestration budget restano unici e coerenti sullo stato condiviso.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A49",
+    "status": "OPEN",
+    "implementation": "Nessun adversarial multi-Pod test",
+    "evidence": "Manca evidence richiesta"
+  },
+  {
+    "id": "UDP-A50",
+    "area": "Addendum v1.2",
+    "requirement": "TOOL_SELECTION_STALLED threshold: con soglia N configurata, i primi N-1 tentativi equivalenti ricevono remediation/mismatch secondo policy e il tentativo N produce TOOL_SELECTION_STALLED; il tentativo successivo equivalente non raggiunge Query Planner o DB.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A50",
+    "status": "OPEN",
+    "implementation": "Soglia deterministica TOOL_SELECTION_STALLED assente",
+    "evidence": "Manca enforcement e test N/N+1 tentativi"
+  },
+  {
+    "id": "UDP-A51",
+    "area": "Addendum v1.2",
+    "requirement": "Retry equivalence: variazioni cosmetiche o parametri non sostanziali del DTO non azzerano il retry-loop guard; una modifica sostanziale e riconosciuta secondo policy configurata e testata.",
+    "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
+    "matrix_id": "UDP-A51",
+    "status": "OPEN",
+    "implementation": "Fingerprint/equivalenza semantica retry assenti",
+    "evidence": "Manca policy configurata e test"
+  }
+]
