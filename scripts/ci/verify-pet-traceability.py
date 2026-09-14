@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 MATRIX = ROOT / "docs" / "pet-traceability-v1.3.json"
 ALLOWED_STATUSES = {"VERIFIED", "VERIFIED-LAB", "PARTIAL", "OPEN", "EXTERNAL-OPEN"}
 EXPECTED_COUNTS = {
-    "VERIFIED": 26,
+    "VERIFIED": 27,
     "VERIFIED-LAB": 2,
-    "PARTIAL": 24,
+    "PARTIAL": 23,
     "OPEN": 15,
     "EXTERNAL-OPEN": 2,
 }

@@ -55,6 +55,6 @@ class HistoricalReplayRuntimeTest {
   @TestConfiguration static class Config {
     @Bean UdpPorts.ResolutionConfigurationPort resolutionConfig(){return (bundle,type)->{if(!"bundle://road/1".equals(bundle))throw new IllegalStateException("UDP_HISTORICAL_BUNDLE_NOT_USED");return new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code");};}
     @Bean UdpPorts.MaterializationConfigurationPort materializationConfig(){return (bundle,type)->{if(!"bundle://road/1".equals(bundle))throw new IllegalStateException("UDP_HISTORICAL_BUNDLE_NOT_USED");return new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("roads"))));};}
-    @Bean @Primary ResolutionWorker historicalReplayWorker(ResolutionRepository jobs,ObjectResolutionService resolution,CanonicalMaterializer materializer,UdpPorts.ResolutionConfigurationPort resolutionConfig,UdpPorts.MaterializationConfigurationPort materializationConfig){return new ResolutionWorker(jobs,resolution,materializer,resolutionConfig,materializationConfig);}
+    @Bean @Primary ResolutionWorker historicalReplayWorker(ResolutionRepository jobs,MaterializationReferenceGate referenceGate,ObjectResolutionService resolution,CanonicalMaterializer materializer,UdpPorts.ResolutionConfigurationPort resolutionConfig,UdpPorts.MaterializationConfigurationPort materializationConfig){return new ResolutionWorker(jobs,referenceGate,resolution,materializer,resolutionConfig,materializationConfig);}
   }
 }

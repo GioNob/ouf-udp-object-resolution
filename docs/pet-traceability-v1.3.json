@@ -246,8 +246,8 @@
     "origin": "PET v1.3 §105 / matrice acceptance v1.0",
     "matrix_id": "UDP-A09",
     "status": "PARTIAL",
-    "implementation": "FrozenContractValidator e contractRefs",
-    "evidence": "Manca reference-integrity gate verso registry reali"
+    "implementation": "FrozenContractValidator; MaterializationReferenceGate; MaterializationReferenceGateRuntimeTest",
+    "evidence": "Gate point-of-use fail-closed provato; resta fixture cross-module contro registry realmente deployati"
   },
   {
     "id": "UDP-A10",
@@ -265,9 +265,9 @@
     "requirement": "Vecchie revisioni restano interpretabili tramite contract refs storici.",
     "origin": "PET v1.3 §105 / matrice acceptance v1.0",
     "matrix_id": "UDP-A11",
-    "status": "PARTIAL",
-    "implementation": "contractRefs storici persistiti",
-    "evidence": "Manca resolver storico e test dopo cambio bundle/schema"
+    "status": "VERIFIED",
+    "implementation": "HistoricalContractCatalog; HistoricalReplayService; HistoricalReplayRuntimeTest; MaterializationReferenceGate",
+    "evidence": "Riferimenti storici risolti e riutilizzati dopo cambio bundle/schema, con drift dello stesso ref bloccato"
   },
   {
     "id": "UDP-A12",
