@@ -43,3 +43,6 @@ ouf.udp.reference-integrity:
   retry-base-ms: ${OUF_UDP_REFERENCE_INTEGRITY_RETRY_BASE_MS:30000}
 ouf.udp.capability-router:
   mismatch-threshold: ${OUF_UDP_CAPABILITY_MISMATCH_THRESHOLD:3}
+ouf.udp.query-budget:
+  bulkhead-permits: ${OUF_UDP_QUERY_BUDGET_BULKHEAD_PERMITS:2}
+  bulkhead-acquire-timeout-ms: ${OUF_UDP_QUERY_BUDGET_BULKHEAD_ACQUIRE_TIMEOUT_MS:100}
