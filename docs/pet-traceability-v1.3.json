@@ -575,9 +575,9 @@
     "requirement": "Distributed governor: due Pod udp-api concorrenti consumano lo stesso correlation budget senza oversubscription; il risultato è indipendente dal Pod che riceve la richiesta.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A40",
-    "status": "PARTIAL",
-    "implementation": "concurrentBudgetConsumptionIsRaceSafe su DB condiviso",
-    "evidence": "Due thread, non due Pod/repliche"
+    "status": "VERIFIED",
+    "implementation": "QueryBudgetResilienceRuntimeTest independent replica stores with distinct Hikari pools and shared PostgreSQL",
+    "evidence": "Concurrent replica-equivalent callers preserve one atomic cumulative budget without oversubscription"
   },
   {
     "id": "UDP-A41",
@@ -585,9 +585,9 @@
     "requirement": "Pod restart/cache miss: il budget cumulativo sopravvive al restart di un Pod e non viene ricreato da zero.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A41",
-    "status": "PARTIAL",
-    "implementation": "budget persistito in PostgreSQL",
-    "evidence": "Sopravvivenza al restart non testata esplicitamente"
+    "status": "VERIFIED",
+    "implementation": "QueryBudgetResilienceRuntimeTest closes and recreates an independent replica pool/store",
+    "evidence": "Mismatch and query counters survive replica restart/cache miss in shared PostgreSQL"
   },
   {
     "id": "UDP-A42",
@@ -655,9 +655,9 @@
     "requirement": "BudgetStore contention: un carico concorrente superiore al bulkhead non causa esaurimento del pool HikariCP; consumeBudget termina entro il timeout dedicato o fallisce rapidamente in fail-closed.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A48",
-    "status": "OPEN",
-    "implementation": "timeout transazionale presente; bulkhead/pool dedicato e test contention assenti",
-    "evidence": "Non dimostrato fail-fast senza pool exhaustion"
+    "status": "VERIFIED",
+    "implementation": "QueryBudgetStore fair semaphore bulkhead before TransactionTemplate/Hikari acquisition; dedicated acquisition timeout",
+    "evidence": "Contention test holds both transactional permits, proves excess call fails under 500ms while Hikari retains spare capacity"
   },
   {
     "id": "UDP-A49",
@@ -665,9 +665,9 @@
     "requirement": "Adversarial multi-Pod Agent: un Agent aggressivo invia richieste errate e concorrenti verso repliche Kubernetes differenti; mismatch count e orchestration budget restano unici e coerenti sullo stato condiviso.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A49",
-    "status": "OPEN",
-    "implementation": "Nessun adversarial multi-Pod test",
-    "evidence": "Manca evidence richiesta"
+    "status": "VERIFIED-LAB",
+    "implementation": "QueryBudgetResilienceRuntimeTest uses two isolated application replicas with separate Hikari pools against shared PostgreSQL",
+    "evidence": "20 concurrent adversarial equivalent requests produce one shared attempt count, 19 mismatch budget units and one deterministic stalled result; Kubernetes production topology remains deployment acceptance"
   },
   {
     "id": "UDP-A50",
