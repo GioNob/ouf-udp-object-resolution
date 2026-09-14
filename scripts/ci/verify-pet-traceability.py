@@ -13,10 +13,10 @@ ROOT = Path(__file__).resolve().parents[2]
 MATRIX = ROOT / "docs" / "pet-traceability-v1.3.json"
 ALLOWED_STATUSES = {"VERIFIED", "VERIFIED-LAB", "PARTIAL", "OPEN", "EXTERNAL-OPEN"}
 EXPECTED_COUNTS = {
-    "VERIFIED": 27,
+    "VERIFIED": 30,
     "VERIFIED-LAB": 2,
-    "PARTIAL": 23,
-    "OPEN": 15,
+    "PARTIAL": 22,
+    "OPEN": 13,
     "EXTERNAL-OPEN": 2,
 }
 COLLIDING_IDS = {"UDP-A21", "UDP-A22"}

@@ -395,9 +395,9 @@
     "requirement": "BITEMPORAL_REQUIRED applica system interval completo solo sullo scope configurato; gli altri fatti usano system evidence.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A22 [v1.2]",
-    "status": "OPEN",
-    "implementation": "Nessun modello/test BITEMPORAL_REQUIRED",
-    "evidence": "System interval selettivo non implementato"
+    "status": "VERIFIED",
+    "implementation": "UdpPorts.MaterializationProfile.bitemporalProperties; property_bitemporal_interval; TemporalDeltaRuntimeTest#bitemporalIntervalsExistOnlyForConfiguredPropertyAndPreserveRetroactiveCorrection",
+    "evidence": "System interval completo solo sulla property configurata; valid time retroattivo e system evidence preservati"
   },
   {
     "id": "UDP-A23",
@@ -605,9 +605,9 @@
     "requirement": "High-frequency snapshot: N osservazioni identiche non producono N Canonical Revision e non richiedono parsing completo del payload precedente quando fingerprint sufficienti sono invariati.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A43",
-    "status": "PARTIAL",
-    "implementation": "nessuna revisione su osservazione identica",
-    "evidence": "Manca prova di non parsing del JSONB precedente/hash granulari"
+    "status": "VERIFIED",
+    "implementation": "CanonicalMaterializer fast fingerprint path; TemporalDeltaRuntimeTest#completeFingerprintsSkipPreviousPayloadParsingForIdenticalObservation",
+    "evidence": "Quattro fingerprint separati evitano nuova revisione e lettura/parsing del current payload"
   },
   {
     "id": "UDP-A44",
@@ -615,9 +615,9 @@
     "requirement": "Delta materialization: una singola proprietà modificata può generare una revisione/delta senza duplicazione obbligatoria dell'intero JSONB voluminoso; la ricostruzione da checkpoint + delta è deterministica.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A44",
-    "status": "OPEN",
-    "implementation": "Solo FULL_SNAPSHOT nei fixture; delta/checkpoint reconstruction assenti",
-    "evidence": "Bloccante v1.2"
+    "status": "VERIFIED",
+    "implementation": "V17 checkpoint/delta schema; CanonicalMaterializer; CanonicalRevisionReconstructor; TemporalDeltaRuntimeTest#deltaRevisionAvoidsFullPayloadDuplicationAndReconstructsFromCheckpoint",
+    "evidence": "Patch di singola proprietà senza payload completo e ricostruzione deterministica verificata per hash"
   },
   {
     "id": "UDP-A45",
