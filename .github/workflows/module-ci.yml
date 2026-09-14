@@ -103,10 +103,10 @@ jobs:
         run: mvn -B -ntp -DskipTests package
       - name: Validate SBOM
         run: |
-          test -s target/bom.json
+          test -s target/classes/META-INF/sbom/application.cdx.json
           python3 - <<'PY'
           import json
-          with open('target/bom.json', encoding='utf-8') as source:
+          with open('target/classes/META-INF/sbom/application.cdx.json', encoding='utf-8') as source:
               bom = json.load(source)
           assert bom['bomFormat'] == 'CycloneDX'
           assert bom['specVersion']
@@ -144,7 +144,7 @@ jobs:
         if: always()
         run: |
           mkdir -p target/supply-chain-evidence
-          cp target/bom.json target/supply-chain-evidence/cyclonedx-sbom.json 2>/dev/null || true
+          cp target/classes/META-INF/sbom/application.cdx.json target/supply-chain-evidence/cyclonedx-sbom.json 2>/dev/null || true
           cp target/trivy-image.json target/supply-chain-evidence/trivy-image.json 2>/dev/null || true
           cp target/rendered-deployment.yaml target/supply-chain-evidence/rendered-deployment.yaml 2>/dev/null || true
           (cd target/supply-chain-evidence && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS)
