@@ -1,0 +1,50 @@
+name: Package UDP evidence bundle
+on:
+  push:
+    branches:
+      - codex/package-udp-evidence-34884870678
+permissions:
+  actions: read
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Assemble validated evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/test-pet bundle/performance bundle/disaster-recovery bundle/supply-chain-deployment
+          fetch() {
+            artifact_id="$1"
+            destination="$2"
+            curl --fail --location --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/GioNob/ouf-udp-object-resolution/actions/artifacts/$artifact_id/zip" \
+              --output "$destination"
+          }
+          fetch 10364518053 test-pet.zip
+          fetch 10364127486 performance.zip
+          fetch 10364696871 disaster-recovery.zip
+          fetch 10364553069 supply-chain-deployment.zip
+          unzip -q test-pet.zip -d bundle/test-pet
+          unzip -q performance.zip -d bundle/performance
+          unzip -q disaster-recovery.zip -d bundle/disaster-recovery
+          unzip -q supply-chain-deployment.zip -d bundle/supply-chain-deployment
+          sha256sum test-pet.zip performance.zip disaster-recovery.zip supply-chain-deployment.zip > bundle/ORIGINAL_ARTIFACT_SHA256SUMS.txt
+          {
+            echo "OUF UDP unified test/evidence package"
+            echo "Validated source merge: a18e1c1d1f6add41bb11c975e5f2487f352d1bdb"
+            echo "CI run: 34884870678"
+            echo "Original CI head: 0a9ed5f1c5cd0ec67b72196445637b94bb8fd56a"
+            echo "Generated UTC: $(date -u +%FT%TZ)"
+          } > bundle/MANIFEST.txt
+      - name: Upload unified package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ouf-udp-test-evidence-unified-a18e1c1d
+          path: bundle/
+          retention-days: 30
+          if-no-files-found: error
