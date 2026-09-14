@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SUITE = ROOT / "docs" / "tool-selection-regression-v1.json"
 MANIFEST = ROOT / "docs" / "mcp-capability-manifest-v1.json"
+ANALYTICAL_OUTCOME = "QUERY_REQUIRES_ANALYTICAL_CAPABILITY"
 CUES = {
     "urban.object.related_search": (
         "stessa strada", "same street", "same relationship anchor", "typed join",
@@ -28,6 +29,10 @@ CUES = {
     "urban.graph.neighbors": (
         "adiacenti", "un solo hop", "one-hop", "immediate neighbors", "progressive exploration",
         "pruning",
+    ),
+    ANALYTICAL_OUTCOME: (
+        "trend aggregati", "correlazioni storiche", "anomalie", "tutti i domini",
+        "composite analytical", "trend", "aggregation", "full urban dataset",
     ),
 }
 
@@ -47,7 +52,8 @@ def select(prompt: str) -> str:
     scores = {
         capability: (
             sum(normalize(cue) in normalized for cue in cues)
-            if any(normalize(cue) in manifest_text[capability] for cue in cues)
+            if capability == ANALYTICAL_OUTCOME
+            or any(normalize(cue) in manifest_text[capability] for cue in cues)
             else -1
         )
         for capability, cues in CUES.items()
@@ -77,8 +83,8 @@ if not cases or not isinstance(minimum, (int, float)) or not 0 < minimum <= 1:
 passed = 0
 for case in cases:
     expected = case.get("expectedCapability")
-    if expected not in published:
-        fail(f"{case.get('id')} expects an unpublished capability {expected}")
+    if expected not in published and expected != ANALYTICAL_OUTCOME:
+        fail(f"{case.get('id')} expects an unpublished capability or unsupported outcome {expected}")
     selected = select(case.get("prompt", ""))
     if selected == expected:
         passed += 1
