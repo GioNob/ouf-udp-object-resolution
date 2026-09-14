@@ -1,5 +1,26 @@
 # Disaster recovery baseline
 
+## Historical REPRODUCE
+
+`REPRODUCE` is an intentional replay of a durable historical handoff. It pins
+the exact `sourceSchemaRef`, `bundleRef`, `semanticPublicationSetRef`,
+`adapterProfileRef` and any mapping, authority or relationship strategy
+references present in the original payload. It never falls back to an `ACTIVE`
+contract.
+
+The environment binding `OUF_UDP_HISTORICAL_CONTRACT_CATALOG_PATH` points to a
+versioned JSON catalog mounted from governed configuration. Each entry contains
+`kind`, `ref`, `version`, `contentHash` and `status`. Missing, revoked or changed
+entries make the plan `PAUSED`; failed checks are recorded using hashed
+reference identifiers. An operator may resume only after the exact references
+are resolvable again.
+
+Planning requires `udp.replay.plan`. Execution and abort require a current
+trusted-human authorization carrying `udp.replay.execute`. Execution reuses the
+already verified RAW LakeObject, creates a distinct durable handoff and
+materialization job, and records append-only replay evidence. It does not
+overwrite the source handoff or published historical revisions.
+
 The CI restore drill is executable evidence, not a statement that the deployment platform is already production-certified.
 
 It performs a PostgreSQL 17 physical base backup with WAL archiving, commits one evidence event before the recovery target and one after it, destroys the primary container and recovers to the recorded timestamp. The retained event must exist and the later event must not.
