@@ -535,9 +535,9 @@
     "requirement": "Una richiesta analitica composita non coperta dal serving operativo produce QUERY_REQUIRES_ANALYTICAL_CAPABILITY o job asincrono governato, senza decomposizione illimitata in query graph/spatial operative.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A36",
-    "status": "OPEN",
-    "implementation": "QUERY_REQUIRES_ANALYTICAL_CAPABILITY/job asincrono assenti",
-    "evidence": "Caso non implementato"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouter ANALYTICAL_COMPOSITE gate; AnalyticalCapabilityRequiredException; CapabilityRouterErrorHandler",
+    "evidence": "Runtime and contract tests prove QUERY_REQUIRES_ANALYTICAL_CAPABILITY before object lookup/planner/serving SQL, no redirect, no advertised unavailable capability"
   },
   {
     "id": "UDP-A37",

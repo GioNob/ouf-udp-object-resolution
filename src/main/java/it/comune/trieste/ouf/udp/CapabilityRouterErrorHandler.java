@@ -14,4 +14,10 @@ public class CapabilityRouterErrorHandler {
   ResponseEntity<CapabilityRouter.StalledResponse> stalled(ToolSelectionStalledException exception) {
     return ResponseEntity.unprocessableEntity().body(exception.response());
   }
+
+  @ExceptionHandler(AnalyticalCapabilityRequiredException.class)
+  ResponseEntity<CapabilityRouter.AnalyticalCapabilityResponse> analytical(
+      AnalyticalCapabilityRequiredException exception) {
+    return ResponseEntity.unprocessableEntity().body(exception.response());
+  }
 }
