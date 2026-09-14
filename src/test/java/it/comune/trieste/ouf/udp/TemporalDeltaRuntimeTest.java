@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.udp;
 
 import static org.assertj.core.api.Assertions.*;
+import java.sql.Timestamp;
 import java.time.OffsetDateTime;
 import java.util.*;
 import org.junit.jupiter.api.*;
@@ -25,7 +26,7 @@ class TemporalDeltaRuntimeTest {
 
   @Test void bitemporalIntervalsExistOnlyForConfiguredPropertyAndPreserveRetroactiveCorrection(){
     var profile=new UdpPorts.MaterializationProfile("policy://authority/bitemporal",rules,Set.of("ouf:name"),1);Map<String,Object> first=full("time-1","Original",10,"2026-01-01T00:00:00Z",null);UUID object=resolved(first);materializer.materialize("time-1",object,first,profile);Map<String,Object> correction=full("time-2","Corrected",10,"2025-12-01T00:00:00Z",null);intake.accept(correction);materializer.materialize("time-2",object,correction,profile);
-    List<Map<String,Object>> rows=db.sql("select property_iri,valid_from,system_from,system_to from ouf_udp.property_bitemporal_interval order by system_from,interval_id").query().listOfRows();assertThat(rows).hasSize(2).allMatch(r->"ouf:name".equals(r.get("property_iri")));assertThat(rows.getFirst().get("system_to")).isNotNull();assertThat(rows.getLast().get("system_to")).isNull();assertThat(rows.getLast().get("valid_from")).isEqualTo(OffsetDateTime.parse("2025-12-01T00:00:00Z"));assertThat(db.sql("select count(*) from ouf_udp.property_bitemporal_interval where property_iri='ouf:surface'").query(Long.class).single()).isZero();Map<String,Object> evidence=db.sql("select observed_at,recorded_at from ouf_udp.object_revision order by revision_no desc limit 1").query().singleRow();assertThat(evidence.get("observed_at")).isNotNull();assertThat(evidence.get("recorded_at")).isNotNull();
+    List<Map<String,Object>> rows=db.sql("select property_iri,valid_from,system_from,system_to from ouf_udp.property_bitemporal_interval order by system_from,interval_id").query().listOfRows();assertThat(rows).hasSize(2).allMatch(r->"ouf:name".equals(r.get("property_iri")));assertThat(rows.getFirst().get("system_to")).isNotNull();assertThat(rows.getLast().get("system_to")).isNull();assertThat(((Timestamp)rows.getLast().get("valid_from")).toInstant()).isEqualTo(OffsetDateTime.parse("2025-12-01T00:00:00Z").toInstant());assertThat(db.sql("select count(*) from ouf_udp.property_bitemporal_interval where property_iri='ouf:surface'").query(Long.class).single()).isZero();Map<String,Object> evidence=db.sql("select observed_at,recorded_at from ouf_udp.object_revision order by revision_no desc limit 1").query().singleRow();assertThat(evidence.get("observed_at")).isNotNull();assertThat(evidence.get("recorded_at")).isNotNull();
   }
 
   @Test void completeFingerprintsSkipPreviousPayloadParsingForIdenticalObservation(){
