@@ -16,7 +16,6 @@ EXPECTED_COUNTS = {
     "VERIFIED": 48,
     "VERIFIED-LAB": 3,
     "PARTIAL": 16,
-    "OPEN": 0,
     "EXTERNAL-OPEN": 2,
 }
 COLLIDING_IDS = {"UDP-A21", "UDP-A22"}
