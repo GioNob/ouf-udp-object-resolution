@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "ouf.mcp-capability-manifest/v1",
+  "capabilities": [
+    {
+      "id": "urban.object.read",
+      "purpose": "Read the authorized current projection of one known Urban Object.",
+      "useWhen": "Use when the caller already has the Urban Object identifier and needs current state.",
+      "doNotUseWhen": "Do not use for history, bulk search, graph exploration, raw payloads or analytics.",
+      "preferredAlternatives": ["urban.object.search", "urban.object.history.read"],
+      "operationalLimits": {"objects": 1, "correlationBudget": "QUERY"},
+      "resultSemantics": "Returns one policy-filtered current projection or anti-enumeration not-found.",
+      "securityNotes": "Authorization, tenant isolation and field masking are applied before return; RAW is excluded."
+    },
+    {
+      "id": "urban.object.history.read",
+      "purpose": "Read an authorized page of immutable canonical revisions for one Urban Object.",
+      "useWhen": "Use for audit, as-of investigation or change history of a known object.",
+      "doNotUseWhen": "Do not use for current-only reads, raw payload retrieval or cross-object analytics.",
+      "preferredAlternatives": ["urban.object.read", "lineage.object.read"],
+      "operationalLimits": {"maxPageSize": 100, "correlationBudget": "QUERY"},
+      "resultSemantics": "Returns an ordered, paginated and policy-filtered revision view.",
+      "securityNotes": "Historical values remain subject to current authorization and redaction policy."
+    },
+    {
+      "id": "urban.object.search",
+      "purpose": "Find authorized current Urban Objects through indexed typed filters.",
+      "useWhen": "Use when the object identifier is unknown but canonical type and bounded filters are known.",
+      "doNotUseWhen": "Do not use for arbitrary expressions, unbounded wildcard scans, relationships or analytics.",
+      "preferredAlternatives": ["urban.object.read", "urban.object.related_search"],
+      "operationalLimits": {"maxPageSize": 100, "indexedFilterRequired": "type", "correlationBudget": "QUERY"},
+      "resultSemantics": "Returns a bounded page of authorized current projections; it is not an exhaustive export.",
+      "securityNotes": "Only allowlisted filters and projections are accepted; policy filtering precedes return."
+    },
+    {
+      "id": "urban.relationship.read",
+      "purpose": "Read authorized inbound or outbound relationships of one known Urban Object.",
+      "useWhen": "Use for a bounded relationship view around one object with known relation filters.",
+      "doNotUseWhen": "Do not use for recursion, cross-domain joins or graph-wide exploration.",
+      "preferredAlternatives": ["urban.graph.neighbors", "urban.object.related_search"],
+      "operationalLimits": {"maxPageSize": 100, "correlationBudget": "GRAPH"},
+      "resultSemantics": "Returns policy-visible edges without disclosing hidden degree or restricted endpoints.",
+      "securityNotes": "Relationship labels, tenant boundaries and anti-enumeration rules are enforced."
+    },
+    {
+      "id": "lineage.object.read",
+      "purpose": "Explain governed provenance and contract evidence for one Urban Object.",
+      "useWhen": "Use when the caller needs source, run, schema, mapping and authority evidence.",
+      "doNotUseWhen": "Do not use to obtain implicit RAW payloads or unrestricted source identifiers.",
+      "preferredAlternatives": ["urban.object.history.read", "urban.object.read"],
+      "operationalLimits": {"maxResults": 200, "correlationBudget": "LINEAGE"},
+      "resultSemantics": "Returns filtered evidence references and may contain redacted fields.",
+      "securityNotes": "Source identifiers, property values and evidence are masked according to policy."
+    },
+    {
+      "id": "urban.graph.neighbors",
+      "purpose": "Return one bounded hop of policy-visible graph adjacency for progressive exploration.",
+      "useWhen": "Use for exploratory navigation, then prune the candidate set before the next explicit hop.",
+      "doNotUseWhen": "Do not chain calls to simulate known cross-domain joins or bypass depth and cumulative budgets.",
+      "preferredAlternatives": ["urban.object.related_search", "urban.spatial.intersection_search", "urban.graph.traverse"],
+      "operationalLimits": {"maxDepth": 1, "maxNodes": 200, "maxEdges": 500, "timeoutMs": 2000, "correlationBudget": "GRAPH"},
+      "resultSemantics": "Returns bounded direct neighbors and visible edges; additional hops require explicit calls.",
+      "securityNotes": "Authorization and cumulative correlation budgets are enforced server-side."
+    },
+    {
+      "id": "urban.graph.traverse",
+      "purpose": "Traverse a bounded hierarchy, technical network or other intrinsically recursive structure.",
+      "useWhen": "Use only when recursion or hierarchy is intrinsic, such as variant chains or technical networks.",
+      "doNotUseWhen": "Do not use for cross-domain correlation, shared anchors, spatial patterns or typed joins.",
+      "preferredAlternatives": ["urban.graph.neighbors", "urban.object.related_search", "urban.spatial.intersection_search"],
+      "operationalLimits": {"maxDepth": 4, "maxNodes": 500, "maxEdges": 1000, "timeoutMs": 2000, "correlationBudget": "GRAPH"},
+      "resultSemantics": "Returns a bounded recursive result that may be truncated when an enforced limit is reached.",
+      "securityNotes": "The Capability Router remains authoritative; descriptions never authorize redirect or bypass."
+    },
+    {
+      "id": "urban.object.related_search",
+      "purpose": "Correlate declared object classes through a known relationship pattern without recursion.",
+      "useWhen": "Use for typed cross-domain patterns such as Dehor and Worksite objects related to the same Street.",
+      "doNotUseWhen": "Do not use for unknown exploratory paths, recursive hierarchies, spatial predicates or analytics.",
+      "preferredAlternatives": ["urban.graph.neighbors", "urban.graph.traverse", "urban.spatial.intersection_search"],
+      "operationalLimits": {"maxTargetTypes": 10, "maxResults": 200, "timeoutMs": 2000, "correlationBudget": "GRAPH"},
+      "resultSemantics": "Returns policy-visible objects matching the declared anchor, direction, relation and target types.",
+      "securityNotes": "The input is typed and cannot contain SQL or physical-plan controls; tenant and labels are enforced."
+    },
+    {
+      "id": "urban.spatial.nearby",
+      "purpose": "Find authorized objects of a declared type within a governed distance from an anchor.",
+      "useWhen": "Use for bounded distance-based discovery around a known visible object.",
+      "doNotUseWhen": "Do not use for arbitrary geometry expressions, global scans or non-spatial relationships.",
+      "preferredAlternatives": ["urban.spatial.intersection_search", "urban.object.related_search"],
+      "operationalLimits": {"maxDistanceMeters": 50000, "maxResults": 200, "timeoutMs": 1500, "correlationBudget": "SPATIAL"},
+      "resultSemantics": "Returns bounded authorized hits with distance in meters.",
+      "securityNotes": "Anchor visibility, target tenant and access labels are validated before return."
+    },
+    {
+      "id": "urban.spatial.intersects",
+      "purpose": "Find authorized objects whose geometry intersects a governed envelope.",
+      "useWhen": "Use for bounded intersection against an EPSG:4326 envelope and declared target type.",
+      "doNotUseWhen": "Do not use for unsupported CRS, oversized areas, arbitrary predicates or cross-domain joins.",
+      "preferredAlternatives": ["urban.spatial.within", "urban.spatial.intersection_search"],
+      "operationalLimits": {"crs": "EPSG:4326", "maxAreaSqKm": 2500, "maxResults": 200, "timeoutMs": 1500, "correlationBudget": "SPATIAL"},
+      "resultSemantics": "Returns a bounded set of policy-visible objects intersecting the envelope.",
+      "securityNotes": "Geometry, tenant and access-label controls are enforced server-side."
+    },
+    {
+      "id": "urban.spatial.within",
+      "purpose": "Find authorized objects whose geometry lies within a governed envelope.",
+      "useWhen": "Use for bounded containment against an EPSG:4326 envelope and declared target type.",
+      "doNotUseWhen": "Do not use for unsupported CRS, oversized areas, arbitrary predicates or proximity ranking.",
+      "preferredAlternatives": ["urban.spatial.intersects", "urban.spatial.nearby"],
+      "operationalLimits": {"crs": "EPSG:4326", "maxAreaSqKm": 2500, "maxResults": 200, "timeoutMs": 1500, "correlationBudget": "SPATIAL"},
+      "resultSemantics": "Returns a bounded set of policy-visible objects contained by the envelope.",
+      "securityNotes": "Geometry, tenant and access-label controls are enforced server-side."
+    },
+    {
+      "id": "urban.spatial.intersection_search",
+      "purpose": "Correlate declared object types through a governed spatial or topological intersection.",
+      "useWhen": "Use for cross-domain spatial correlation around a known visible anchor.",
+      "doNotUseWhen": "Do not use for non-spatial typed relationships, recursive paths or arbitrary geometry languages.",
+      "preferredAlternatives": ["urban.object.related_search", "urban.spatial.nearby", "urban.graph.neighbors"],
+      "operationalLimits": {"maxResults": 200, "timeoutMs": 1500, "correlationBudget": "SPATIAL"},
+      "resultSemantics": "Returns bounded policy-visible target objects intersecting the anchor geometry.",
+      "securityNotes": "Anchor/target types, tenant, geometry validity, labels and cost budget are governed."
+    }
+  ]
+}

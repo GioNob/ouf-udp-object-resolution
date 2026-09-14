@@ -14,10 +14,10 @@ Actions run `34813883857`.
 
 | Status | Requirements |
 |---|---:|
-| `VERIFIED` | 30 |
+| `VERIFIED` | 34 |
 | `VERIFIED-LAB` | 2 |
-| `PARTIAL` | 22 |
-| `OPEN` | 13 |
+| `PARTIAL` | 21 |
+| `OPEN` | 10 |
 | `EXTERNAL-OPEN` | 2 |
 
 Overall status: **NOT READY FOR FULL PET ACCEPTANCE**.
@@ -56,7 +56,7 @@ does not count as an end-to-end test.
 
 ## Known blocking groups
 
-1. Capability manifest, `urban.object.related_search` and agent tool-selection tests.
+1. Agent tool-selection tests and progressive-pruning evidence.
 2. Machine-readable router remediation and `TOOL_SELECTION_STALLED` retry guard.
 3. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
 4. N/N+1 migration compatibility and cross-module fixtures against deployed registries.
