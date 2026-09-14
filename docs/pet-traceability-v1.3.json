@@ -415,9 +415,9 @@
     "requirement": "urban.object.related_search viene tradotto in piano server-side tipizzato senza query language fornito dall’Agent.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A24",
-    "status": "OPEN",
-    "implementation": "urban.object.related_search assente",
-    "evidence": "Capability richiesta dal PET"
+    "status": "VERIFIED",
+    "implementation": "RelatedSearchApi; RelatedSearchService typed LogicalQueryPlan and fixed parameterized joins",
+    "evidence": "RelatedSearchRuntimeTest proves fixed-plan translation, closed DTO, authorization and tenant/label filtering"
   },
   {
     "id": "UDP-A25",
@@ -455,9 +455,9 @@
     "requirement": "Query planner può selezionare fixed JOIN, indexed adjacency, PostGIS o recursive CTE; l’Agent non controlla la strategia fisica.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A28",
-    "status": "PARTIAL",
-    "implementation": "piani backend graph/PostGIS",
-    "evidence": "fixed related-search assente; copertura incompleta"
+    "status": "VERIFIED",
+    "implementation": "RelatedSearchService fixed JOIN; GraphQueryService indexed adjacency and recursive CTE; SpatialQueryService PostGIS plans",
+    "evidence": "Runtime tests cover every allowed physical strategy and request DTOs expose no physical-plan control"
   },
   {
     "id": "UDP-A29",
@@ -545,9 +545,9 @@
     "requirement": "Ogni capability MCP tool-eligible pubblicata espone purpose, useWhen, doNotUseWhen, preferredAlternatives, operationalLimits, resultSemantics e securityNotes; la CI rifiuta manifest incompleti.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A37",
-    "status": "OPEN",
-    "implementation": "Capability manifest v1 richiesto dal PET assente",
-    "evidence": "Manca lint CI"
+    "status": "VERIFIED",
+    "implementation": "docs/mcp-capability-manifest-v1.json; scripts/ci/verify-mcp-capability-manifest.py",
+    "evidence": "CI rejects missing/empty MCP-MANIFEST-01 fields and OpenAPI/manifest publication drift"
   },
   {
     "id": "UDP-A38",
@@ -555,9 +555,9 @@
     "requirement": "Su prompt cross-domain non ricorsivi, la descrizione di urban.graph.traverse indica esplicitamente di non usarlo e suggerisce urban.object.related_search o urban.spatial.intersection_search; il Router resta comunque l’enforcement autoritativo.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A38",
-    "status": "OPEN",
-    "implementation": "Descrizioni MCP conformi a MCP-MANIFEST-01 assenti",
-    "evidence": "Manca artefatto"
+    "status": "VERIFIED",
+    "implementation": "urban.graph.traverse row in mcp-capability-manifest-v1.json",
+    "evidence": "CI asserts the cross-domain prohibition and both PET specialist alternatives; Router remains explicitly authoritative"
   },
   {
     "id": "UDP-A39",
