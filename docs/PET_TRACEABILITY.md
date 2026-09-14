@@ -14,10 +14,10 @@ Actions run `34813883857`.
 
 | Status | Requirements |
 |---|---:|
-| `VERIFIED` | 27 |
+| `VERIFIED` | 30 |
 | `VERIFIED-LAB` | 2 |
-| `PARTIAL` | 23 |
-| `OPEN` | 15 |
+| `PARTIAL` | 22 |
+| `OPEN` | 13 |
 | `EXTERNAL-OPEN` | 2 |
 
 Overall status: **NOT READY FOR FULL PET ACCEPTANCE**.
@@ -56,9 +56,8 @@ does not count as an end-to-end test.
 
 ## Known blocking groups
 
-1. Selective bitemporality and deterministic checkpoint/delta materialization.
-2. Capability manifest, `urban.object.related_search` and agent tool-selection tests.
-3. Machine-readable router remediation and `TOOL_SELECTION_STALLED` retry guard.
-4. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
-5. N/N+1 migration compatibility and cross-module fixtures against deployed registries.
-6. Production capacity/SLO and approved RPO/RTO acceptance.
+1. Capability manifest, `urban.object.related_search` and agent tool-selection tests.
+2. Machine-readable router remediation and `TOOL_SELECTION_STALLED` retry guard.
+3. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
+4. N/N+1 migration compatibility and cross-module fixtures against deployed registries.
+5. Production capacity/SLO and approved RPO/RTO acceptance.

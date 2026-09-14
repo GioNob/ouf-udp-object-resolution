@@ -10,7 +10,10 @@ public final class UdpPorts {
   public interface SpatialConfigurationPort {SpatialProfile resolve(String bundleRef,String typeCode);}
   public record ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty){}
   public record PropertyRule(String sourceField,String propertyIri,String datatype,String accessLabel,List<String> authorityOrder) {public PropertyRule{authorityOrder=List.copyOf(authorityOrder);}}
-  public record MaterializationProfile(String policyRef,List<PropertyRule> properties) {public MaterializationProfile{properties=List.copyOf(properties);}}
+  public record MaterializationProfile(String policyRef,List<PropertyRule> properties,Set<String> bitemporalProperties,int checkpointInterval) {
+    public MaterializationProfile(String policyRef,List<PropertyRule> properties){this(policyRef,properties,Set.of(),1);}
+    public MaterializationProfile{properties=List.copyOf(properties);bitemporalProperties=Set.copyOf(bitemporalProperties);if(checkpointInterval<1)throw new IllegalArgumentException("UDP_CHECKPOINT_INTERVAL_INVALID");}
+  }
   public record RelationshipRule(String sourceField,String relationIri,String targetCanonicalType,String targetPropertyIri,String resolutionStrategy,String onNoMatch,String accessLabel,boolean selfLoopAllowed){}
   public record RelationshipProfile(String policyRef,List<RelationshipRule> relationships) {public RelationshipProfile{relationships=List.copyOf(relationships);}}
   public record GeometryRule(String sourceField,String expectedSourceCrs,int canonicalSrid,String normalizationVersion,String accessLabel){}
