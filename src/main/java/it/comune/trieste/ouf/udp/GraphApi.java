@@ -10,5 +10,5 @@ public class GraphApi {
   @PostMapping("/neighbors") GraphQueryService.GraphResult neighbors(@RequestBody NeighborsRequest body,HttpServletRequest request){return service.neighbors(body.startObjectId(),body.relationTypes(),body.maxNodes(),body.maxEdges(),ServingApi.context(request));}
   @PostMapping("/traverse") GraphQueryService.GraphResult traverse(@RequestBody TraverseRequest body,HttpServletRequest request){return service.traverse(body.startObjectId(),body.relationTypes(),body.maxDepth(),body.maxNodes(),body.maxEdges(),body.purpose(),ServingApi.context(request));}
   public record NeighborsRequest(UUID startObjectId,List<String> relationTypes,int maxNodes,int maxEdges){}
-  public record TraverseRequest(UUID startObjectId,List<String> relationTypes,int maxDepth,int maxNodes,int maxEdges,String purpose){}
+  public record TraverseRequest(UUID startObjectId,List<String> relationTypes,int maxDepth,int maxNodes,int maxEdges,CapabilityRouter.TraversalPurpose purpose){}
 }
