@@ -565,9 +565,9 @@
     "requirement": "Regression test di tool selection verificano che prompt rappresentativi conducano alla capability specialistica corretta nella maggioranza dei casi attesi, senza trasformare tale comportamento dell’Agent in requisito di sicurezza del datastore.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A39",
-    "status": "OPEN",
-    "implementation": "Nessun regression test di tool selection su prompt",
-    "evidence": "Manca evidence"
+    "status": "VERIFIED",
+    "implementation": "tool-selection-regression-v1.json; verify-tool-selection-regression.py; MCP manifest descriptions",
+    "evidence": "CI majority gate covers representative Italian/English specialist, recursive and progressive prompts; Router remains authoritative"
   },
   {
     "id": "UDP-A40",
@@ -635,9 +635,9 @@
     "requirement": "Retry-loop guard: mismatch semanticamente equivalenti oltre soglia producono TOOL_SELECTION_STALLED e nessun retry infinito.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A46",
-    "status": "OPEN",
-    "implementation": "TOOL_SELECTION_STALLED assente",
-    "evidence": "Retry-loop guard incompleto"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRetryGuard shared PostgreSQL state; ToolSelectionStalledException",
+    "evidence": "Runtime test proves deterministic stop for equivalent retries with no serving query execution"
   },
   {
     "id": "UDP-A47",
@@ -675,9 +675,9 @@
     "requirement": "TOOL_SELECTION_STALLED threshold: con soglia N configurata, i primi N-1 tentativi equivalenti ricevono remediation/mismatch secondo policy e il tentativo N produce TOOL_SELECTION_STALLED; il tentativo successivo equivalente non raggiunge Query Planner o DB.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A50",
-    "status": "OPEN",
-    "implementation": "Soglia deterministica TOOL_SELECTION_STALLED assente",
-    "evidence": "Manca enforcement e test N/N+1 tentativi"
+    "status": "VERIFIED",
+    "implementation": "Configurable ouf.udp.capability-router.mismatch-threshold and atomic capability_retry_guard",
+    "evidence": "Runtime test proves first N-1 mismatch responses, Nth stalled response and subsequent fail-closed rejection"
   },
   {
     "id": "UDP-A51",
@@ -685,8 +685,8 @@
     "requirement": "Retry equivalence: variazioni cosmetiche o parametri non sostanziali del DTO non azzerano il retry-loop guard; una modifica sostanziale e riconosciuta secondo policy configurata e testata.",
     "origin": "PET v1.3 §105.1 Addendum di conformità v1.2",
     "matrix_id": "UDP-A51",
-    "status": "OPEN",
-    "implementation": "Fingerprint/equivalenza semantica retry assenti",
-    "evidence": "Manca policy configurata e test"
+    "status": "VERIFIED",
+    "implementation": "CapabilityRouter semanticFingerprint policy over capability, purpose, anchor and normalized relation set",
+    "evidence": "Runtime test proves cosmetic order/duplicates/limit changes remain equivalent and substantive anchor change progresses"
   }
 ]

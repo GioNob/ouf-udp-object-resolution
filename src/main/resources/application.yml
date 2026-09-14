@@ -41,3 +41,5 @@ ouf.udp.historical-contracts:
 ouf.udp.reference-integrity:
   max-attempts: ${OUF_UDP_REFERENCE_INTEGRITY_MAX_ATTEMPTS:5}
   retry-base-ms: ${OUF_UDP_REFERENCE_INTEGRITY_RETRY_BASE_MS:30000}
+ouf.udp.capability-router:
+  mismatch-threshold: ${OUF_UDP_CAPABILITY_MISMATCH_THRESHOLD:3}

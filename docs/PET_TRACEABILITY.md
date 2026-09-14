@@ -14,10 +14,10 @@ Actions run `34813883857`.
 
 | Status | Requirements |
 |---|---:|
-| `VERIFIED` | 40 |
+| `VERIFIED` | 44 |
 | `VERIFIED-LAB` | 2 |
 | `PARTIAL` | 18 |
-| `OPEN` | 7 |
+| `OPEN` | 3 |
 | `EXTERNAL-OPEN` | 2 |
 
 Overall status: **NOT READY FOR FULL PET ACCEPTANCE**.
@@ -56,8 +56,7 @@ does not count as an end-to-end test.
 
 ## Known blocking groups
 
-1. Agent tool-selection tests and progressive-pruning evidence.
-2. `TOOL_SELECTION_STALLED`, retry equivalence and configurable retry threshold.
-3. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
-4. N/N+1 migration compatibility and cross-module fixtures against deployed registries.
-5. Production capacity/SLO and approved RPO/RTO acceptance.
+1. Progressive-pruning evidence and analytical-capability rejection.
+2. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
+3. N/N+1 migration compatibility and cross-module fixtures against deployed registries.
+4. Production capacity/SLO and approved RPO/RTO acceptance.
