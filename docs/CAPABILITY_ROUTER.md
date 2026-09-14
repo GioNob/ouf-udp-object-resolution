@@ -22,5 +22,5 @@ execution, node, edge or DB-time counters. This operational-state write is not a
 serving query and does not invoke the datastore planner/repository.
 
 Semantic retry equivalence, configurable mismatch thresholds and
-`TOOL_SELECTION_STALLED` are intentionally deferred to the following PET
-increment.
+`TOOL_SELECTION_STALLED` are enforced by `CapabilityRetryGuard`; see
+`TOOL_SELECTION_RETRY_GUARD.md`.

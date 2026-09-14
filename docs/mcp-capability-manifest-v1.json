@@ -67,7 +67,7 @@
       "useWhen": "Use only when recursion or hierarchy is intrinsic, such as variant chains or technical networks.",
       "doNotUseWhen": "Do not use for cross-domain correlation, shared anchors, spatial patterns or typed joins.",
       "preferredAlternatives": ["urban.graph.neighbors", "urban.object.related_search", "urban.spatial.intersection_search"],
-      "operationalLimits": {"maxDepth": 4, "maxNodes": 500, "maxEdges": 1000, "timeoutMs": 2000, "correlationBudget": "GRAPH"},
+      "operationalLimits": {"maxDepth": 4, "maxNodes": 500, "maxEdges": 1000, "timeoutMs": 2000, "correlationBudget": "GRAPH", "equivalentMismatchThreshold": "configured"},
       "resultSemantics": "Returns a bounded recursive result that may be truncated when an enforced limit is reached.",
       "securityNotes": "The Capability Router remains authoritative; descriptions never authorize redirect or bypass."
     },

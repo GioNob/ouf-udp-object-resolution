@@ -9,4 +9,9 @@ public class CapabilityRouterErrorHandler {
   ResponseEntity<CapabilityRouter.Remediation> mismatch(CapabilityMismatchException exception) {
     return ResponseEntity.unprocessableEntity().body(exception.remediation());
   }
+
+  @ExceptionHandler(ToolSelectionStalledException.class)
+  ResponseEntity<CapabilityRouter.StalledResponse> stalled(ToolSelectionStalledException exception) {
+    return ResponseEntity.unprocessableEntity().body(exception.response());
+  }
 }

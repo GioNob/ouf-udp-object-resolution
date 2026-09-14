@@ -1,0 +1,16 @@
+{
+  "suiteVersion": "ouf.udp.tool-selection/v1",
+  "minimumPassRatio": 0.7,
+  "cases": [
+    {"id": "related-same-street-it", "prompt": "Trova dehors e cantieri associati alla stessa strada", "expectedCapability": "urban.object.related_search"},
+    {"id": "related-known-anchor-en", "prompt": "Correlate the known object types that share the same relationship anchor", "expectedCapability": "urban.object.related_search"},
+    {"id": "related-non-recursive", "prompt": "Run a non-recursive cross-domain typed join", "expectedCapability": "urban.object.related_search"},
+    {"id": "spatial-cross-domain-it", "prompt": "Trova gli oggetti di due domini che intersecano la stessa area", "expectedCapability": "urban.spatial.intersection_search"},
+    {"id": "spatial-overlap-en", "prompt": "Correlate target types by spatial overlap with this anchor geometry", "expectedCapability": "urban.spatial.intersection_search"},
+    {"id": "recursive-hierarchy-it", "prompt": "Percorri ricorsivamente la gerarchia completa dei discendenti", "expectedCapability": "urban.graph.traverse"},
+    {"id": "recursive-network-en", "prompt": "Traverse this recursive technical network with bounded depth", "expectedCapability": "urban.graph.traverse"},
+    {"id": "neighbors-explore-it", "prompt": "Esplora i nodi adiacenti con un solo hop e poi applica pruning", "expectedCapability": "urban.graph.neighbors"},
+    {"id": "neighbors-one-hop-en", "prompt": "Show immediate neighbors for one-hop progressive exploration", "expectedCapability": "urban.graph.neighbors"},
+    {"id": "related-pet-example", "prompt": "Dehor, Worksite e LightingPole sulla stessa Street", "expectedCapability": "urban.object.related_search"}
+  ]
+}

@@ -28,7 +28,17 @@ trap failure ERR
 
 wait_postgres(){
   local container="$1"
-  for attempt in {1..60}; do docker exec "$container" pg_isready -U ouf_udp -d ouf_udp >/dev/null 2>&1 && return 0; sleep 1; done
+  local stable=0
+  for attempt in {1..60}; do
+    if docker exec -e PGPASSWORD="$db_password" "$container" \
+      psql -h 127.0.0.1 -U ouf_udp -d ouf_udp -Atc "select 1" 2>/dev/null | grep -qx 1; then
+      stable=$((stable + 1))
+      [[ "$stable" -ge 3 ]] && return 0
+    else
+      stable=0
+    fi
+    sleep 1
+  done
   docker logs "$container" >&2
   return 1
 }
