@@ -14,9 +14,9 @@ Actions run `34813883857`.
 
 | Status | Requirements |
 |---|---:|
-| `VERIFIED` | 26 |
+| `VERIFIED` | 27 |
 | `VERIFIED-LAB` | 2 |
-| `PARTIAL` | 24 |
+| `PARTIAL` | 23 |
 | `OPEN` | 15 |
 | `EXTERNAL-OPEN` | 2 |
 
@@ -60,5 +60,5 @@ does not count as an end-to-end test.
 2. Capability manifest, `urban.object.related_search` and agent tool-selection tests.
 3. Machine-readable router remediation and `TOOL_SELECTION_STALLED` retry guard.
 4. Multi-Pod governor, restart, bulkhead, cleanup/bloat and adversarial evidence.
-5. N/N+1 migration compatibility, materialization reference gate and cross-module fixtures.
+5. N/N+1 migration compatibility and cross-module fixtures against deployed registries.
 6. Production capacity/SLO and approved RPO/RTO acceptance.

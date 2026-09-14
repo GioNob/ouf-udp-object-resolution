@@ -38,3 +38,6 @@ ouf.udp.lake:
     lease-seconds: ${OUF_UDP_LAKE_SHADOW_LEASE_SECONDS:1800}
 ouf.udp.historical-contracts:
   catalog-path: ${OUF_UDP_HISTORICAL_CONTRACT_CATALOG_PATH:}
+ouf.udp.reference-integrity:
+  max-attempts: ${OUF_UDP_REFERENCE_INTEGRITY_MAX_ATTEMPTS:5}
+  retry-base-ms: ${OUF_UDP_REFERENCE_INTEGRITY_RETRY_BASE_MS:30000}
