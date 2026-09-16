@@ -45,9 +45,16 @@ jobs:
           docker logs udp-minio
           exit 1
       - name: Verify and package
-        run: timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Build non-root container
         run: docker build -t ouf-udp:${{ github.sha }} . && test "$(docker image inspect ouf-udp:${{ github.sha }} --format '{{.Config.User}}')" = "10004:10004"
+      - name: Verify runtime SDK packaging
+        run: |
+          jar tf target/udp-object-resolution-*.jar > target/sdk-packaging.txt
+          grep -q 'BOOT-INF/lib/authorization-sdk-1.0.0.jar' target/sdk-packaging.txt
+          if grep -q 'authorization-sdk-1.0.0-tests.jar' target/sdk-packaging.txt; then exit 1; fi
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -60,7 +67,9 @@ jobs:
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Package recovery subject
-        run: mvn -B -ntp -DskipTests package
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
       - name: Execute PostgreSQL PITR and MinIO restore drill
         run: bash scripts/ci/pitr-minio-restore-drill.sh
       - name: Upload disaster recovery evidence
@@ -89,7 +98,9 @@ jobs:
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Execute reproducible performance gate
-        run: timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -Dtest=PerformanceBaselineIT test
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          timeout --signal=TERM --kill-after=30s 15m mvn -B -ntp -Dtest=PerformanceBaselineIT test
       - name: Freeze performance evidence checksums
         if: always()
         run: if test -f target/performance-evidence/PERFORMANCE_RESULT.json; then (cd target/performance-evidence && sha256sum PERFORMANCE_RESULT.json PERFORMANCE_RESULT.md >SHA256SUMS); fi
@@ -106,7 +117,9 @@ jobs:
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
       - name: Package application and CycloneDX SBOM
-        run: mvn -B -ntp -DskipTests package
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -DskipTests package
       - name: Validate SBOM
         run: |
           test -s target/classes/META-INF/sbom/application.cdx.json

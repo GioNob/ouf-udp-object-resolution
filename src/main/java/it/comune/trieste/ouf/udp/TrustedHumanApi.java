@@ -19,7 +19,13 @@ public class TrustedHumanApi {
   @GetMapping("/objects/{id}/identity") Map<String,Object> identity(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("urban.object.read");return service.resolveIdentity(id);}
   @GetMapping("/plans/{id}") IdentityGovernanceService.Plan plan(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("resolution.issue.read");return service.getPlan(id);}
 
-  @SuppressWarnings("unchecked") static TrustedHumanContext trusted(HttpServletRequest request){for(String h:FORBIDDEN_HEADERS)if(request.getHeader(h)!=null)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_UNTRUSTED_ACTOR_HEADER");Object type=request.getAttribute("ouf.actorType"),subject=request.getAttribute("ouf.subject"),tenant=request.getAttribute("ouf.tenantId"),capabilities=request.getAttribute("ouf.capabilities"),decision=request.getAttribute("ouf.authorizationDecisionRef"),correlation=request.getAttribute("ouf.correlationId");if(type==null||subject==null||tenant==null||!(capabilities instanceof Set<?>)||decision==null||correlation==null)throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"UDP_TRUST_CONTEXT_REQUIRED");return new TrustedHumanContext(String.valueOf(type),String.valueOf(subject),String.valueOf(tenant),(Set<String>)capabilities,String.valueOf(decision),String.valueOf(correlation));}
+  static TrustedHumanContext trusted(HttpServletRequest request){
+    for(String h:FORBIDDEN_HEADERS)if(request.getHeader(h)!=null)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_UNTRUSTED_ACTOR_HEADER");
+    try{var c=it.comune.trieste.ouf.authorization.ServletAuthorization.resolve(request);
+      String correlation=request.getAttribute("ouf.correlationId") instanceof String value&&!value.isBlank()?value:UUID.randomUUID().toString();
+      return new TrustedHumanContext(c.principal().actorType().name(),c.principal().subjectId(),c.principal().tenantId(),c.capabilities(),c.decisionRef(),correlation);
+    }catch(SecurityException e){throw new ResponseStatusException(HttpStatus.FORBIDDEN,e.getMessage());}
+  }
   public record MergePlanRequest(UUID survivorObjectId,UUID mergedObjectId){}
   public record SplitPlanRequest(UUID originalObjectId,List<UUID> successorObjectIds,Map<String,String> bindingAllocations){}
   public record ExecuteRequest(long expectedVersion,String reason){}
