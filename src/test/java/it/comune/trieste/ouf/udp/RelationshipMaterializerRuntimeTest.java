@@ -46,6 +46,7 @@ class RelationshipMaterializerRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where status='ACTIVE'").query(Long.class).single()).isOne();
     assertThat(db.sql("select state from ouf_udp.relationship_issue").query(String.class).single()).isEqualTo("RESOLVED");
     assertThat(db.sql("select profile_json->>'policyRef' from ouf_udp.relationship_reconciliation").query(String.class).single()).isEqualTo("policy://camera-cabinet/1");
+    assertThatThrownBy(()->db.sql("update ouf_udp.relationship_reconciliation set profile_json='{}'::jsonb").update()).hasMessageContaining("immutable");
     due();reconciliation.tick();assertThat(db.sql("select count(*) from ouf_udp.relationship_revision").query(Long.class).single()).isOne();
     create("duplicate-cabinet","cabinets","cab-2","CABINET","ouf:Cabinet","CAB-2","CAB-LATE",null);
     due();reconciliation.tick();
