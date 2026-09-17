@@ -13,10 +13,11 @@ import org.springframework.stereotype.Component;
 public class HistoricalContractCatalog {
   private static final Set<String> KINDS=Set.of("SOURCE_SCHEMA","BUNDLE","SEMANTIC_PUBLICATION_SET","ADAPTER_PROFILE","MAPPING","AUTHORITY_POLICY","RELATIONSHIP_RESOLUTION_STRATEGY");
   private final ObjectMapper json;private final String path;
+  @org.springframework.beans.factory.annotation.Autowired private org.springframework.beans.factory.ObjectProvider<PublishedRuntimeConfiguration> publications;
   public HistoricalContractCatalog(ObjectMapper json,@Value("${ouf.udp.historical-contracts.catalog-path:}") String path){this.json=json;this.path=path;}
 
   public Resolution resolve(Map<String,Object> contractRefs){
-    List<RequiredRef> required=required(contractRefs);Map<String,Entry> catalog=load();List<ResolvedRef> resolved=new ArrayList<>();List<String> missing=new ArrayList<>();
+    List<RequiredRef> required=required(contractRefs);if(publications!=null&&publications.getIfAvailable()!=null){try{return publications.getObject().resolveContracts(contractRefs);}catch(IllegalStateException unavailable){if(!Set.of("UDP_PUBLICATION_UNAVAILABLE","UDP_PUBLICATION_INTERRUPTED").contains(unavailable.getMessage()))throw unavailable;return new Resolution(List.of(),List.of(hash(String.valueOf(contractRefs.get("bundleRef")))),null);}}Map<String,Entry> catalog=load();List<ResolvedRef> resolved=new ArrayList<>();List<String> missing=new ArrayList<>();
     for(RequiredRef ref:required){Entry entry=catalog.get(key(ref.kind(),ref.ref()));if(entry==null||!"AVAILABLE".equals(entry.status())||!valid(entry,ref)){missing.add(hash(ref.kind()+"\n"+ref.ref()));continue;}resolved.add(new ResolvedRef(ref.kind(),ref.ref(),entry.version(),entry.contentHash()));}
     resolved.sort(Comparator.comparing(ResolvedRef::kind).thenComparing(ResolvedRef::ref));missing.sort(String::compareTo);
     String baselineHash=missing.isEmpty()?hash(write(resolved)):null;return new Resolution(List.copyOf(resolved),List.copyOf(missing),baselineHash);
