@@ -13,7 +13,8 @@ import org.springframework.boot.*;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.*;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.*;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
 
 /** Test-only identity/bootstrap; business writes use production APIs and scheduled workers. */
 public class ServingConsumerFixture {
