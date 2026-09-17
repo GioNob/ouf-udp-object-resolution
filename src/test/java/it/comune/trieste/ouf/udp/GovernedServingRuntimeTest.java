@@ -10,9 +10,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
 
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @SpringBootTest
 class GovernedServingRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
+  @Autowired org.springframework.test.web.servlet.MockMvc http;
   @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer canonical;@Autowired RelationshipMaterializer relationship;@Autowired GovernedServingService serving;@Autowired JdbcClient db;
   private final UdpPorts.ResolutionProfile resolutionProfile=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","identity","identity");
   private final UdpPorts.MaterializationProfile materialization=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry")),new UdpPorts.PropertyRule("secret","ouf:secret","string","RESTRICTED",List.of("registry"))));
@@ -31,6 +33,47 @@ class GovernedServingRuntimeTest {
   @Test void restrictedRelationshipIsOmittedWithoutDegreeOrCursorLeak(){Fixture target=materialize("target-h","target","Target","s",null);Fixture source=materialize("source-h","source","Source","s","Target");var profile=new UdpPorts.RelationshipProfile("policy://relation/1",List.of(new UdpPorts.RelationshipRule("ref","ouf:linkedTo","ouf:Asset","ouf:name","CANONICAL_KEY","QUARANTINE_RELATION","RESTRICTED",false)));relationship.materialize("source-h",source.objectId,source.payload,profile);var page=serving.relationships(source.objectId,10,null,open);assertThat(page.items()).isEmpty();assertThat(page.nextCursor()).isNull();assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where target_object_id=:t").param("t",target.objectId).query(Long.class).single()).isOne();}
 
   @Test void searchRequiresIndexedExactTypeAndBoundedPage(){assertThatThrownBy(()->serving.search("*",10,null,open)).isInstanceOf(IllegalArgumentException.class);assertThatThrownBy(()->serving.search("ouf:Asset",101,null,open)).hasMessageContaining("UDP_PAGE_SIZE_OUT_OF_RANGE");}
+
+  @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{
+    Fixture f=materialize("http-label","http-object","Visible","classified",null);db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
+    http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/udp/v1/objects/"+f.objectId).with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));request.setAttribute("ouf.allowedDataLabels",Set.of("OPEN","RESTRICTED"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.containsString("Visible")))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("classified"))));
+    for(String target:List.of(f.objectId.toString(),"another-object"))http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/udp/v1/objects/"+f.objectId).with(request->{
+      it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));
+      var engine=(it.comune.trieste.ouf.authorization.LocalAuthorization)request.getServletContext().getAttribute(it.comune.trieste.ouf.authorization.ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();var g=old.grants().getFirst();
+      var constraint=new it.comune.trieste.ouf.authorization.AuthorizationPolicy.GrantConstraints("ALLOW",null,"object",target,Map.of(),Set.of("OPEN"),Set.of(),null,Set.of(),null);
+      var grant=new it.comune.trieste.ouf.authorization.AuthorizationPolicy.Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),g.servicePrincipalId(),g.organizationId(),g.validFrom(),g.validUntil(),constraint);
+      try{it.comune.trieste.ouf.authorization.TestAuthorization.install(engine,new it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),List.of(grant)));}catch(Exception failure){throw new IllegalStateException(failure);}return request;
+    })).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().is(target.equals(f.objectId.toString())?200:403));
+  }
+
+  @Test void storedSourceScopeAndExplicitDenyControlPropertyProjection()throws Exception{
+    Fixture f=materialize("http-scope","scope-object","ScopedValue","classified",null);db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
+    for(String source:List.of("another-source","registry")){
+      var result=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/udp/v1/objects/"+f.objectId).with(request->{
+        it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));
+        var engine=(it.comune.trieste.ouf.authorization.LocalAuthorization)request.getServletContext().getAttribute(it.comune.trieste.ouf.authorization.ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();var g=old.grants().getFirst();var grants=new ArrayList<>(old.grants());
+        var c=new it.comune.trieste.ouf.authorization.AuthorizationPolicy.GrantConstraints("DENY",null,"object",f.objectId.toString(),Map.of("propertyIri","ouf:name","sourceRef",source,"jobRef","run-1"),Set.of("OPEN"),Set.of(),null,Set.of(),null);
+        grants.add(new it.comune.trieste.ouf.authorization.AuthorizationPolicy.Grant("source-deny",g.capabilityId(),g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),c));
+        try{it.comune.trieste.ouf.authorization.TestAuthorization.install(engine,new it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}catch(Exception e){throw new IllegalStateException(e);}return request;
+      })).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
+      assertThat(result.getResponse().getContentAsString().contains("ScopedValue")).isEqualTo(!source.equals("registry"));
+    }
+  }
+  @Test void relationshipTargetDenialSuppressesEdgeAndCursor()throws Exception{
+    Fixture target=materialize("http-target","target","Target","s",null),source=materialize("http-source","source","Source","s","Target");
+    relationship.materialize("http-source",source.objectId,source.payload,new UdpPorts.RelationshipProfile("policy://relation/1",List.of(new UdpPorts.RelationshipRule("ref","ouf:linkedTo","ouf:Asset","ouf:name","CANONICAL_KEY","QUARANTINE_RELATION","OPEN",false))));
+    db.sql("update ouf_udp.urban_object set tenant_id='tenant-a'").update();
+    http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/udp/v1/objects/"+source.objectId+"/relationships").with(request->{
+      it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read","urban.relationship.read"));
+      var engine=(it.comune.trieste.ouf.authorization.LocalAuthorization)request.getServletContext().getAttribute(it.comune.trieste.ouf.authorization.ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();var g=old.grants().stream().filter(x->x.capabilityId().equals("urban.object.read")).findFirst().orElseThrow();var grants=new ArrayList<>(old.grants());
+      var c=new it.comune.trieste.ouf.authorization.AuthorizationPolicy.GrantConstraints("DENY",null,"object",target.objectId.toString(),Map.of(),Set.of("OPEN"),Set.of(),null,Set.of(),null);
+      grants.add(new it.comune.trieste.ouf.authorization.AuthorizationPolicy.Grant("target-deny",g.capabilityId(),g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),c));
+      try{it.comune.trieste.ouf.authorization.TestAuthorization.install(engine,new it.comune.trieste.ouf.authorization.AuthorizationPolicy.PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}catch(Exception e){throw new IllegalStateException(e);}return request;
+    })).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.items.length()").value(0)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.partial").value(true)).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(target.objectId.toString()))));
+  }
 
   private Fixture materialize(String handoff,String object,String name,String secret,String ref){Map<String,Object> payload=handoff(handoff,object,name,secret,ref);intake.accept(payload);var decision=resolution.resolve(handoff,payload,resolutionProfile);canonical.materialize(handoff,decision.targetUrbanObjectId(),payload,materialization);return new Fixture(decision.targetUrbanObjectId(),payload);}
   private static Map<String,Object> handoff(String id,String object,String name,String secret,String ref){Map<String,Object> content=new LinkedHashMap<>();content.put("identity",object);content.put("name",name);content.put("secret",secret);if(ref!=null)content.put("ref",ref);return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId","registry","typeCode","ASSET","sourceObjectId",object,"observedAt","2026-09-13T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",content),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://1","bundleRef","bundle://1","semanticPublicationSetRef","semantic://1","adapterProfileRef","adapter://1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-13T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
