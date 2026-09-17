@@ -14,7 +14,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest
 class RelationshipMaterializerRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
-  @Autowired ObjectMapper json;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer canonical;@Autowired RelationshipMaterializer relationships;@Autowired JdbcClient db;
+  @Autowired ObjectMapper json;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer canonical;@Autowired RelationshipMaterializer relationships;@Autowired JdbcClient db;@Autowired RelationshipReconciliation reconciliation;
   private final UdpPorts.MaterializationProfile properties=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("code","ouf:code","string","OPEN",List.of())));
   private final UdpPorts.RelationshipProfile relationProfile=new UdpPorts.RelationshipProfile("policy://relationships/1",List.of(new UdpPorts.RelationshipRule("streetRef","ouf:locatedOn","ouf:Road","ouf:code","CANONICAL_KEY","QUARANTINE_RELATION","RESTRICTED",false)));
 
@@ -35,6 +35,34 @@ class RelationshipMaterializerRuntimeTest {
   }
 
   @Test void retryIsIdempotentAndRelationshipEvidenceIsAppendOnly(){create("road-i","roads","road-i","ROAD","ouf:Road","R9","R9",null);Fixture worksite=create("idem-h","worksites","work-i","WORKSITE","ouf:Worksite","W9","W9","R9");relationships.materialize("idem-h",worksite.objectId,worksite.payload,relationProfile);relationships.materialize("idem-h",worksite.objectId,worksite.payload,relationProfile);assertThat(db.sql("select count(*) from ouf_udp.relationship_contribution").query(Long.class).single()).isOne();assertThat(db.sql("select count(*) from ouf_udp.relationship_revision").query(Long.class).single()).isOne();assertThatThrownBy(()->db.sql("delete from ouf_udp.relationship_revision").update()).hasStackTraceContaining("append-only");}
+
+  @Test void lateTargetUsesPinnedProfileAndAmbiguityRetractsEdge(){
+    Fixture camera=create("late-camera","cameras","cam-1","CAMERA","ouf:Camera","CAM-1","CAM-1","CAB-LATE");
+    var pinned=new UdpPorts.RelationshipProfile("policy://camera-cabinet/1",List.of(new UdpPorts.RelationshipRule("streetRef","ouf:connectedTo","ouf:Cabinet","ouf:code","CANONICAL_KEY","QUARANTINE_RELATION","RESTRICTED",false)));
+    reconciliation.accept("late-camera",camera.objectId,camera.payload,pinned);
+    assertThat(db.sql("select count(*) from ouf_udp.relationship_issue where state='OPEN'").query(Long.class).single()).isOne();
+    create("late-cabinet","cabinets","cab-1","CABINET","ouf:Cabinet","CAB-1","CAB-LATE",null);
+    due();reconciliation.tick();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where status='ACTIVE'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select state from ouf_udp.relationship_issue").query(String.class).single()).isEqualTo("RESOLVED");
+    assertThat(db.sql("select profile_json->>'policyRef' from ouf_udp.relationship_reconciliation").query(String.class).single()).isEqualTo("policy://camera-cabinet/1");
+    due();reconciliation.tick();assertThat(db.sql("select count(*) from ouf_udp.relationship_revision").query(Long.class).single()).isOne();
+    create("duplicate-cabinet","cabinets","cab-2","CABINET","ouf:Cabinet","CAB-2","CAB-LATE",null);
+    due();reconciliation.tick();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where status='ACTIVE'").query(Long.class).single()).isZero();
+    assertThat(db.sql("select reason_code from ouf_udp.relationship_issue where state='OPEN'").query(String.class).single()).isEqualTo("MULTIPLE_MATCHES");
+  }
+  @Test void changedReferenceSupersedesPreviousEdgeAndPendingRule(){
+    create("target-a","roads","a","ROAD","ouf:Road","A","A",null);create("target-b","roads","b","ROAD","ouf:Road","B","B",null);
+    Fixture one=create("ref-one","cameras","same","CAMERA","ouf:Camera","ONE","ONE","A");reconciliation.accept("ref-one",one.objectId,one.payload,relationProfile);
+    Fixture two=create("ref-two","cameras","same","CAMERA","ouf:Camera","ONE","ONE","B");reconciliation.accept("ref-two",two.objectId,two.payload,relationProfile);
+    due();reconciliation.tick();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where status='ACTIVE'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where status='SUPERSEDED'").query(Long.class).single()).isOne();
+    reconciliation.accept("ref-one",one.objectId,one.payload,relationProfile);
+    assertThat(db.sql("select handoff_id from ouf_udp.relationship_reconciliation where active").query(String.class).single()).isEqualTo("ref-two");
+  }
+  private void due(){db.sql("update ouf_udp.relationship_reconciliation set next_attempt_at=transaction_timestamp()-interval '1 second'").update();}
 
   private Fixture create(String handoff,String source,String sourceObject,String typeCode,String canonicalType,String identity,String code,String streetRef){Map<String,Object> payload=handoff(handoff,source,sourceObject,typeCode,identity,code,streetRef);intake.accept(payload);var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1",canonicalType,"identity","identity");UUID object=resolution.resolve(handoff,payload,rp).targetUrbanObjectId();canonical.materialize(handoff,object,payload,properties);return new Fixture(object,payload);}
   private static Map<String,Object> handoff(String id,String source,String object,String type,String identity,String code,String streetRef){Map<String,Object> canonical=new LinkedHashMap<>();canonical.put("identity",identity);canonical.put("code",code);if(streetRef!=null)canonical.put("streetRef",streetRef);return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"typeCode",type,"sourceObjectId",object,"observedAt","2026-09-12T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",canonical),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://1","bundleRef","bundle://1","semanticPublicationSetRef","semantic://1","adapterProfileRef","adapter://1","relationshipResolutionStrategyRefs",List.of("relationship://located-on/1"))),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
