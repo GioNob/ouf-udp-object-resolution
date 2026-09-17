@@ -8,7 +8,9 @@ public final class UdpPorts {
   public interface MaterializationConfigurationPort {MaterializationProfile resolve(String bundleRef,String typeCode);}
   public interface RelationshipConfigurationPort {RelationshipProfile resolve(String bundleRef,String typeCode);}
   public interface SpatialConfigurationPort {SpatialProfile resolve(String bundleRef,String typeCode);}
-  public record ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty){}
+  public record ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty,WeightedIdentity.Policy weighted){
+    public ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty){this(strategyId,strategyVersion,policyRef,canonicalType,canonicalKeyProperty,matchProperty,null);}
+  }
   public record PropertyRule(String sourceField,String propertyIri,String datatype,String accessLabel,List<String> authorityOrder) {public PropertyRule{authorityOrder=List.copyOf(authorityOrder);}}
   public record MaterializationProfile(String policyRef,List<PropertyRule> properties,Set<String> bitemporalProperties,int checkpointInterval) {
     public MaterializationProfile(String policyRef,List<PropertyRule> properties){this(policyRef,properties,Set.of(),1);}

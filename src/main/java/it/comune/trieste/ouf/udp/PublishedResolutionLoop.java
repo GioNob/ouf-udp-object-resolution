@@ -30,7 +30,7 @@ public class PublishedResolutionLoop {
         db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))").param("key","resolution:"+profiles.resolution().canonicalType()).query().singleRow();
         GovernedCrsTransform.Result geometry=null;
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
-        var decision=resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution());
+        var decision=resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution(),geometry);
         if(Set.of("MATCH","NEW_OBJECT").contains(decision.outcome())){
           if(profiles.spatial()!=null)spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.materialization());
