@@ -32,6 +32,10 @@ spec:
           envFrom:
             - secretRef: {name: {{ required "runtime.existingSecret is required" .Values.runtime.existingSecret }}}
             - configMapRef: {name: {{ required "runtime.existingConfigMap is required" .Values.runtime.existingConfigMap }}}
+          {{- if .Values.runtime.gridManifestConfigMap }}
+          env:
+            - {name: OUF_UDP_GRID_MANIFEST, value: /opt/ouf/proj/manifest.json}
+          {{- end }}
           lifecycle:
             preStop:
               exec: {command: ["sh", "-c", "sleep {{ .Values.shutdown.preStopSeconds }}"]}
@@ -51,6 +55,17 @@ spec:
 {{ toYaml .Values.resources | indent 12 }}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+            {{- if .Values.runtime.gridManifestConfigMap }}
+            - {name: proj-manifest, mountPath: /opt/ouf/proj, readOnly: true}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.runtime.gridManifestConfigMap }}
+        - name: proj-manifest
+          configMap:
+            name: {{ .Values.runtime.gridManifestConfigMap | quote }}
+            defaultMode: 0444
+            items:
+              - {key: manifest.json, path: manifest.json}
+        {{- end }}

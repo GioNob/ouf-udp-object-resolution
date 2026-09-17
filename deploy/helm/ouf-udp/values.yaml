@@ -8,6 +8,8 @@ service:
 runtime:
   existingSecret: CHANGE-ME
   existingConfigMap: CHANGE-ME
+  # Immutable ConfigMap containing the exact manifest.json mounted by the PostGIS resource package.
+  gridManifestConfigMap: ""
 shutdown:
   terminationGracePeriodSeconds: 60
   preStopSeconds: 5
