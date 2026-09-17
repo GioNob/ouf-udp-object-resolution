@@ -32,7 +32,11 @@ public class PublishedResolutionLoop {
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
         var decision=resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution(),geometry);
         if(Set.of("MATCH","NEW_OBJECT").contains(decision.outcome())){
-          if(profiles.spatial()!=null)spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
+          if(profiles.spatial()!=null){
+            String action=spatial.currentAction(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),profiles.materialization(),geometry);
+            if("REVIEW_REQUIRED".equals(action)){jobs.quarantine(claim,"SPATIAL_AUTHORITY_CONFLICT");return;}
+            if("ADVANCE".equals(action))spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
+          }
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.materialization());
           if(relationships!=null)relationships.accept(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.relationships());
         }

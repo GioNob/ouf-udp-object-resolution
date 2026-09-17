@@ -64,6 +64,23 @@ class SpatialMaterializerRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_udp.object_revision").query(Long.class).single()).isOne();
   }
 
+  @Test void divergentSourcesRequireReviewBeforeChangingCurrentGeometry(){
+    Fixture first=create("authority-a","same-object","ASSET","ouf:Asset",polygon(0,0,1,1),"EPSG:4326");
+    var profile=new UdpPorts.SpatialProfile("policy://geometry/1",geometry,List.of());
+    spatial.materialize("authority-a",first.objectId,first.payload,profile);
+    UUID before=db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current where urban_object_id=:u").param("u",first.objectId).query(UUID.class).single();
+    var next=handoff("authority-b","same-object","ASSET",polygon(0,0,2,2),"EPSG:4326");
+    @SuppressWarnings("unchecked") var source=(Map<String,Object>)next.get("sourceIdentity");source.put("sourceId","survey");intake.accept(next);
+    var authority=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("geometry","geometry","geometry","RESTRICTED",List.of())));
+    var transformed=spatial.prepare("authority-b",next,profile);
+    assertThat(spatial.currentAction("authority-b",first.objectId,next,profile,authority,transformed)).isEqualTo("REVIEW_REQUIRED");
+    assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current where urban_object_id=:u").param("u",first.objectId).query(UUID.class).single()).isEqualTo(before);
+    assertThat(db.sql("select count(*) from ouf_udp.urban_geometry").query(Long.class).single()).isEqualTo(2);
+    assertThat(db.sql("select reason_code from ouf_udp.spatial_resolution_issue").query(String.class).single()).isEqualTo("SPATIAL_AUTHORITY_CONFLICT");
+    var explicit=new UdpPorts.MaterializationProfile("policy://authority/survey",List.of(new UdpPorts.PropertyRule("geometry","geometry","geometry","RESTRICTED",List.of("survey","spatial-source"))));
+    assertThat(spatial.currentAction("authority-b",first.objectId,next,profile,explicit,transformed)).isEqualTo("ADVANCE");
+  }
+
   private void storeTarget(String handoff,String object,Object geometryValue){Fixture f=create(handoff,object,"AREA","ouf:Area",geometryValue,"EPSG:4326");spatial.materialize(handoff,f.objectId,f.payload,new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of()));}
   private UdpPorts.SpatialProfile profile(String predicate){return new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of(new UdpPorts.SpatialRelationshipRule("ouf:insideArea","ouf:Area",predicate,"QUARANTINE_RELATION",null,null,null,"RESTRICTED",false)));}
   private Fixture create(String handoff,String object,String type,String canonicalType,Object geometryValue,String crs){Map<String,Object> payload=handoff(handoff,object,type,geometryValue,crs);intake.accept(payload);var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1",canonicalType,"identity","identity");UUID id=resolution.resolve(handoff,payload,rp).targetUrbanObjectId();canonical.materialize(handoff,id,payload,properties);return new Fixture(id,payload);}
