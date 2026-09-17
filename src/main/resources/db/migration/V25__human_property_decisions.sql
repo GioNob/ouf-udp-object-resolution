@@ -19,3 +19,10 @@ create table ouf_udp.human_property_decision(
 );
 create index human_property_choice_idx on ouf_udp.human_property_decision(urban_object_id,property_iri,policy_ref,evidence_hash);
 create trigger human_property_decision_append_only before update or delete on ouf_udp.human_property_decision for each row execute function ouf_udp.reject_append_only_mutation();
+create table ouf_udp.property_policy_state(
+  urban_object_id uuid not null references ouf_udp.urban_object,
+  property_iri text not null,
+  policy_ref text not null,
+  rule_hash text not null,
+  primary key(urban_object_id,property_iri)
+);

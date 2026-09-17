@@ -14,6 +14,7 @@ class HumanReviewBrowserGuardTest {
     r.addHeader("X-OUF-CSRF",token);r.addHeader("Origin","https://ouf.example");r.addHeader("Sec-Fetch-Site","same-origin");guard.require(r);
     var other=request("bob","HUMAN");other.setSession(r.getSession(false));other.addHeader("X-OUF-CSRF",token);assertThatThrownBy(()->guard.require(other)).hasMessageContaining("403");
     var cross=request("alice","HUMAN");cross.setSession(r.getSession(false));cross.addHeader("X-OUF-CSRF",token);cross.addHeader("Origin","https://evil.example");assertThatThrownBy(()->guard.require(cross)).hasMessageContaining("403");
-    assertThatThrownBy(()->guard.token(request("worker","SERVICE"))).isInstanceOf(SecurityException.class);
+    assertThat(guard.token(request("worker","SERVICE"))).isNull();
+    assertThatThrownBy(()->guard.require(request("worker","SERVICE"))).isInstanceOf(SecurityException.class);
   }
 }

@@ -20,6 +20,7 @@ final class PropertyEvidence {
     // PostgreSQL jsonb provides a stable serialized identity independent of input key order.
     return hash(new TreeMap<>(Map.of("source",row.get("source_id"),"identity",row.get("source_identity"),"value",row.get("value_hash"),"label",row.get("access_label"))));
   }
-  static String set(List<Map<String,Object>> rows){return hash(rows.stream().map(PropertyEvidence::item).sorted().toList());}
+  static String set(List<Map<String,Object>> rows,UdpPorts.PropertyRule rule){return hash(Map.of("rule",rule,"contributions",rows.stream().map(PropertyEvidence::item).sorted().toList()));}
+  static String policy(UdpPorts.PropertyRule rule){return hash(rule);}
   private static String hash(Object value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(new ObjectMapper().writeValueAsString(value).getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}}
 }

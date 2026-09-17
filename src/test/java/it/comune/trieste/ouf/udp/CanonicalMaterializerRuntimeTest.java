@@ -116,6 +116,22 @@ class CanonicalMaterializerRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_udp.human_property_decision").query(Long.class).single()).isZero();
   }
 
+  @Test void supersededAuthorityPolicyCannotBeOverriddenThroughAnOldConflict(){
+    var profile=new UdpPorts.MaterializationProfile("policy://tie/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    Fixture a=resolved("policy-a","source-a","a","R1","First",1);materializer.materialize("policy-a",a.objectId,a.payload,profile);
+    Fixture b=resolved("policy-b","source-b","b","R1","Second",1);materializer.materialize("policy-b",b.objectId,b.payload,profile);
+    UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='policy-b'").query(UUID.class).single();
+    var next=new UdpPorts.MaterializationProfile("policy://tie/2",profile.properties());
+    Fixture repeat=resolved("policy-new","source-b","b","R1","Second",1);materializer.materialize("policy-new",repeat.objectId,repeat.payload,next);
+    UUID current=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
+    var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
+    var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+    var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThatThrownBy(()->governance.decide(issue,current,chosen,"Verified",actor,auth)).hasMessageContaining("409");
+    assertThat(db.sql("select count(*) from ouf_udp.human_property_decision").query(Long.class).single()).isZero();
+  }
+
   private Fixture resolved(String handoff,String source,String object,String code,String name,int surface){Map<String,Object> payload=handoff(handoff,source,object,code,name,surface);intake.accept(payload);var decision=resolution.resolve(handoff,payload,resolutionProfile);return new Fixture(decision.targetUrbanObjectId(),payload);}
   private static Map<String,Object> handoff(String id,String source,String object,String code,String name,int surface){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"typeCode","ROAD","sourceObjectId",object,"observedAt","2026-09-12T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",code,"name",name,"surface",surface)),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}

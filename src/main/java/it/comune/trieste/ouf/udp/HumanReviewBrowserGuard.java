@@ -15,7 +15,7 @@ public class HumanReviewBrowserGuard {
   private final String origin;
   public HumanReviewBrowserGuard(@Value("${ouf.ths.origin:}") String origin){this.origin=origin;}
   public String token(HttpServletRequest request){
-    var human=TrustedHumanApi.trusted(request);human.require("resolution.issue.read");checkOrigin(request);
+    var human=TrustedHumanApi.trusted(request);if(!"HUMAN".equals(human.actorType()))return null;human.require("resolution.issue.read");checkOrigin(request);
     var session=request.getSession(true);String binding=human.tenantId()+"\n"+human.subject();
     if(!binding.equals(session.getAttribute("ouf.review.subject"))){session.setAttribute("ouf.review.subject",binding);session.setAttribute("ouf.review.csrf",UUID.randomUUID()+"-"+UUID.randomUUID());}
     return (String)session.getAttribute("ouf.review.csrf");

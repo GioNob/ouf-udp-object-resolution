@@ -15,13 +15,19 @@ public class GeometryGovernanceService {
   private final JdbcClient db;private final ObjectMapper json;
   public GeometryGovernanceService(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
 
+  @Transactional(readOnly=true) public List<Map<String,Object>> open(ServingAuthorizationContext auth){
+    auth.require("resolution.issue.read");var ids=db.sql("select i.issue_id from ouf_udp.spatial_resolution_issue i join ouf_udp.urban_object o on o.urban_object_id=i.source_object_id where i.state='OPEN' and i.reason_code='SPATIAL_AUTHORITY_CONFLICT' and o.tenant_id=:tenant and o.status='ACTIVE' order by i.created_at,i.issue_id limit 100").param("tenant",auth.tenantId()).query(UUID.class).list();
+    var result=new ArrayList<Map<String,Object>>();for(var id:ids)try{var card=review(id,auth);result.add(Map.of("id",id,"objectId",card.get("objectId"),"propertyIri",card.get("propertyIri"),"reviewUrl","/trusted-human/r2f?kind=geometry&id="+id));}catch(ResponseStatusException denied){if(!Set.of(403,404,409).contains(denied.getStatusCode().value()))throw denied;}
+    return result;
+  }
+
   @Transactional(readOnly=true) public Map<String,Object> review(UUID issueId,ServingAuthorizationContext auth){
     auth.require("resolution.issue.read");var issue=issue(issueId,false);UUID object=(UUID)issue.get("source_object_id");
     authorizeObject(object,auth);var evidence=read(String.valueOf(issue.get("evidence")));
     UUID previous=UUID.fromString(String.valueOf(evidence.get("currentGeometryRevision")));
     UUID candidate=UUID.fromString(String.valueOf(evidence.get("candidateGeometryRevision")));
     var before=geometry(previous,object,auth,"resolution.issue.read");var after=geometry(candidate,object,auth,"resolution.issue.read");
-    return Map.of("issueId",issueId,"objectId",object,"state",issue.get("state"),"policyRef",evidence.get("policyRef"),"propertyIri",evidence.get("geometryProperty"),"current",before,"candidate",after,"actions",List.of("KEEP_CURRENT","ACCEPT_CANDIDATE"));
+    return Map.of("issueId",issueId,"objectId",object,"state",issue.get("state"),"policyRef",evidence.get("policyRef"),"propertyIri",evidence.get("geometryProperty"),"current",before,"candidate",after,"metrics",metrics(previous,candidate),"actions",List.of("KEEP_CURRENT","ACCEPT_CANDIDATE"));
   }
 
   @Transactional public UUID decide(UUID issueId,UUID expectedCurrent,UUID chosen,String reason,
@@ -50,6 +56,9 @@ public class GeometryGovernanceService {
     db.sql("insert into ouf_udp.governance_audit(audit_id,action,outcome,actor_type,actor_subject,tenant_id,capability,authorization_decision_ref,reason,correlation_id,evidence_hash) values(gen_random_uuid(),'UDP_AUTHORITY_OVERRIDE','APPROVED','HUMAN',:a,:tenant,'authority.override',:auth,:reason,:correlation,:evidence)")
       .param("a",actor.subject()).param("tenant",actor.tenantId()).param("auth",auth.decisionRef("authority.override")).param("reason",reason).param("correlation",actor.correlationId()).param("evidence",evidenceHash(decision,previous,candidate,chosen)).update();
     return decision;
+  }
+  private Map<String,Object> metrics(UUID before,UUID after){
+    return db.sql("select ST_Equals(a.geometry,b.geometry) as topologically_equal,ST_Distance(a.geometry::geography,b.geometry::geography) as minimum_distance_meters,ST_Area(a.geometry::geography) as current_area_m2,ST_Area(b.geometry::geography) as candidate_area_m2 from ouf_udp.urban_geometry a cross join ouf_udp.urban_geometry b where a.geometry_revision_id=:a and b.geometry_revision_id=:b").param("a",before).param("b",after).query().singleRow();
   }
   private Map<String,Object> issue(UUID id,boolean lock){return db.sql("select issue_id,handoff_id,source_object_id,state,evidence_json::text evidence from ouf_udp.spatial_resolution_issue where issue_id=:i and reason_code='SPATIAL_AUTHORITY_CONFLICT'"+(lock?" for update":"")).param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_GEOMETRY_ISSUE_NOT_FOUND"));}
   private void authorizeObject(UUID id,ServingAuthorizationContext auth){

@@ -17,6 +17,12 @@ public class PropertyGovernanceService {
   private final CanonicalMaterializer materializer;
   public PropertyGovernanceService(JdbcClient db,ObjectMapper json,CanonicalMaterializer materializer){this.db=db;this.json=json;this.materializer=materializer;}
 
+  @Transactional(readOnly=true) public List<Map<String,Object>> open(ServingAuthorizationContext auth){
+    auth.require("resolution.issue.read");var ids=db.sql("select i.conflict_id from ouf_udp.property_conflict i join ouf_udp.urban_object o on o.urban_object_id=i.urban_object_id where i.state='OPEN' and i.evidence_hash is not null and o.tenant_id=:tenant and o.status='ACTIVE' order by i.created_at,i.conflict_id limit 100").param("tenant",auth.tenantId()).query(UUID.class).list();
+    var result=new ArrayList<Map<String,Object>>();for(var id:ids)try{var card=review(id,auth);result.add(Map.of("id",id,"objectId",card.get("objectId"),"propertyIri",card.get("propertyIri"),"reviewUrl","/trusted-human/r2f?kind=property&id="+id));}catch(ResponseStatusException denied){if(!Set.of(403,404,409).contains(denied.getStatusCode().value()))throw denied;}
+    return result;
+  }
+
   @Transactional(readOnly=true)
   public Map<String,Object> review(UUID id,ServingAuthorizationContext auth){
     auth.require("resolution.issue.read");var issue=issue(id,false);UUID object=(UUID)issue.get("urban_object_id");
@@ -42,10 +48,10 @@ public class PropertyGovernanceService {
     UdpPorts.MaterializationProfile profile=read(String.valueOf(issue.get("profile")),UdpPorts.MaterializationProfile.class);
     var rule=profile.properties().stream().filter(p->p.propertyIri().equals(issue.get("property_iri"))).findFirst().orElseThrow(PropertyGovernanceService::conflict);
     var top=PropertyEvidence.top(db,object,rule);
-    if(!PropertyEvidence.set(top).equals(issue.get("evidence_hash")))throw conflict();
-    var selected=top.stream().filter(r->Objects.equals(chosen,r.get("contribution_id"))).findFirst().orElseThrow(PropertyGovernanceService::conflict);
-    var currentPolicy=db.sql("select authority_state->:property->>'decisionRef' from ouf_udp.urban_object_current_state where urban_object_id=:u").param("property",rule.propertyIri()).param("u",object).query(String.class).optional();
-    if(currentPolicy.isPresent()&&!currentPolicy.get().equals(profile.policyRef())&&!currentPolicy.get().startsWith("property-decision://"))throw conflict();
+    if(!PropertyEvidence.set(top,rule).equals(issue.get("evidence_hash")))throw conflict();
+    var selected=db.sql("select contribution_id,source_id,value_hash,access_label,((provenance_json->'sourceIdentity')-'observedAt')::text source_identity from ouf_udp.property_contribution where contribution_id=:c and urban_object_id=:u and property_iri=:p and contribution_id in(select value::uuid from jsonb_array_elements_text(cast(:refs as jsonb)))").param("c",chosen).param("u",object).param("p",rule.propertyIri()).param("refs",issue.get("refs")).query().listOfRows().stream().findFirst().orElseThrow(PropertyGovernanceService::conflict);
+    if(top.stream().noneMatch(r->PropertyEvidence.item(r).equals(PropertyEvidence.item(selected))))throw conflict();
+    if(db.sql("select 1 from ouf_udp.property_policy_state where urban_object_id=:u and property_iri=:p and policy_ref=:policy and rule_hash=:hash").param("u",object).param("p",rule.propertyIri()).param("policy",profile.policyRef()).param("hash",PropertyEvidence.policy(rule)).query(Integer.class).optional().isEmpty())throw conflict();
     UUID decision=UUID.randomUUID();
     db.sql("insert into ouf_udp.human_property_decision(decision_id,conflict_id,urban_object_id,property_iri,policy_ref,evidence_hash,chosen_contribution,chosen_evidence_hash,expected_revision,actor_subject,authorization_decision_ref,reason,correlation_id) values(:d,:i,:u,:p,:policy,:hash,:chosen,:choice,:revision,:actor,:auth,:reason,:correlation)")
       .param("d",decision).param("i",id).param("u",object).param("p",rule.propertyIri()).param("policy",profile.policyRef()).param("hash",issue.get("evidence_hash")).param("chosen",chosen).param("choice",PropertyEvidence.item(selected)).param("revision",expectedRevision).param("actor",actor.subject()).param("auth",auth.decisionRef("authority.override")).param("reason",reason).param("correlation",actor.correlationId()).update();

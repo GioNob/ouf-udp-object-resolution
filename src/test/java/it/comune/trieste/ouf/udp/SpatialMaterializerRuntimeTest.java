@@ -161,6 +161,21 @@ class SpatialMaterializerRuntimeTest {
     assertThat(spatial.prepare("invalid-time",invalid,profile).status()).isEqualTo("SPATIAL_POLICY_INVALID");
   }
 
+  @Test void futureGeometryIsDurablyScheduledWithoutBecomingCurrent(){
+    var profile=new UdpPorts.SpatialProfile("policy://geometry/1",geometry,List.of());
+    var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","identity","identity");
+    var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    org.mockito.Mockito.when(config.resolve("bundle://1","ASSET")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),rp,properties,profile));
+    var loop=new PublishedResolutionLoop(jobs,config,gate,resolution,canonical,spatial,db,new org.springframework.transaction.support.TransactionTemplate(transactions));
+    var future=handoff("future","asset","ASSET",polygon(0,0,1,1),"EPSG:4326");var validFrom=java.time.OffsetDateTime.now().plusDays(1);HandoffIntakeService.object(future,"sourceIdentity").put("validFrom",validFrom.toString());intake.accept(future);loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job").query(String.class).single()).isEqualTo("PAUSED");
+    assertThat(db.sql("select safe_failure_code from ouf_udp.materialization_job").query(String.class).single()).isEqualTo("UDP_GEOMETRY_NOT_YET_VALID");
+    assertThat(db.sql("select count(*) from ouf_udp.urban_geometry_current").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_geometry").query(Long.class).single()).isOne();
+    assertThat(jobs.claim("early",java.time.Duration.ofMinutes(1))).isEmpty();
+  }
+
   private void storeTarget(String handoff,String object,Object geometryValue){Fixture f=create(handoff,object,"AREA","ouf:Area",geometryValue,"EPSG:4326");spatial.materialize(handoff,f.objectId,f.payload,new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of()));}
   private UdpPorts.SpatialProfile profile(String predicate){return new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of(new UdpPorts.SpatialRelationshipRule("ouf:insideArea","ouf:Area",predicate,"QUARANTINE_RELATION",null,null,null,"RESTRICTED",false)));}
   private Fixture create(String handoff,String object,String type,String canonicalType,Object geometryValue,String crs){Map<String,Object> payload=handoff(handoff,object,type,geometryValue,crs);intake.accept(payload);var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1",canonicalType,"identity","identity");UUID id=resolution.resolve(handoff,payload,rp).targetUrbanObjectId();canonical.materialize(handoff,id,payload,properties);return new Fixture(id,payload);}

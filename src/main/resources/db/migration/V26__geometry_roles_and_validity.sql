@@ -9,3 +9,8 @@ create table ouf_udp.urban_geometry_role_current(
   primary key(urban_object_id,geometry_role)
 );
 insert into ouf_udp.urban_geometry_role_current select urban_object_id,'PRIMARY',geometry_revision_id from ouf_udp.urban_geometry_current;
+-- Default spatial queries and identity evidence use only the currently valid primary geometry.
+create view ouf_udp.urban_geometry_active as
+select c.* from ouf_udp.urban_geometry_current c join ouf_udp.urban_geometry g using(geometry_revision_id)
+where (g.valid_from is null or g.valid_from<=transaction_timestamp())
+  and (g.valid_to is null or g.valid_to>transaction_timestamp());
