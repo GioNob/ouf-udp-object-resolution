@@ -33,6 +33,7 @@ public class PublishedRuntimeConfiguration {
     UdpPorts.ResolutionProfile resolution=json.convertValue(object(profile,"resolution"),UdpPorts.ResolutionProfile.class);
     UdpPorts.MaterializationProfile materialization=json.convertValue(object(profile,"materialization"),UdpPorts.MaterializationProfile.class);
     if(resolution.canonicalType()==null||resolution.policyRef()==null||materialization.properties().isEmpty())throw invalid();
+    if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&resolution.canonicalType().equals(target.get("classIri"))))throw invalid();
     var labels=new HashMap<String,String>();
     if(!(bundle.get("dataAccessPolicies") instanceof List<?> policies)||policies.isEmpty())throw invalid();
     for(Object p:policies){if(!(p instanceof Map<?,?> policy)||!"PROPERTY".equals(policy.get("scope")))throw invalid();labels.put(String.valueOf(policy.get("target")),String.valueOf(policy.get("label")));}
