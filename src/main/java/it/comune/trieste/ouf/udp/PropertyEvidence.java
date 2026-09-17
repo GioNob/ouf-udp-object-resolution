@@ -10,7 +10,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 final class PropertyEvidence {
   private PropertyEvidence() {}
   static List<Map<String,Object>> top(JdbcClient db, UUID object, UdpPorts.PropertyRule rule) {
-    var rows=db.sql("select distinct on (source_id) contribution_id,value_json::text value_json,value_hash,access_label,source_id,authority_rank,provenance_json::text provenance, (provenance_json->'sourceIdentity'-'observedAt')::text source_identity from ouf_udp.property_contribution where urban_object_id=:u and property_iri=:p order by source_id,observed_at desc nulls last,created_at desc,contribution_id")
+    var rows=db.sql("select distinct on (source_id) contribution_id,value_json::text value_json,value_hash,access_label,source_id,authority_rank,provenance_json::text provenance, ((provenance_json->'sourceIdentity')-'observedAt')::text source_identity from ouf_udp.property_contribution where urban_object_id=:u and property_iri=:p order by source_id,observed_at desc nulls last,created_at desc,contribution_id")
         .param("u",object).param("p",rule.propertyIri()).query().listOfRows();
     for(var row:rows){int rank=rule.authorityOrder().indexOf(String.valueOf(row.get("source_id")));row.put("authority_rank",rank<0?10000:rank);}
     int best=rows.stream().mapToInt(r->((Number)r.get("authority_rank")).intValue()).min().orElse(10000);
