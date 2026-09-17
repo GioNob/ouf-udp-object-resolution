@@ -41,6 +41,18 @@ class GovernedServingRuntimeTest {
     assertThatThrownBy(()->serving.relationships(target.objectId,10,null,"BOTH",open)).hasMessage("UDP_RELATION_DIRECTION_INVALID");
   }
 
+  @Test void sourceGeometryPropertyCannotBypassGeometryCapability(){
+    var payload=handoff("geometry-property","geometry-property","Camera","secret",null);
+    map(payload.get("canonicalPayload")).put("geometry",Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of(13.77,45.65))));
+    intake.accept(payload);var decision=resolution.resolve("geometry-property",payload,resolutionProfile);var rules=new ArrayList<>(materialization.properties());rules.add(new UdpPorts.PropertyRule("geometry","ouf:geometry","geometry","OPEN",List.of()));
+    canonical.materialize("geometry-property",decision.targetUrbanObjectId(),payload,new UdpPorts.MaterializationProfile("policy://authority/1",rules));
+    assertThat(map(serving.current(decision.targetUrbanObjectId(),open).get("properties"))).doesNotContainKey("ouf:geometry");
+    assertThat(map(serving.history(decision.targetUrbanObjectId(),10,null,null,open).items().getFirst().get("properties"))).doesNotContainKey("ouf:geometry");
+    assertThat(map(serving.search("ouf:Asset",10,null,open).items().getFirst().get("properties"))).doesNotContainKey("ouf:geometry");
+    var geometric=new ServingAuthorizationContext("HUMAN_USER","reader","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN"),"authz://geometry","geometry");
+    assertThat(map(serving.current(decision.targetUrbanObjectId(),geometric).get("properties"))).containsKey("ouf:geometry");
+  }
+
   @Test void searchRequiresIndexedExactTypeAndBoundedPage(){assertThatThrownBy(()->serving.search("*",10,null,open)).isInstanceOf(IllegalArgumentException.class);assertThatThrownBy(()->serving.search("ouf:Asset",101,null,open)).hasMessageContaining("UDP_PAGE_SIZE_OUT_OF_RANGE");}
 
   @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{

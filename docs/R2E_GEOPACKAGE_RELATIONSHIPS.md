@@ -24,6 +24,8 @@ Un target assente crea una issue `NO_MATCH`; se arriva successivamente il colleg
 
 Sono verificati tenant, permesso sull'oggetto di partenza, label/permesso della relazione e permesso sull'altro oggetto. Oggetti target non attivi e relazioni non attive sono omessi. Non vengono esposti conteggi o cursori che rivelino edge nascosti.
 
+Anche la geometria sorgente contenuta nella proprietà mappata richiede `urban.geometry.read` oltre al permesso e alla label della proprietà, in current, history e search.
+
 La proprietà geometrica mappata conserva l'envelope sorgente `{crs, geoJson}`; `canonicalGeometry`, `geometry` e `geometryProvenance` mantengono il contratto R2d. Il CRS comunale è una configurazione del deployment; gli esempi di R2e usano 4326 senza trasformazioni territoriali. Le prove 6708, assi e grigliati restano nella suite R2d.
 
 ## Prove
