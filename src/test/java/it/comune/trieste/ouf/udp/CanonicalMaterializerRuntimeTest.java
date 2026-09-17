@@ -26,6 +26,15 @@ class CanonicalMaterializerRuntimeTest {
 
   @Test void equalAuthorityConflictCreatesIssueAndPreservesCurrentValue(){var open=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));Fixture a=resolved("h-c1","source-a","c1","R1","First",1);materializer.materialize("h-c1",a.objectId,a.payload,open);Fixture b=resolved("h-c2","source-b","c2","R1","Second",1);var result=materializer.materialize("h-c2",b.objectId,b.payload,open);assertThat(result.materialChange()).isFalse();assertThat(db.sql("select count(*) from ouf_udp.property_conflict where state='OPEN'").query(Long.class).single()).isOne();String current=db.sql("select canonical_payload::text from ouf_udp.object_revision where revision_id=(select current_revision_id from ouf_udp.urban_object where urban_object_id=:u)").param("u",a.objectId).query(String.class).single();assertThat(current).contains("First").doesNotContain("Second");}
 
+  @Test void updatedPolicyReevaluatesHistoricalRanksWithoutRewritingContributions(){
+    Fixture a=resolved("rank-a","registry","r-a","R1","Registry value",10);materializer.materialize("rank-a",a.objectId,a.payload,authorityProfile);
+    Fixture b=resolved("rank-b","survey","r-b","R1","Survey value",99);materializer.materialize("rank-b",b.objectId,b.payload,authorityProfile);
+    var changed=new UdpPorts.MaterializationProfile("policy://authority/2",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("survey","registry"))));
+    Fixture next=resolved("rank-c","registry","r-a","R1","Registry value",10);materializer.materialize("rank-c",next.objectId,next.payload,changed);
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state where urban_object_id=:u").param("u",a.objectId).query(String.class).single()).isEqualTo("Survey value");
+    assertThat(db.sql("select authority_rank from ouf_udp.property_contribution where handoff_id='rank-a' and property_iri='ouf:name'").query(Integer.class).single()).isZero();
+  }
+
   @Test void weightedIdentityMatchesDifferentSourceKeysAndPersistsEvidence(){
     var mapped=new UdpPorts.MaterializationProfile("policy://weighted-fixture",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of()),new UdpPorts.PropertyRule("surface","surface","number","OPEN",List.of())));
     Fixture first=resolved("weighted-a","registry","native-a","KEY-A","Via Roma",42);
