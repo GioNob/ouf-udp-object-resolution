@@ -52,11 +52,14 @@ public class HistoricalReplayService {
       long size=((Number)row.get("logical_size_bytes")).longValue();if(size<1||size>10_485_760)throw new IllegalStateException("UDP_REPLAY_RAW_SIZE_INVALID");
       var port=storage.getIfAvailable();if(port==null)throw new IllegalStateException("UDP_REPLAY_STORAGE_UNAVAILABLE");
       byte[] bytes=port.read(String.valueOf(row.get("locator")));
-      try{String hash="sha256:"+HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
-        if(bytes.length!=size||!hash.equals(row.get("lake_hash"))||!json.readTree(bytes).equals(json.readTree(String.valueOf(row.get("payload_json")))))throw new IllegalStateException("UDP_REPLAY_RAW_MISMATCH");
-      }catch(java.io.IOException|java.security.NoSuchAlgorithmException e){throw new IllegalStateException("UDP_REPLAY_RAW_INVALID",e);}
+      verifyRaw(json,bytes,size,String.valueOf(row.get("lake_hash")),String.valueOf(row.get("payload_json")));
     }
     return row;}
+  static void verifyRaw(ObjectMapper json,byte[] bytes,long expectedSize,String expectedHash,String expectedPayload){
+    try{String hash="sha256:"+HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+      if(bytes.length!=expectedSize||!hash.equals(expectedHash)||!json.readTree(bytes).equals(json.readTree(expectedPayload)))throw new IllegalStateException("UDP_REPLAY_RAW_MISMATCH");
+    }catch(java.io.IOException|java.security.NoSuchAlgorithmException e){throw new IllegalStateException("UDP_REPLAY_RAW_INVALID",e);}
+  }
   private void event(UUID plan,String type,TrustedHumanContext actor,Map<String,Object> detail){db.sql("insert into ouf_udp.replay_event(event_id,replay_plan_id,event_type,actor_type,actor_subject,authorization_decision_ref,correlation_id,safe_detail) values(gen_random_uuid(),:plan,:type,:actor,:subject,:decision,:correlation,cast(:detail as jsonb))").param("plan",plan).param("type",type).param("actor",actor.actorType()).param("subject",actor.subject()).param("decision",actor.authorizationDecisionRef()).param("correlation",actor.correlationId()).param("detail",write(detail)).update();}
   private static void conflict(){throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REPLAY_VERSION_CONFLICT");}
   private static void required(String value,String code){if(value==null||value.isBlank())throw new IllegalArgumentException(code);}
