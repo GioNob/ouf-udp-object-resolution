@@ -21,7 +21,11 @@ create function ouf_udp.project_geometry(input_json text,source_srid integer,tar
 returns table(status text,ewkb text) language plpgsql as $$
 declare g geometry;
 begin
- g=ST_SetSRID(ST_GeomFromGeoJSON(input_json),source_srid);
+ begin
+  g=ST_SetSRID(ST_GeomFromGeoJSON(input_json),source_srid);
+ exception when others then
+  return query select 'SPATIAL_INVALID_GEOMETRY'::text,null::text;return;
+ end;
  if swap_xy then g=ST_FlipCoordinates(g);end if;
  if g is null or ST_IsEmpty(g) or ST_NPoints(g)>20000 or ST_CoordDim(g)<>2 or not ST_IsValid(g) then
   return query select 'SPATIAL_INVALID_GEOMETRY'::text,null::text;return;
