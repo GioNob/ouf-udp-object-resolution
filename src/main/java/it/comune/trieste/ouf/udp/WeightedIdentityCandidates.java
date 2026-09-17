@@ -27,7 +27,7 @@ final class WeightedIdentityCandidates {
         "case when ST_Dimension(g.geometry)=2 and ST_Dimension(s.geom)=2 then " +
         "ST_Area(ST_Intersection(g.geometry,s.geom)::geography)/nullif(ST_Area(ST_Union(g.geometry,s.geom)::geography),0) else null end overlap";
     query += " from ouf_udp.urban_object o join ouf_udp.urban_object_current_state c on c.urban_object_id=o.urban_object_id";
-    if (spatial) query += " join ouf_udp.urban_geometry_current gc on gc.urban_object_id=o.urban_object_id join ouf_udp.urban_geometry g on g.geometry_revision_id=gc.geometry_revision_id cross join (select ST_GeomFromEWKB(decode(:geometry,'hex')) geom) s";
+    if (spatial) query += " left join ouf_udp.urban_geometry_current gc on gc.urban_object_id=o.urban_object_id left join ouf_udp.urban_geometry g on g.geometry_revision_id=gc.geometry_revision_id cross join (select ST_GeomFromEWKB(decode(:geometry,'hex')) geom) s";
     query += " where o.tenant_id=:tenant and o.canonical_type=:type and o.status='ACTIVE' and c.canonical_payload @> cast(:blocking as jsonb)";
     if (policy.blockingDistanceMeters() != null) query += " and ST_DWithin(g.geometry::geography,s.geom::geography,:radius)";
     query += " order by o.urban_object_id limit :limit";
