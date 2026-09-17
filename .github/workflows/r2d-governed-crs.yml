@@ -1,0 +1,65 @@
+name: R2d governed CRS and grid execution
+on: [push, pull_request, workflow_dispatch]
+permissions: {contents: read}
+jobs:
+  governed-crs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OUF_UDP_DB_URL: jdbc:postgresql://127.0.0.1:55436/ouf_udp
+      OUF_UDP_DB_USER: ouf_udp
+      OUF_UDP_DB_PASSWORD: ci-only-password
+      OUF_UDP_LAKE_REQUIRED: 'false'
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: '4'
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '21', cache: maven}
+      - name: Verify grid inventory and create synthetic control resource
+        run: |
+          python3 scripts/ci/test-grid-inventory.py
+          python3 scripts/ci/r2d-grid-fixture.py target/r2d-grids
+          echo "OUF_R2D_GRID_MANIFEST=$PWD/target/r2d-grids/manifest.json" >> "$GITHUB_ENV"
+      - name: Verify database startup rejects missing mandatory resources
+        run: |
+          docker build -t ouf-postgis-r2d deploy/postgis
+          mkdir -p target/r2d-missing
+          cp target/r2d-grids/manifest.json target/r2d-missing/manifest.json
+          if docker run --rm -v "$PWD/target/r2d-missing:/opt/ouf/proj:ro" ouf-postgis-r2d > target/r2d-startup-negative.log 2>&1; then
+            echo 'Missing grid unexpectedly accepted'; exit 1
+          fi
+          grep -q OUF_PROJ_RESOURCE_VALIDATION_FAILED target/r2d-startup-negative.log
+      - name: Start PostGIS with verified read-only grids and network disabled
+        run: |
+          docker run -d --name ouf-r2d-postgres -p 55436:5432 \
+            -e POSTGRES_DB=ouf_udp -e POSTGRES_USER=ouf_udp -e POSTGRES_PASSWORD="$OUF_UDP_DB_PASSWORD" \
+            -v "$PWD/target/r2d-grids:/opt/ouf/proj:ro" ouf-postgis-r2d
+          for attempt in $(seq 1 60); do
+            if docker exec ouf-r2d-postgres pg_isready -U ouf_udp -d ouf_udp; then exit 0; fi
+            sleep 1
+          done
+          docker logs ouf-r2d-postgres; exit 1
+      - name: Execute actual PostGIS transforms, governance, persistence and authorization
+        run: |
+          bash scripts/install-authorization-sdk.sh
+          mvn -B -ntp -Dtest=GovernedCrsTransformRuntimeTest,GovernedGridRuntimeTest,SpatialMaterializerRuntimeTest test
+          python3 - <<'PY'
+          import xml.etree.ElementTree as E
+          from pathlib import Path
+          files=list(Path('target/surefire-reports').glob('TEST-*GovernedGridRuntimeTest.xml'))
+          assert len(files)==1
+          test=E.parse(files[0]).getroot()
+          assert int(test.attrib['tests'])>0 and int(test.attrib['skipped'])==0
+          assert int(test.attrib['failures'])==0 and int(test.attrib['errors'])==0
+          PY
+      - name: Upload R2d evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2d-crs-evidence-${{ github.run_id }}
+          path: |
+            target/surefire-reports/
+            target/r2d-startup-negative.log
+            target/r2d-grids/manifest.json
+          retention-days: 30

@@ -41,7 +41,14 @@ public class PublishedRuntimeConfiguration {
     var targets=new HashSet<String>();for(Object m:mappings){if(!(m instanceof Map<?,?> mapping))throw invalid();targets.add(String.valueOf(mapping.get("targetPropertyIri")));}
     for(var property:materialization.properties())if(!targets.remove(property.propertyIri())||!property.sourceField().equals(property.propertyIri())||!property.accessLabel().equals(labels.get(property.propertyIri())))throw invalid();
     if(!targets.isEmpty())throw invalid();
-    return new Profiles(bundle,resolution,materialization);
+    UdpPorts.SpatialProfile spatial=null;
+    if(profile.containsKey("spatial")){
+      spatial=json.convertValue(object(profile,"spatial"),UdpPorts.SpatialProfile.class);
+      if(spatial.geometry()==null||spatial.policyRef()==null||spatial.policyRef().isBlank()||spatial.relationships()==null||!spatial.geometry().accessLabel().equals(labels.get(spatial.geometry().sourceField())))throw invalid();
+      // Spatial relationship policy binding is deferred to R2e; do not accept unbound edge labels.
+      if(!spatial.relationships().isEmpty())throw invalid();
+    }
+    return new Profiles(bundle,resolution,materialization,spatial);
   }
   public HistoricalContractCatalog.Resolution resolveContracts(Map<String,Object> refs){
     String ref=text(refs,"bundleRef");
@@ -78,7 +85,7 @@ public class PublishedRuntimeConfiguration {
   static String text(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof String value)||value.isBlank())throw invalid();return value;}
   private static String escape(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_PINNED_PROFILE_INVALID");}
-  public record Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization){}
+  public record Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial){}
   private static final class LimitedResponse implements HttpResponse.BodySubscriber<byte[]>{
     private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();private java.util.concurrent.Flow.Subscription subscription;
     public CompletionStage<byte[]> getBody(){return result;}public void onSubscribe(java.util.concurrent.Flow.Subscription s){subscription=s;s.request(1);}

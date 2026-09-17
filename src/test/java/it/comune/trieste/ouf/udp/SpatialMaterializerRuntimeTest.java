@@ -12,7 +12,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest
 class SpatialMaterializerRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
-  @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer canonical;@Autowired SpatialMaterializer spatial;@Autowired JdbcClient db;
+  @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer canonical;@Autowired SpatialMaterializer spatial;@Autowired JdbcClient db;@Autowired com.fasterxml.jackson.databind.ObjectMapper json;@Autowired GovernedServingService serving;@Autowired ResolutionRepository jobs;@Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   private final UdpPorts.MaterializationProfile properties=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("identity","ouf:id","string","OPEN",List.of())));
   private final UdpPorts.GeometryRule geometry=new UdpPorts.GeometryRule("geometry","EPSG:4326",4326,"postgis-3.5/no-repair","RESTRICTED");
 
@@ -25,6 +25,44 @@ class SpatialMaterializerRuntimeTest {
   @Test void invalidGeometryIsQuarantinedWithoutSilentRepair(){Fixture source=create("invalid-h","work-3","WORKSITE","ouf:Worksite",bowTie(),"EPSG:4326");spatial.materialize("invalid-h",source.objectId,source.payload,profile("INTERSECTS"));assertThat(db.sql("select reason_code from ouf_udp.spatial_resolution_issue").query(String.class).single()).isEqualTo("SPATIAL_INVALID_GEOMETRY");assertThat(db.sql("select count(*) from ouf_udp.urban_geometry").query(Long.class).single()).isZero();}
 
   @Test void multipleSpatialMatchesOpenReviewWithoutArbitraryEdge(){storeTarget("area-a","area-a",polygon(0,0,10,10));storeTarget("area-b","area-b",polygon(4,4,12,12));Fixture source=create("multi-h","work-4","WORKSITE","ouf:Worksite",point(5,5),"EPSG:4326");spatial.materialize("multi-h",source.objectId,source.payload,profile("INTERSECTS"));assertThat(db.sql("select reason_code from ouf_udp.spatial_resolution_issue").query(String.class).single()).isEqualTo("SPATIAL_MULTIPLE_MATCHES");assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.spatial_resolution_issue").query(Integer.class).single()).isEqualTo(2);assertThat(db.sql("select count(*) from ouf_udp.urban_relationship").query(Long.class).single()).isZero();}
+
+  @Test void canonicalGeometryOriginalAndProvenanceSurviveAndAreAuthorizedTogether(){
+    Fixture source=create("municipal-h","camera-1","CAMERA","ouf:Camera",point(2,49),"EPSG:4326");
+    var helper=new GovernedCrsTransformRuntimeTest();helper.db=db;helper.json=json;
+    var rule=helper.rule(4326,32631,"XY","CONVERT",helper.forward(),helper.backward());
+    var materializer=new SpatialMaterializer(db,json,new GovernedCrsTransform(db,json,32631,""));
+    var profile=new UdpPorts.SpatialProfile("policy://municipal-crs/1",rule,List.of());
+    assertThat(materializer.materialize("municipal-h",source.objectId,source.payload,profile).geometryStored()).isTrue();
+    assertThat(materializer.materialize("municipal-h",source.objectId,source.payload,profile).geometryStored()).isTrue();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_geometry where urban_object_id=:u").param("u",source.objectId).query(Long.class).single()).isOne();
+    var row=db.sql("select ST_SRID(canonical_geometry) canonical,ST_SRID(geometry) serving,source_geometry_json->>'crs' original,evidence_json::text evidence from ouf_udp.urban_geometry where urban_object_id=:u").param("u",source.objectId).query().singleRow();
+    assertThat(row.get("canonical")).isEqualTo(32631);assertThat(row.get("serving")).isEqualTo(4326);assertThat(row.get("original")).isEqualTo("EPSG:4326");assertThat(String.valueOf(row.get("evidence"))).contains("test-operation","canonicalAxisOrder","sourceBounds");
+    var allowed=new ServingAuthorizationContext("HUMAN_USER","operator","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN","RESTRICTED"),"authz://geometry/1","geometry-1");
+    assertThat(serving.current(source.objectId,allowed)).containsKeys("geometry","canonicalGeometry","geometryProvenance");
+    var restricted=new ServingAuthorizationContext("AI_AGENT","agent","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN"),"authz://geometry/2","geometry-2");
+    assertThat(serving.current(source.objectId,restricted)).doesNotContainKeys("geometry","canonicalGeometry","geometryProvenance","geometryCrs");
+  }
+
+  @Test void publishedLoopRejectsBeforeCreatingAnObjectAndConvertsApprovedProfile(){
+    var helper=new GovernedCrsTransformRuntimeTest();helper.db=db;helper.json=json;
+    var geo=new SpatialMaterializer(db,json,new GovernedCrsTransform(db,json,32631,""));
+    var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Camera","identity","identity");
+    var rejected=new UdpPorts.SpatialProfile("policy://spatial/reject",helper.rule(4326,32631,"XY","REJECT",null,null),List.of());
+    org.mockito.Mockito.when(config.resolve("bundle://1","CAMERA")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),rp,properties,rejected));
+    var loop=new PublishedResolutionLoop(jobs,config,gate,resolution,canonical,geo,db,new org.springframework.transaction.support.TransactionTemplate(transactions));
+    intake.accept(handoff("rejected-auto","camera-rejected","CAMERA",point(2,49),"EPSG:4326"));loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='rejected-auto'").query(String.class).single()).isEqualTo("QUARANTINED");
+    assertThat(db.sql("select reason_code from ouf_udp.spatial_resolution_issue where handoff_id='rejected-auto'").query(String.class).single()).isEqualTo("SPATIAL_CRS_REJECTED");
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isZero();
+    var accepted=new UdpPorts.SpatialProfile("policy://spatial/convert",helper.rule(4326,32631,"XY","CONVERT",helper.forward(),helper.backward()),List.of());
+    org.mockito.Mockito.when(config.resolve("bundle://1","CAMERA")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),rp,properties,accepted));
+    intake.accept(handoff("converted-auto","camera-converted","CAMERA",point(2,49),"EPSG:4326"));loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='converted-auto'").query(String.class).single()).isEqualTo("SUCCEEDED");
+    assertThat(db.sql("select ST_SRID(canonical_geometry) from ouf_udp.urban_geometry where handoff_id='converted-auto'").query(Integer.class).single()).isEqualTo(32631);
+    assertThat(db.sql("select count(*) from ouf_udp.object_revision").query(Long.class).single()).isOne();
+  }
 
   private void storeTarget(String handoff,String object,Object geometryValue){Fixture f=create(handoff,object,"AREA","ouf:Area",geometryValue,"EPSG:4326");spatial.materialize(handoff,f.objectId,f.payload,new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of()));}
   private UdpPorts.SpatialProfile profile(String predicate){return new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of(new UdpPorts.SpatialRelationshipRule("ouf:insideArea","ouf:Area",predicate,"QUARANTINE_RELATION",null,null,null,"RESTRICTED",false)));}
