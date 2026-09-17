@@ -92,7 +92,7 @@ paths:
       operationId: reviewGeometryConflict
       x-ouf-capability: resolution.issue.read
       x-ouf-mcp-eligible: true
-      description: Returns both geometries only after tenant, source and data-label authorization, including urban.geometry.read. Coordinates are in EPSG:4326; original envelopes and provenance are retained.
+      description: Returns both geometries only after tenant, source and data-label authorization, including urban.geometry.read. The initial Gateway profile permits OPEN/ANONYMOUS only, even for more privileged principals. Coordinates are in EPSG:4326; original envelopes and provenance are retained.
       parameters:
         - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
       responses:

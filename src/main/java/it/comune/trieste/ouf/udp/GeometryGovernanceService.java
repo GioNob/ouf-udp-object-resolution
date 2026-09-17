@@ -58,7 +58,7 @@ public class GeometryGovernanceService {
   private Map<String,Object> geometry(UUID revision,UUID object,ServingAuthorizationContext auth,String capability){
     var row=db.sql("select g.access_label,h.source_id,h.ingestion_run_id,ST_AsGeoJSON(g.geometry) geojson,g.source_geometry_json::text original,g.evidence_json::text provenance from ouf_udp.urban_geometry g join ouf_udp.handoff_intake h on h.handoff_id=g.handoff_id where g.geometry_revision_id=:r and g.urban_object_id=:u").param("r",revision).param("u",object).query().singleRow();
     var scope=Map.of("sourceRef",String.valueOf(row.get("source_id")),"jobRef",String.valueOf(row.get("ingestion_run_id")),"revisionRef",revision.toString(),"projection","geometry");
-    String label=String.valueOf(row.get("access_label"));auth.requireResource(capability,"object",object,label,scope);auth.requireResource("urban.geometry.read","object",object,label,scope);
+    String label=String.valueOf(row.get("access_label"));if(!auth.allowedDataLabels().contains(label))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_GEOMETRY_PROFILE_LABEL_DENIED");auth.requireResource(capability,"object",object,label,scope);auth.requireResource("urban.geometry.read","object",object,label,scope);
     return Map.of("revisionId",revision,"sourceId",row.get("source_id"),"crs","EPSG:4326","geometry",read(String.valueOf(row.get("geojson"))),"original",read(String.valueOf(row.get("original"))),"provenance",read(String.valueOf(row.get("provenance"))));
   }
   private Map<String,Object> read(String value){try{return json.readValue(value,new TypeReference<>(){});}catch(Exception e){throw new IllegalStateException("UDP_STORED_JSON_INVALID",e);}}
