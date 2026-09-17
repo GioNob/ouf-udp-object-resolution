@@ -157,7 +157,8 @@ jobs:
             --set image.repository=registry.example.invalid/ouf-udp \
             --set image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             --set runtime.existingSecret=udp-runtime \
-            --set runtime.existingConfigMap=udp-runtime > target/rendered-deployment.yaml
+            --set runtime.existingConfigMap=udp-runtime \
+            --set runtime.gridManifestConfigMap=udp-proj-manifest-v1 > target/rendered-deployment.yaml
           python3 scripts/ci/verify-deployment.py target/rendered-deployment.yaml
       - name: Freeze supply-chain evidence
         if: always()

@@ -46,3 +46,7 @@ ouf.udp.capability-router:
 ouf.udp.query-budget:
   bulkhead-permits: ${OUF_UDP_QUERY_BUDGET_BULKHEAD_PERMITS:2}
   bulkhead-acquire-timeout-ms: ${OUF_UDP_QUERY_BUDGET_BULKHEAD_ACQUIRE_TIMEOUT_MS:100}
+
+ouf.udp.spatial:
+  canonical-srid: ${OUF_UDP_CANONICAL_SRID:4326}
+  grid-manifest: ${OUF_UDP_GRID_MANIFEST:}
