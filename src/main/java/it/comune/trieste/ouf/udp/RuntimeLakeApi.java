@@ -18,7 +18,7 @@ public class RuntimeLakeApi {
   @PostMapping public ResponseEntity<Map<String,Object>> store(@RequestBody Write body,HttpServletRequest request){
     String tenant=authorization.require(request,"datalake.write",body.sourceId(),body.runId());
     if(retentionDays<1||retentionDays>36500||!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(accessLabel))throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"UDP_LAKE_POLICY_REQUIRED");
-    if(body.sourceId()==null||body.sourceId().isBlank()||body.typeCode()==null||body.typeCode().isBlank()||body.contentBase64()==null||body.contentBase64().length()>66_666_668||!Set.of("RAW","NORMALIZED","CURATED").contains(body.zone()))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_LAKE_INPUT_INVALID");
+    if(body.sourceId()==null||body.sourceId().isBlank()||body.typeCode()==null||body.typeCode().isBlank()||body.contentBase64()==null||body.contentBase64().length()>66_666_668||(body.zone()==null||!Set.of("RAW","NORMALIZED","CURATED").contains(body.zone())))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_LAKE_INPUT_INVALID");
     UUID.fromString(body.runId());byte[] content;try{content=Base64.getDecoder().decode(body.contentBase64());}catch(IllegalArgumentException e){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_LAKE_INPUT_INVALID");}
     if(content.length>50_000_000||!hash(content).equals(body.contentHash()))throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,"UDP_LAKE_HASH_MISMATCH");
     var object=lake.store(content,tenant,body.sourceId(),body.typeCode(),body.zone(),"application/json",retentionClass,accessLabel,OffsetDateTime.now().plusDays(retentionDays),body.runId());
