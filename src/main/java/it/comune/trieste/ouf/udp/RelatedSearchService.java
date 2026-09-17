@@ -19,7 +19,7 @@ public class RelatedSearchService {
     this.budgets = budgets;
   }
 
-  @Transactional
+  @Transactional(isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
   public Result search(Request request, ServingAuthorizationContext auth) {
     auth.require("urban.object.related_search");
     LogicalQueryPlan plan = translate(request);
@@ -35,7 +35,9 @@ public class RelatedSearchService {
     };
     boolean truncated = rows.size() > plan.maxResults();
     if (truncated) rows = rows.subList(0, plan.maxResults());
-    return new Result(rows, truncated, plan);
+    var allowed=new OwnerQueryGuard(db).edges("urban.object.related_search",rows.stream().map(Hit::relationshipId).toList(),auth);
+    var visible=rows.stream().filter(row->Boolean.TRUE.equals(allowed.get(row.relationshipId()))).toList();
+    return new Result(visible, truncated, plan,visible.size()!=rows.size());
   }
 
   LogicalQueryPlan translate(Request request) {
@@ -60,6 +62,7 @@ public class RelatedSearchService {
     if (visible == 0) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "UDP_RELATED_SEARCH_ANCHOR_NOT_VISIBLE");
     }
+    new OwnerQueryGuard(db).requireObject(plan.anchorObjectId(),auth);
   }
 
   private List<Hit> outbound(LogicalQueryPlan plan, ServingAuthorizationContext auth) {
@@ -94,7 +97,8 @@ public class RelatedSearchService {
     public LogicalQueryPlan { targetTypes = List.copyOf(targetTypes); }
   }
   public record Hit(UUID relationshipId, UUID urbanObjectId, String canonicalType) {}
-  public record Result(List<Hit> hits, boolean truncated, LogicalQueryPlan plan) {
+  public record Result(List<Hit> hits, boolean truncated, LogicalQueryPlan plan,boolean partial) {
+    public Result(List<Hit> hits,boolean truncated,LogicalQueryPlan plan){this(hits,truncated,plan,false);}
     public Result { hits = List.copyOf(hits); }
   }
 }

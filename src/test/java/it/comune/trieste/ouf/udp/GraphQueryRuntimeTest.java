@@ -2,6 +2,11 @@ package it.comune.trieste.ouf.udp;
 
 import static org.assertj.core.api.Assertions.*;
 import java.util.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
+
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.*;
@@ -12,10 +17,12 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
 
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @SpringBootTest
 class GraphQueryRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
   @Autowired GraphQueryService graph;@Autowired RelatedSearchService related;@Autowired QueryBudgetStore budgets;@Autowired JdbcClient db;
+  @Autowired org.springframework.test.web.servlet.MockMvc http;
   private ServingAuthorizationContext auth;
   @BeforeEach void clean(){db.sql("truncate table ouf_udp.capability_retry_guard,ouf_udp.query_budget,ouf_udp.serving_access_audit,ouf_udp.merge_resolution_issue,ouf_udp.merge_property_contribution_link,ouf_udp.human_resolution_decision,ouf_udp.split_resolution_issue,ouf_udp.relationship_identity_history,ouf_udp.source_binding_history,ouf_udp.object_identity_history,ouf_udp.governance_audit,ouf_udp.governance_plan,ouf_udp.spatial_resolution_issue,ouf_udp.urban_geometry_current,ouf_udp.urban_geometry,ouf_udp.relationship_issue,ouf_udp.relationship_revision,ouf_udp.relationship_contribution,ouf_udp.urban_relationship,ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();auth=context("corr-graph");}
   @Test void neighborsIsOneHopBoundedAndFiltersRestrictedEdges(){UUID a=object(),b=object(),c=object();edge("e1",a,b,"ouf:child","OPEN");edge("e2",a,c,"ouf:child","RESTRICTED");var result=graph.neighbors(a,List.of("ouf:child"),10,10,auth);assertThat(result.edges()).hasSize(1);assertThat(result.nodes()).containsExactlyInAnyOrder(a,b).doesNotContain(c);assertThat(result.physicalPlan()).isEqualTo("INDEXED_ADJACENCY");}
@@ -31,5 +38,28 @@ class GraphQueryRuntimeTest {
   private UUID object(){UUID id=UUID.randomUUID();db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,canonical_key,match_key) values(:i,'ouf:Node',:k,:k)").param("i",id).param("k",id.toString()).update();return id;}
   private void edge(String handoff,UUID source,UUID target,String relation,String label){db.sql("insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,content_hash,payload_json,receipt_ref) values(:h,'run','ing','graph','NODE',:h,:h,'{}',:r)").param("h",handoff).param("r","udp://"+handoff).update();UUID contribution=UUID.randomUUID(),relationship=UUID.randomUUID(),revision=UUID.randomUUID();db.sql("insert into ouf_udp.relationship_contribution(contribution_id,handoff_id,source_object_id,relation_iri,source_value,source_value_hash,strategy_ref,policy_ref,access_label,provenance_json) values(:i,:h,:s,:r,'{}',:h,'MANUAL','policy://graph',:l,'{}')").param("i",contribution).param("h",handoff).param("s",source).param("r",relation).param("l",label).update();db.sql("insert into ouf_udp.urban_relationship(relationship_id,source_object_id,relation_iri,target_object_id) values(:i,:s,:r,:t)").param("i",relationship).param("s",source).param("r",relation).param("t",target).update();db.sql("insert into ouf_udp.relationship_revision(relationship_revision_id,relationship_id,revision_no,contribution_id,evidence_hash,resolution_evidence,access_label) values(:i,:r,1,:c,:h,'{}',:l)").param("i",revision).param("r",relationship).param("c",contribution).param("h","hash-"+handoff).param("l",label).update();db.sql("update ouf_udp.urban_relationship set current_revision_id=:v where relationship_id=:r").param("v",revision).param("r",relationship).update();}
   private static ServingAuthorizationContext context(String correlation){return new ServingAuthorizationContext("AI_AGENT","agent","default",Set.of("urban.graph.neighbors","urban.graph.traverse"),Set.of("OPEN","ANONYMOUS"),"authz://graph",correlation);}
+  @Test void httpGraphAndRelatedSearchCannotBypassTargetOrSourcePolicy()throws Exception{
+    UUID a=object(),b=object(),c=object();edge("http-ab",a,b,"ouf:child","OPEN");edge("http-bc",b,c,"ouf:child","OPEN");db.sql("update ouf_udp.urban_object set tenant_id='tenant-a'").update();
+    Set<String> caps=Set.of("urban.object.read","urban.graph.neighbors","urban.graph.traverse","urban.object.related_search");
+    for(String route:List.of("neighbors","traverse","related-search")){
+      String cap=route.equals("related-search")?"urban.object.related_search":"urban.graph."+route;
+      String url=route.equals("related-search")?"/api/udp/v1/objects/related-search":"/api/udp/v1/graph/"+route;
+      Map<String,Object> body=route.equals("related-search")?Map.of("anchorObjectId",a,"anchorType","ouf:Node","relationIri","ouf:child","direction","OUTBOUND","targetTypes",List.of("ouf:Node"),"maxResults",10):Map.of("startObjectId",a,"relationTypes",List.of("ouf:child"),"maxNodes",10,"maxEdges",10,"maxDepth",2,"purpose","RECURSIVE_HIERARCHY");
+      String json=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(body);
+      http.perform(post(url).contentType("application/json").content(json).with(policy(caps,null,null,null,Map.of())))
+        .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString(b.toString())));
+      for(boolean targetDeny:List.of(true,false))http.perform(post(url).contentType("application/json").content(json).with(policy(caps,targetDeny?"urban.object.read":cap,targetDeny?"object":"relationship",targetDeny?b.toString():null,targetDeny?Map.of():Map.of("sourceRef","graph","jobRef","run"))))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true))
+        .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(b.toString()))))
+        .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(c.toString()))));
+    }
+  }
+  private org.springframework.test.web.servlet.request.RequestPostProcessor policy(Set<String> caps,String denyCap,String type,String id,Map<String,String> scope){return request->{
+    TestAuthorization.bind(request,"reader","HUMAN",caps);
+    request.setAttribute("ouf.allowedDataLabels",Set.of("OPEN","RESTRICTED"));
+    if(denyCap!=null){var engine=(LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();var g=old.grants().stream().filter(x->x.capabilityId().equals(denyCap)).findFirst().orElseThrow();var grants=new ArrayList<>(old.grants());
+      grants.add(new Grant("query-deny",denyCap,g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),new GrantConstraints("DENY",null,type,id,scope,Set.of("OPEN"),Set.of(),null,Set.of(),null)));
+      try{TestAuthorization.install(engine,new PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}catch(Exception e){throw new IllegalStateException(e);}
+    }return request;};}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
 }
