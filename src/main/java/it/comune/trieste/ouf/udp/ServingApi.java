@@ -19,10 +19,9 @@ public class ServingApi {
   @GetMapping("/objects/{id}/properties/{property}/lineage") List<Map<String,Object>> propertyLineage(@PathVariable UUID id,@PathVariable String property,HttpServletRequest r){return service.lineage(id,property,context(r));}
   static ServingAuthorizationContext context(HttpServletRequest r){
     for(String h:FORBIDDEN)if(r.getHeader(h)!=null)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_UNTRUSTED_AUTHORIZATION_HEADER");
-    try{var c=it.comune.trieste.ouf.authorization.ServletAuthorization.resolve(r);
-      Set<String> labels=new HashSet<>();Object raw=r.getAttribute("ouf.allowedDataLabels");if(raw instanceof Set<?> values)for(Object v:values)if(v instanceof String label)labels.add(label);
+    try{var owner=it.comune.trieste.ouf.authorization.OwnerAuthorization.bind(r);
       String correlation=r.getAttribute("ouf.correlationId") instanceof String value&&!value.isBlank()?value:UUID.randomUUID().toString();
-      return new ServingAuthorizationContext(c.principal().actorType().name(),c.principal().subjectId(),c.principal().tenantId(),c.capabilities(),labels,c.decisionRef(),correlation);
+      return new ServingAuthorizationContext(owner.principal().actorType().name(),owner.principal().subjectId(),owner.principal().tenantId(),owner.candidates(),Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED"),owner.decisionRef(),correlation,owner);
     }catch(SecurityException e){throw new ResponseStatusException(HttpStatus.FORBIDDEN,e.getMessage());}
   }
 }
