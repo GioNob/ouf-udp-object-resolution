@@ -125,6 +125,10 @@ class SpatialMaterializerRuntimeTest {
       assertThatThrownBy(()->db.sql("delete from ouf_udp.human_geometry_decision").update()).hasStackTraceContaining("append-only");
       var changed=handoff("new-shape","asset","ASSET",polygon(0,0,3,3),"EPSG:4326");HandoffIntakeService.object(changed,"sourceIdentity").put("sourceId",accept?"spatial-source":"survey");intake.accept(changed);loop.tick();
       assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='new-shape'").query(String.class).single()).isEqualTo("QUARANTINED");
+      var chosenUpdate=handoff("chosen-source-new-shape","asset","ASSET",polygon(0,0,4,4),"EPSG:4326");var changedIdentity=HandoffIntakeService.object(chosenUpdate,"sourceIdentity");changedIdentity.put("sourceId",accept?"survey":"spatial-source");changedIdentity.put("observedAt","2026-09-15T00:00:00Z");intake.accept(chosenUpdate);loop.tick();
+      assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='chosen-source-new-shape'").query(String.class).single()).isEqualTo("QUARANTINED");
+      assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(chosen);
+
     }
   }
 
