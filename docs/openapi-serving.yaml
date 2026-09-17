@@ -2,7 +2,7 @@ openapi: 3.1.0
 info: {title: OUF UDP Governed Serving API, version: 1.0.0}
 paths:
   /api/udp/v1/objects/{id}:
-    get: {operationId: readObject, x-ouf-capability: urban.object.read, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized current view}}}
+    get: {operationId: readObject, x-ouf-capability: urban.object.read, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized current view; all geometry fields require urban.geometry.read and the geometry DataAccessLabel, content: {application/json: {schema: {$ref: '#/components/schemas/CurrentObject'}}}}}}
   /api/udp/v1/objects/{id}/history:
     get: {operationId: readObjectHistory, x-ouf-capability: urban.object.history.read, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized revision page}}}
   /api/udp/v1/objects:
@@ -25,3 +25,22 @@ paths:
     post: {operationId: spatialWithin, x-ouf-capability: urban.spatial.within, x-ouf-crs: 'EPSG:4326', x-ouf-max-area-sq-km: 2500, x-ouf-max-results: 200, x-ouf-mcp-eligible: true, responses: {'200': {description: Governed envelope containment}}}
   /api/udp/v1/spatial/intersection-search:
     post: {operationId: spatialIntersectionSearch, x-ouf-capability: urban.spatial.intersection_search, x-ouf-max-results: 200, x-ouf-mcp-eligible: true, responses: {'200': {description: Governed cross-domain spatial correlation}}}
+
+components:
+  schemas:
+    CurrentObject:
+      type: object
+      additionalProperties: true
+      properties:
+        geometry: {type: object, description: EPSG4326 serving geometry in XY longitude/latitude order}
+        geometryCrs: {type: string, const: 'EPSG:4326'}
+        canonicalGeometry:
+          type: object
+          required: [crs, axisOrder, geoJson]
+          properties:
+            crs: {type: string, pattern: '^EPSG:[1-9][0-9]{0,5}$'}
+            axisOrder: {type: string, const: XY}
+            geoJson: {type: object, description: Municipal canonical geometry; coordinates follow explicit CRS and XY order}
+        geometryProvenance:
+          type: object
+          description: Source CRS; approved operations and accuracy; PROJ/resources; pinned contracts and lineage

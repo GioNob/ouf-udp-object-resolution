@@ -49,14 +49,15 @@ wait_http(){
   return 1
 }
 
-docker run -d --name "$primary_db" -p 55432:5432 \
+docker run -d --name "$primary_db" -p 127.0.0.1::5432 \
   -e POSTGRES_DB=ouf_udp -e POSTGRES_USER=ouf_udp -e POSTGRES_PASSWORD="$db_password" \
   -v "$dr_root/pg-primary:/var/lib/postgresql/data" -v "$dr_root/pg-base:/backup/base" -v "$dr_root/pg-archive:/archive" \
   postgis/postgis:17-3.5-alpine postgres -c wal_level=replica -c archive_mode=on -c archive_timeout=5s -c "archive_command=test ! -f /archive/%f && cp %p /archive/%f" >/dev/null
+primary_db_port="$(docker port "$primary_db" 5432/tcp | awk -F: '{print $NF}')"
 wait_postgres "$primary_db"
 step postgres_primary_ready
 
-OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:55432/ouf_udp?sslmode=disable' OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false \
+OUF_UDP_DB_URL="jdbc:postgresql://127.0.0.1:$primary_db_port/ouf_udp?sslmode=disable" OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false \
   java -jar target/udp-object-resolution-*.jar --server.port=18081 >"$evidence_dir/primary-migration.log" 2>&1 &
 app_pid="$!"
 wait_http http://127.0.0.1:18081/actuator/health
@@ -105,7 +106,8 @@ sudo touch "$dr_root/pg-restored/recovery.signal"
 step restore_directories_prepared
 
 restore_started="$(date +%s)"
-docker run -d --name "$restored_db" -p 55433:5432 -v "$dr_root/pg-restored:/var/lib/postgresql/data" -v "$dr_root/pg-archive:/archive:ro" postgis/postgis:17-3.5-alpine >/dev/null
+docker run -d --name "$restored_db" -p 127.0.0.1::5432 -v "$dr_root/pg-restored:/var/lib/postgresql/data" -v "$dr_root/pg-archive:/archive:ro" postgis/postgis:17-3.5-alpine >/dev/null
+restored_db_port="$(docker port "$restored_db" 5432/tcp | awk -F: '{print $NF}')"
 wait_postgres "$restored_db"
 docker run -d --name "$restored_minio" -p 59001:9000 -e MINIO_ROOT_USER="$minio_user" -e MINIO_ROOT_PASSWORD="$minio_password" -v "$dr_root/minio-restored:/data" quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data >/dev/null
 wait_http http://127.0.0.1:59001/minio/health/live
@@ -121,7 +123,7 @@ printf 'retained=%s\nexcluded=%s\nflyway=%s\nexpected_flyway=%s\nrestored_hash=%
 [[ "$retained" == "1" && "$excluded" == "0" && "$migration" == "$expected_migration" && "$restored_hash" == "$content_hash" ]]
 step recovery_target_verified
 
-OUF_UDP_DB_URL='jdbc:postgresql://127.0.0.1:55433/ouf_udp?sslmode=disable' OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false OUF_UDP_S3_BUCKET=ouf-udp-dr OUF_UDP_S3_ENDPOINT=http://127.0.0.1:59001 OUF_UDP_S3_REGION=us-east-1 OUF_UDP_S3_PATH_STYLE=true OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS=1000 OUF_UDP_LAKE_MAINTENANCE_POLL_MS=1000 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_REGION=us-east-1 \
+OUF_UDP_DB_URL="jdbc:postgresql://127.0.0.1:$restored_db_port/ouf_udp?sslmode=disable" OUF_UDP_DB_USER=ouf_udp OUF_UDP_DB_PASSWORD="$db_password" OUF_UDP_LAKE_REQUIRED=false OUF_UDP_S3_BUCKET=ouf-udp-dr OUF_UDP_S3_ENDPOINT=http://127.0.0.1:59001 OUF_UDP_S3_REGION=us-east-1 OUF_UDP_S3_PATH_STYLE=true OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS=1000 OUF_UDP_LAKE_MAINTENANCE_POLL_MS=1000 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_REGION=us-east-1 \
   java -jar target/udp-object-resolution-*.jar --server.port=18082 >"$evidence_dir/restored-application.log" 2>&1 &
 app_pid="$!"
 wait_http http://127.0.0.1:18082/actuator/health
