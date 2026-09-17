@@ -12,6 +12,10 @@ import org.springframework.web.server.ResponseStatusException;
 public class RuntimeIntakeAuthorization {
   private final String tenant;
   public RuntimeIntakeAuthorization(@Value("${ouf.udp.lake.tenant-id:}") String tenant){this.tenant=tenant;}
+  public void admit(HttpServletRequest request,String capability){
+    try{var owner=OwnerAuthorization.bind(request);if(tenant.isBlank()||!tenant.equals(owner.principal().tenantId())||owner.principal().actorType()!=PrincipalContext.ActorType.SERVICE||!owner.candidates().contains(capability))throw new SecurityException();}
+    catch(SecurityException failure){throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_RUNTIME_INTAKE_DENIED");}
+  }
   public String require(HttpServletRequest request,String capability,String source,String run){
     try{
       var owner=OwnerAuthorization.bind(request);
