@@ -36,6 +36,7 @@ public class PublishedResolutionLoop {
           if(profiles.spatial()!=null){
             String action=spatial.currentAction(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),profiles.materialization(),geometry);
             if("REVIEW_REQUIRED".equals(action)){jobs.quarantine(claim,"UDP_SPATIAL_AUTHORITY_CONFLICT");return;}
+            if("HISTORICAL_ONLY".equals(action)){jobs.complete(claim);return;}
             if("ADVANCE".equals(action))spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
           }
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.materialization());

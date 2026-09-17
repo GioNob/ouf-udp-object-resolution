@@ -27,7 +27,7 @@ public class GeometryGovernanceService {
   @Transactional public UUID decide(UUID issueId,UUID expectedCurrent,UUID chosen,String reason,
       TrustedHumanContext actor,ServingAuthorizationContext auth){
     actor.require("authority.override");auth.require("authority.override");
-    if(!actor.subject().equals(auth.subject())||!actor.tenantId().equals(auth.tenantId()))throw new SecurityException("UDP_AUTHORIZATION_CONTEXT_MISMATCH");
+    if(!Set.of("HUMAN","HUMAN_USER").contains(auth.principalType())||!actor.subject().equals(auth.subject())||!actor.tenantId().equals(auth.tenantId()))throw new SecurityException("UDP_AUTHORIZATION_CONTEXT_MISMATCH");
     if(reason==null||reason.isBlank()||reason.length()>2000)throw new IllegalArgumentException("UDP_REASON_REQUIRED");
     var issue=issue(issueId,true);UUID object=(UUID)issue.get("source_object_id");authorizeObject(object,auth);
     // Serialize decisions and current-view materialization on this object.
@@ -40,7 +40,7 @@ public class GeometryGovernanceService {
     if(!existing.isEmpty()){
       var old=existing.getFirst();if(chosen.equals(old.get("chosen_geometry_revision"))&&actor.subject().equals(old.get("actor_subject"))&&reason.equals(old.get("reason")))return (UUID)old.get("decision_id");throw conflict();
     }
-    UUID current=db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current where urban_object_id=:u for update").param("u",object).query(UUID.class).single();
+    UUID current=db.sql("select geometry_revision_id from ouf_udp.urban_geometry_role_current where urban_object_id=:u and geometry_role=:role for update").param("role",String.valueOf(evidence.getOrDefault("geometryRole","PRIMARY"))).param("u",object).query(UUID.class).single();
     if(!"OPEN".equals(issue.get("state"))||!previous.equals(current))throw conflict();
     UUID decision=UUID.randomUUID();
     db.sql("insert into ouf_udp.human_geometry_decision(decision_id,issue_id,urban_object_id,property_iri,policy_ref,previous_geometry_revision,candidate_geometry_revision,chosen_geometry_revision,actor_subject,authorization_decision_ref,reason,correlation_id) values(:d,:i,:u,:p,:policy,:old,:candidate,:chosen,:actor,:auth,:reason,:correlation)")
@@ -56,10 +56,10 @@ public class GeometryGovernanceService {
     if(db.sql("select 1 from ouf_udp.urban_object where urban_object_id=:u and tenant_id=:t and status='ACTIVE'").param("u",id).param("t",auth.tenantId()).query(Integer.class).optional().isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_OBJECT_NOT_FOUND");
   }
   private Map<String,Object> geometry(UUID revision,UUID object,ServingAuthorizationContext auth,String capability){
-    var row=db.sql("select g.access_label,h.source_id,h.ingestion_run_id,ST_AsGeoJSON(g.geometry) geojson,g.source_geometry_json::text original,g.evidence_json::text provenance from ouf_udp.urban_geometry g join ouf_udp.handoff_intake h on h.handoff_id=g.handoff_id where g.geometry_revision_id=:r and g.urban_object_id=:u").param("r",revision).param("u",object).query().singleRow();
+    var row=db.sql("select g.geometry_role,g.valid_from,g.valid_to,g.access_label,h.source_id,h.ingestion_run_id,ST_AsGeoJSON(g.geometry) geojson,g.source_geometry_json::text original,g.evidence_json::text provenance from ouf_udp.urban_geometry g join ouf_udp.handoff_intake h on h.handoff_id=g.handoff_id where g.geometry_revision_id=:r and g.urban_object_id=:u").param("r",revision).param("u",object).query().singleRow();
     var scope=Map.of("sourceRef",String.valueOf(row.get("source_id")),"jobRef",String.valueOf(row.get("ingestion_run_id")),"revisionRef",revision.toString(),"projection","geometry");
     String label=String.valueOf(row.get("access_label"));if(!auth.allowedDataLabels().contains(label))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_GEOMETRY_PROFILE_LABEL_DENIED");auth.requireResource(capability,"object",object,label,scope);auth.requireResource("urban.geometry.read","object",object,label,scope);
-    return Map.of("revisionId",revision,"sourceId",row.get("source_id"),"crs","EPSG:4326","geometry",read(String.valueOf(row.get("geojson"))),"original",read(String.valueOf(row.get("original"))),"provenance",read(String.valueOf(row.get("provenance"))));
+    return Map.of("role",row.get("geometry_role"),"revisionId",revision,"sourceId",row.get("source_id"),"crs","EPSG:4326","geometry",read(String.valueOf(row.get("geojson"))),"original",read(String.valueOf(row.get("original"))),"provenance",read(String.valueOf(row.get("provenance"))));
   }
   private Map<String,Object> read(String value){try{return json.readValue(value,new TypeReference<>(){});}catch(Exception e){throw new IllegalStateException("UDP_STORED_JSON_INVALID",e);}}
   private static String evidenceHash(UUID decision,UUID previous,UUID candidate,UUID chosen){try{return "sha256:"+HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest((decision+"|"+previous+"|"+candidate+"|"+chosen).getBytes(java.nio.charset.StandardCharsets.UTF_8)));}catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}}

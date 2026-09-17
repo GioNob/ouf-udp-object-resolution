@@ -128,6 +128,39 @@ class SpatialMaterializerRuntimeTest {
     }
   }
 
+  @Test void rolesRemainSeparateAndLateGeometryCannotReplaceCurrent(){
+    Fixture first=create("roles-a","asset","ASSET","ouf:Asset",polygon(0,0,1,1),"EPSG:4326");
+    var primary=new UdpPorts.SpatialProfile("policy://geometry/1",geometry,List.of());
+    spatial.materialize("roles-a",first.objectId,first.payload,primary);
+    UUID before=db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single();
+    var secondary=new UdpPorts.SpatialProfile("policy://geometry/secondary",new UdpPorts.GeometryRule("geometry","EPSG:4326",4326,"1","RESTRICTED",null,"FOOTPRINT"),List.of());
+    var other=handoff("roles-b","asset","ASSET",polygon(0,0,2,2),"EPSG:4326");intake.accept(other);
+    spatial.materialize("roles-b",first.objectId,other,secondary);
+    assertThat(db.sql("select count(*) from ouf_udp.urban_geometry_role_current").query(Long.class).single()).isEqualTo(2);
+    assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(before);
+    var authority=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("geometry","geometry","geometry","RESTRICTED",List.of())));
+    var late=handoff("late","asset","ASSET",polygon(0,0,3,3),"EPSG:4326");HandoffIntakeService.object(late,"sourceIdentity").put("observedAt","2026-09-11T00:00:00Z");intake.accept(late);
+    assertThat(spatial.currentAction("late",first.objectId,late,primary,authority,spatial.prepare("late",late,primary))).isEqualTo("HISTORICAL_ONLY");
+    assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(before);
+    var sameTime=handoff("same-time","asset","ASSET",polygon(0,0,4,4),"EPSG:4326");intake.accept(sameTime);
+    assertThat(spatial.currentAction("same-time",first.objectId,sameTime,primary,authority,spatial.prepare("same-time",sameTime,primary))).isEqualTo("REVIEW_REQUIRED");
+    var auth=new ServingAuthorizationContext("HUMAN","reader","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN","RESTRICTED"),"authz://roles","roles");
+    assertThat((List<?>)serving.current(first.objectId,auth).get("geometries")).hasSize(2);
+    var denied=new ServingAuthorizationContext("HUMAN","reader","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN"),"authz://roles","roles");
+    assertThat(serving.current(first.objectId,denied)).doesNotContainKeys("geometry","geometries");
+  }
+
+  @Test void geometryValidityIsPreservedAndNoncurrentIntervalsDoNotAdvance(){
+    Fixture first=create("valid-a","asset","ASSET","ouf:Asset",polygon(0,0,1,1),"EPSG:4326");
+    var profile=new UdpPorts.SpatialProfile("policy://geometry/1",geometry,List.of());spatial.materialize("valid-a",first.objectId,first.payload,profile);
+    var authority=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("geometry","geometry","geometry","RESTRICTED",List.of())));
+    var expired=handoff("expired","asset","ASSET",polygon(0,0,2,2),"EPSG:4326");var identity=HandoffIntakeService.object(expired,"sourceIdentity");identity.put("validFrom","2020-01-01T00:00:00Z");identity.put("validTo","2021-01-01T00:00:00Z");intake.accept(expired);
+    assertThat(spatial.currentAction("expired",first.objectId,expired,profile,authority,spatial.prepare("expired",expired,profile))).isEqualTo("HISTORICAL_ONLY");
+    assertThat(db.sql("select valid_to from ouf_udp.urban_geometry where handoff_id='expired'").query(java.time.OffsetDateTime.class).single()).isEqualTo(java.time.OffsetDateTime.parse("2021-01-01T00:00:00Z"));
+    var invalid=handoff("invalid-time","asset","ASSET",polygon(0,0,2,2),"EPSG:4326");HandoffIntakeService.object(invalid,"sourceIdentity").put("validFrom","2022-01-01T00:00:00Z");HandoffIntakeService.object(invalid,"sourceIdentity").put("validTo","2021-01-01T00:00:00Z");intake.accept(invalid);
+    assertThat(spatial.prepare("invalid-time",invalid,profile).status()).isEqualTo("SPATIAL_POLICY_INVALID");
+  }
+
   private void storeTarget(String handoff,String object,Object geometryValue){Fixture f=create(handoff,object,"AREA","ouf:Area",geometryValue,"EPSG:4326");spatial.materialize(handoff,f.objectId,f.payload,new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of()));}
   private UdpPorts.SpatialProfile profile(String predicate){return new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of(new UdpPorts.SpatialRelationshipRule("ouf:insideArea","ouf:Area",predicate,"QUARANTINE_RELATION",null,null,null,"RESTRICTED",false)));}
   private Fixture create(String handoff,String object,String type,String canonicalType,Object geometryValue,String crs){Map<String,Object> payload=handoff(handoff,object,type,geometryValue,crs);intake.accept(payload);var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1",canonicalType,"identity","identity");UUID id=resolution.resolve(handoff,payload,rp).targetUrbanObjectId();canonical.materialize(handoff,id,payload,properties);return new Fixture(id,payload);}

@@ -1,0 +1,11 @@
+alter table ouf_udp.urban_geometry add column geometry_role text not null default 'PRIMARY';
+alter table ouf_udp.urban_geometry add column valid_from timestamptz;
+alter table ouf_udp.urban_geometry add column valid_to timestamptz;
+alter table ouf_udp.urban_geometry add constraint geometry_validity_nonempty check(valid_from is null or valid_to is null or valid_from < valid_to);
+create table ouf_udp.urban_geometry_role_current(
+  urban_object_id uuid not null references ouf_udp.urban_object,
+  geometry_role text not null,
+  geometry_revision_id uuid not null references ouf_udp.urban_geometry,
+  primary key(urban_object_id,geometry_role)
+);
+insert into ouf_udp.urban_geometry_role_current select urban_object_id,'PRIMARY',geometry_revision_id from ouf_udp.urban_geometry_current;

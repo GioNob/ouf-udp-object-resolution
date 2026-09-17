@@ -18,7 +18,9 @@ public final class UdpPorts {
   }
   public record RelationshipRule(String sourceField,String relationIri,String targetCanonicalType,String targetPropertyIri,String resolutionStrategy,String onNoMatch,String accessLabel,boolean selfLoopAllowed){}
   public record RelationshipProfile(String policyRef,List<RelationshipRule> relationships) {public RelationshipProfile{relationships=List.copyOf(relationships);}}
-  public record GeometryRule(String sourceField,String expectedSourceCrs,int canonicalSrid,String normalizationVersion,String accessLabel,CrsPolicy crsPolicy){
+  public record GeometryRule(String sourceField,String expectedSourceCrs,int canonicalSrid,String normalizationVersion,String accessLabel,CrsPolicy crsPolicy,String geometryRole){
+    public GeometryRule {geometryRole=geometryRole==null?"PRIMARY":geometryRole;if(!geometryRole.matches("[A-Z][A-Z0-9_]{0,63}"))throw new IllegalArgumentException("UDP_GEOMETRY_ROLE_INVALID");}
+    public GeometryRule(String sourceField,String expectedSourceCrs,int canonicalSrid,String normalizationVersion,String accessLabel,CrsPolicy crsPolicy){this(sourceField,expectedSourceCrs,canonicalSrid,normalizationVersion,accessLabel,crsPolicy,"PRIMARY");}
     public GeometryRule(String sourceField,String expectedSourceCrs,int canonicalSrid,String normalizationVersion,String accessLabel){this(sourceField,expectedSourceCrs,canonicalSrid,normalizationVersion,accessLabel,null);}
   }
   public record CrsPolicy(String sourceAxisOrder,String mismatchAction,CrsOperation sourceOperation,CrsOperation servingOperation){}
