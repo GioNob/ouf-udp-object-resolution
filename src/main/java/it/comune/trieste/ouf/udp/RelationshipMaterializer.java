@@ -25,9 +25,11 @@ public class RelationshipMaterializer {
       for(Object sourceValue:values(payload.get(rule.sourceField()))){
         if(++valueCount>256)throw new IllegalArgumentException("UDP_RELATION_LIMIT");
         String valueHash=hash(sourceValue);UUID contribution=contribution(handoffId,sourceObjectId,handoff,profile,rule,sourceValue,valueHash);
+        if(db.sql("select count(*) from ouf_udp.relationship_issue where contribution_id=:c and reason_code='MULTIPLE_MATCHES' and state='OPEN'").param("c",contribution).query(Long.class).single()>0){quarantined++;continue;}
         List<UUID> candidates=candidates(sourceObjectId,rule,sourceValue);
         if(candidates.size()!=1){String reason=candidates.isEmpty()?"NO_MATCH":"MULTIPLE_MATCHES";if(candidates.isEmpty()&&!"QUARANTINE_RELATION".equals(rule.onNoMatch())){skipped++;continue;}issue(handoffId,contribution,sourceObjectId,rule,reason,candidates,valueHash);quarantined++;continue;}
         UUID target=candidates.getFirst();if(target.equals(sourceObjectId)&&!rule.selfLoopAllowed()){issue(handoffId,contribution,sourceObjectId,rule,"SELF_LOOP_NOT_ALLOWED",candidates,valueHash);quarantined++;continue;}
+        db.sql("update ouf_udp.urban_relationship set status='SUPERSEDED' where source_object_id=:s and relation_iri=:r and target_object_id<>:t and current_revision_id in(select relationship_revision_id from ouf_udp.relationship_revision where contribution_id=:c)").param("s",sourceObjectId).param("r",rule.relationIri()).param("t",target).param("c",contribution).update();
         edge(contribution,sourceObjectId,target,rule,handoff,valueHash);db.sql("update ouf_udp.relationship_issue set state='RESOLVED' where contribution_id=:c and state='OPEN'").param("c",contribution).update();matched++;
       }
     }

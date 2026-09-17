@@ -32,6 +32,15 @@ class GovernedServingRuntimeTest {
 
   @Test void restrictedRelationshipIsOmittedWithoutDegreeOrCursorLeak(){Fixture target=materialize("target-h","target","Target","s",null);Fixture source=materialize("source-h","source","Source","s","Target");var profile=new UdpPorts.RelationshipProfile("policy://relation/1",List.of(new UdpPorts.RelationshipRule("ref","ouf:linkedTo","ouf:Asset","ouf:name","CANONICAL_KEY","QUARANTINE_RELATION","RESTRICTED",false)));relationship.materialize("source-h",source.objectId,source.payload,profile);var page=serving.relationships(source.objectId,10,null,open);assertThat(page.items()).isEmpty();assertThat(page.nextCursor()).isNull();assertThat(db.sql("select count(*) from ouf_udp.urban_relationship where target_object_id=:t").param("t",target.objectId).query(Long.class).single()).isOne();}
 
+  @Test void inboundRelationshipsUseSameEdgeAndDoNotExposeRestrictedEdges(){
+    Fixture target=materialize("inbound-target","it","Target","s",null);Fixture source=materialize("inbound-source","is","Source","s","Target");
+    var profile=new UdpPorts.RelationshipProfile("policy://relation/1",List.of(new UdpPorts.RelationshipRule("ref","ouf:linkedTo","ouf:Asset","ouf:name","CANONICAL_KEY","QUARANTINE_RELATION","OPEN",false)));
+    relationship.materialize("inbound-source",source.objectId,source.payload,profile);
+    var outbound=serving.relationships(source.objectId,10,null,open);var inbound=serving.relationships(target.objectId,10,null,"INBOUND",open);
+    assertThat(inbound.items()).hasSize(1);assertThat(inbound.items().getFirst().get("relationship_id")).isEqualTo(outbound.items().getFirst().get("relationship_id"));assertThat(inbound.items().getFirst().get("source_object_id")).isEqualTo(source.objectId);
+    assertThatThrownBy(()->serving.relationships(target.objectId,10,null,"BOTH",open)).hasMessage("UDP_RELATION_DIRECTION_INVALID");
+  }
+
   @Test void searchRequiresIndexedExactTypeAndBoundedPage(){assertThatThrownBy(()->serving.search("*",10,null,open)).isInstanceOf(IllegalArgumentException.class);assertThatThrownBy(()->serving.search("ouf:Asset",101,null,open)).hasMessageContaining("UDP_PAGE_SIZE_OUT_OF_RANGE");}
 
   @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{
