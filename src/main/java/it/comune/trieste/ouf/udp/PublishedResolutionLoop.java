@@ -30,12 +30,20 @@ public class PublishedResolutionLoop {
         db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))").param("key","resolution:"+profiles.resolution().canonicalType()).query().singleRow();
         GovernedCrsTransform.Result geometry=null;
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
-        var decision=resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution());
+        var decision=resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution(),geometry);
         if(Set.of("MATCH","NEW_OBJECT").contains(decision.outcome())){
-          if(profiles.spatial()!=null)spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
+          db.sql("select urban_object_id from ouf_udp.urban_object where urban_object_id=:u for update").param("u",decision.targetUrbanObjectId()).query(UUID.class).single();
+          if(profiles.spatial()!=null){
+            String action=spatial.currentAction(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),profiles.materialization(),geometry);
+            if("REVIEW_REQUIRED".equals(action)){jobs.quarantine(claim,"UDP_SPATIAL_AUTHORITY_CONFLICT");return;}
+            if("FUTURE".equals(action)){jobs.awaitValidity(claim,java.time.OffsetDateTime.parse(String.valueOf(HandoffIntakeService.object(claim.payload(),"sourceIdentity").get("validFrom"))));return;}
+            if("HISTORICAL_ONLY".equals(action)){jobs.complete(claim);return;}
+            if("ADVANCE".equals(action))spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
+          }
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.materialization());
           if(relationships!=null)relationships.accept(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.relationships());
         }
+        if("REVIEW_REQUIRED".equals(decision.outcome())){jobs.quarantine(claim,"UDP_IDENTITY_REVIEW_REQUIRED");return;}
         jobs.complete(claim);
       });
     }catch(RuntimeException failure){if(!"UDP_RESOLUTION_LEASE_LOST".equals(failure.getMessage()))jobs.fail(claim,failure.getMessage());LOG.warn("UDP_AUTOMATIC_RESOLUTION_INCOMPLETE");}

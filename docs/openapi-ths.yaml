@@ -87,3 +87,77 @@ paths:
       x-ouf-mcp-eligible: false
       x-ouf-trusted-human-only: true
       responses: {'200': {description: Human decision recorded}}
+  /api/udp/v1/governance/geometry/issues/{id}:
+    get:
+      operationId: reviewGeometryConflict
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      description: Returns both geometries only after tenant, source and data-label authorization, including urban.geometry.read. The initial Gateway profile permits OPEN/ANONYMOUS only, even for more privileged principals. Coordinates are in EPSG:4326; original envelopes and provenance are retained.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Exact current and candidate revisions with permitted actions}
+        '403': {description: Evidence is not authorized}
+        '404': {description: Issue or active tenant object is unavailable}
+  /api/udp/v1/governance/geometry/issues/{id}/decisions:
+    post:
+      operationId: decideGeometryConflict
+      x-ouf-capability: authority.override
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Requires the human session cookie and X-OUF-CSRF from the review GET. Human choice applies to this exact pair and policy. Atomically records immutable evidence and resumes the paused handoff. It does not create a global source priority.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedCurrentRevision, chosenRevision, reason]
+              properties:
+                expectedCurrentRevision: {type: string, format: uuid}
+                chosenRevision: {type: string, format: uuid}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Immutable decision reference; an identical authorized retry returns the same reference}
+        '403': {description: Human capability or access to either geometry is missing}
+        '409': {description: Stale geometry, invalid selection or conflicting repeated decision}
+  /api/udp/v1/governance/properties/conflicts/{id}:
+    get:
+      operationId: reviewPropertyConflict
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      description: Authorize every candidate and return the exact policy/evidence snapshot. Initial exposure is OPEN/ANONYMOUS only. Verified humans also receive a session-bound csrfToken; machine callers never receive it.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Current revision and permitted scalar candidates with provenance}
+        '403': {description: At least one candidate is not authorized}
+        '404': {description: Conflict or active tenant object unavailable}
+        '409': {description: Geometry must use the geometry review workflow}
+  /api/udp/v1/governance/properties/conflicts/{id}/decisions:
+    post:
+      operationId: decidePropertyConflict
+      x-ouf-capability: authority.override
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Requires the human session cookie and X-OUF-CSRF from the review GET. Validates exact current revision, candidates, evidence and policy; appends an immutable decision and a canonical revision atomically. Unrelated properties are preserved.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-OUF-CSRF, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedCurrentRevision, chosenContribution, reason]
+              properties:
+                expectedCurrentRevision: {type: string, format: uuid}
+                chosenContribution: {type: string, format: uuid}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Immutable decision reference; exact authorized retry is idempotent}
+        '403': {description: Human authority, classification, session or CSRF check failed}
+        '409': {description: Evidence changed or choice no longer eligible}
