@@ -14,3 +14,11 @@ create view ouf_udp.urban_geometry_active as
 select c.* from ouf_udp.urban_geometry_current c join ouf_udp.urban_geometry g using(geometry_revision_id)
 where (g.valid_from is null or g.valid_from<=transaction_timestamp())
   and (g.valid_to is null or g.valid_to>transaction_timestamp());
+create table ouf_udp.geometry_observation(
+  handoff_id text not null references ouf_udp.handoff_intake,
+  geometry_revision_id uuid not null references ouf_udp.urban_geometry,
+  observed_at timestamptz,
+  primary key(handoff_id,geometry_revision_id)
+);
+create index geometry_observation_time_idx on ouf_udp.geometry_observation(geometry_revision_id,observed_at desc);
+create trigger geometry_observation_append_only before update or delete on ouf_udp.geometry_observation for each row execute function ouf_udp.reject_append_only_mutation();

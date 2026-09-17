@@ -70,12 +70,12 @@ class CanonicalMaterializerRuntimeTest {
   }
 
   @Test void humanPropertyChoiceIsAuthorizedImmutableAndScopedToExactEvidence(){
-    var profile=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    var profile=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of()),new UdpPorts.PropertyRule("surface","ouf:surface","number","OPEN",List.of())));
     Fixture a=resolved("human-a","source-a","a","R1","First",1);materializer.materialize("human-a",a.objectId,a.payload,profile);
     Fixture b=resolved("human-b","source-b","b","R1","Second",1);materializer.materialize("human-b",b.objectId,b.payload,profile);
     UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
     UUID before=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
-    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='human-b'").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='human-b' and property_iri='ouf:name'").query(UUID.class).single();
     var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
     var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
     var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
@@ -91,6 +91,7 @@ class CanonicalMaterializerRuntimeTest {
     assertThat(governance.decide(issue,before,chosen,"Verified",actor,auth)).isEqualTo(decision);
     assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
     assertThat(db.sql("select authority_state::text from ouf_udp.urban_object_current_state").query(String.class).single()).contains("property-decision://"+decision);
+    assertThat(db.sql("select count(*) from ouf_udp.property_value where revision_id=(select current_revision_id from ouf_udp.urban_object)").query(Long.class).single()).isEqualTo(2);
     assertThat(db.sql("select count(*) from ouf_udp.materialization_observation").query(Long.class).single()).isEqualTo(2);
     assertThatThrownBy(()->db.sql("update ouf_udp.human_property_decision set reason='changed'").update()).hasStackTraceContaining("append-only");
     Fixture repeat=resolved("human-repeat","source-b","b","R1","Second",1);materializer.materialize("human-repeat",repeat.objectId,repeat.payload,profile);

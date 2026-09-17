@@ -142,7 +142,11 @@ class SpatialMaterializerRuntimeTest {
     var late=handoff("late","asset","ASSET",polygon(0,0,3,3),"EPSG:4326");HandoffIntakeService.object(late,"sourceIdentity").put("observedAt","2026-09-11T00:00:00Z");intake.accept(late);
     assertThat(spatial.currentAction("late",first.objectId,late,primary,authority,spatial.prepare("late",late,primary))).isEqualTo("HISTORICAL_ONLY");
     assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(before);
-    var sameTime=handoff("same-time","asset","ASSET",polygon(0,0,4,4),"EPSG:4326");intake.accept(sameTime);
+    var repeated=handoff("repeat-shape","asset","ASSET",polygon(0,0,1,1),"EPSG:4326");HandoffIntakeService.object(repeated,"sourceIdentity").put("observedAt","2026-09-14T00:00:00Z");intake.accept(repeated);
+    assertThat(spatial.currentAction("repeat-shape",first.objectId,repeated,primary,authority,spatial.prepare("repeat-shape",repeated,primary))).isEqualTo("ADVANCE");spatial.materialize("repeat-shape",first.objectId,repeated,primary);
+    var intermediate=handoff("intermediate","asset","ASSET",polygon(0,0,5,5),"EPSG:4326");HandoffIntakeService.object(intermediate,"sourceIdentity").put("observedAt","2026-09-13T00:00:00Z");intake.accept(intermediate);
+    assertThat(spatial.currentAction("intermediate",first.objectId,intermediate,primary,authority,spatial.prepare("intermediate",intermediate,primary))).isEqualTo("HISTORICAL_ONLY");
+    var sameTime=handoff("same-time","asset","ASSET",polygon(0,0,4,4),"EPSG:4326");HandoffIntakeService.object(sameTime,"sourceIdentity").put("observedAt","2026-09-14T00:00:00Z");intake.accept(sameTime);
     assertThat(spatial.currentAction("same-time",first.objectId,sameTime,primary,authority,spatial.prepare("same-time",sameTime,primary))).isEqualTo("REVIEW_REQUIRED");
     var auth=new ServingAuthorizationContext("HUMAN","reader","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN","RESTRICTED"),"authz://roles","roles");
     assertThat((List<?>)serving.current(first.objectId,auth).get("geometries")).hasSize(2);
