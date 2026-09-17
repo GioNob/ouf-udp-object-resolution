@@ -10,7 +10,7 @@ paths:
   /api/udp/v1/objects/related-search:
     post: {operationId: relatedSearch, x-ouf-capability: urban.object.related_search, x-ouf-max-target-types: 10, x-ouf-max-results: 200, x-ouf-mcp-eligible: true, responses: {'200': {description: Typed fixed-join cross-domain correlation}}}
   /api/udp/v1/objects/{id}/relationships:
-    get: {operationId: readRelationships, x-ouf-capability: urban.relationship.read, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized edges without hidden degree}}}
+    get: {parameters: [{name: direction, in: query, required: false, schema: {type: string, enum: [OUTBOUND, INBOUND], default: OUTBOUND}}], operationId: readRelationships, x-ouf-capability: urban.relationship.read, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized edges without hidden degree}}}
   /api/udp/v1/objects/{id}/lineage:
     get: {operationId: readObjectLineage, x-ouf-capability: lineage.object.read, x-ouf-max-results: 200, x-ouf-mcp-eligible: true, responses: {'200': {description: Redacted lineage}}}
   /api/udp/v1/graph/neighbors:

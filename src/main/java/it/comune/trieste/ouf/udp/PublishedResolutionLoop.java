@@ -13,8 +13,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class PublishedResolutionLoop {
   private static final Logger LOG=LoggerFactory.getLogger(PublishedResolutionLoop.class);
   private final ResolutionRepository jobs;private final PublishedRuntimeConfiguration configuration;private final MaterializationReferenceGate gate;private final ObjectResolutionService resolution;private final CanonicalMaterializer materializer;private final SpatialMaterializer spatial;private final JdbcClient db;private final TransactionTemplate tx;
+  private final RelationshipReconciliation relationships;
   private final String worker="published-resolution-"+UUID.randomUUID();
-  public PublishedResolutionLoop(ResolutionRepository jobs,PublishedRuntimeConfiguration configuration,MaterializationReferenceGate gate,ObjectResolutionService resolution,CanonicalMaterializer materializer,SpatialMaterializer spatial,JdbcClient db,TransactionTemplate tx){this.jobs=jobs;this.configuration=configuration;this.gate=gate;this.resolution=resolution;this.materializer=materializer;this.spatial=spatial;this.db=db;this.tx=tx;}
+  @org.springframework.beans.factory.annotation.Autowired
+  public PublishedResolutionLoop(ResolutionRepository jobs,PublishedRuntimeConfiguration configuration,MaterializationReferenceGate gate,ObjectResolutionService resolution,CanonicalMaterializer materializer,SpatialMaterializer spatial,JdbcClient db,TransactionTemplate tx,RelationshipReconciliation relationships){this.relationships=relationships;this.jobs=jobs;this.configuration=configuration;this.gate=gate;this.resolution=resolution;this.materializer=materializer;this.spatial=spatial;this.db=db;this.tx=tx;}
+  public PublishedResolutionLoop(ResolutionRepository jobs,PublishedRuntimeConfiguration configuration,MaterializationReferenceGate gate,ObjectResolutionService resolution,CanonicalMaterializer materializer,SpatialMaterializer spatial,JdbcClient db,TransactionTemplate tx){this(jobs,configuration,gate,resolution,materializer,spatial,db,tx,null);}
   @Scheduled(fixedDelayString="${ouf.udp.execution.poll-delay-ms:1000}",initialDelayString="${ouf.udp.execution.initial-delay-ms:1000}")
   public void tick(){
     var claimed=jobs.claim(worker,Duration.ofMinutes(2));if(claimed.isEmpty())return;var claim=claimed.orElseThrow();
@@ -31,6 +34,7 @@ public class PublishedResolutionLoop {
         if(Set.of("MATCH","NEW_OBJECT").contains(decision.outcome())){
           if(profiles.spatial()!=null)spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.materialization());
+          if(relationships!=null)relationships.accept(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.relationships());
         }
         jobs.complete(claim);
       });
