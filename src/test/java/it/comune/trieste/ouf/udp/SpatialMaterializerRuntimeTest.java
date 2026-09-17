@@ -81,6 +81,53 @@ class SpatialMaterializerRuntimeTest {
     assertThat(spatial.currentAction("authority-b",first.objectId,next,profile,explicit,transformed)).isEqualTo("ADVANCE");
   }
 
+  @Test void humanGeometryChoiceResumesJobAndSurvivesReimportWithoutBecomingAGlobalRule(){
+    for(boolean accept:List.of(false,true)){
+      clean();
+      var authority=new UdpPorts.MaterializationProfile("policy://authority/geometry-review",List.of(new UdpPorts.PropertyRule("identity","identity","string","OPEN",List.of()),new UdpPorts.PropertyRule("geometry","geometry","geometry","RESTRICTED",List.of())));
+      var profile=new UdpPorts.SpatialProfile("policy://geometry/1",geometry,List.of());
+      var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","identity","identity");
+      var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+      org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+      org.mockito.Mockito.when(config.resolve("bundle://1","ASSET")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),rp,authority,profile));
+      var loop=new PublishedResolutionLoop(jobs,config,gate,resolution,canonical,spatial,db,new org.springframework.transaction.support.TransactionTemplate(transactions));
+      intake.accept(handoff("human-a","asset","ASSET",polygon(0,0,1,1),"EPSG:4326"));loop.tick();
+      UUID object=db.sql("select urban_object_id from ouf_udp.urban_object").query(UUID.class).single();
+      UUID before=db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single();
+      var next=handoff("human-b","asset","ASSET",polygon(0,0,2,2),"EPSG:4326");HandoffIntakeService.object(next,"sourceIdentity").put("sourceId","survey");intake.accept(next);loop.tick();
+      assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='human-b'").query(String.class).single()).isEqualTo("QUARANTINED");
+      UUID issue=db.sql("select issue_id from ouf_udp.spatial_resolution_issue").query(UUID.class).single();
+      UUID candidate=db.sql("select geometry_revision_id from ouf_udp.urban_geometry where handoff_id='human-b'").query(UUID.class).single();
+      var caps=Set.of("authority.override","resolution.issue.read","urban.geometry.read");
+      var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+      var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN","RESTRICTED"),"authz://review","review-1");
+      var governance=new GeometryGovernanceService(db,json);
+      assertThat(governance.review(issue,auth)).containsKeys("current","candidate","actions");
+      var denied=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+      assertThatThrownBy(()->governance.review(issue,denied)).hasMessageContaining("403");
+      UUID chosen=accept?candidate:before;
+      assertThatThrownBy(()->governance.decide(issue,UUID.randomUUID(),chosen,"inspected",actor,auth)).hasMessageContaining("409");
+      var machine=new TrustedHumanContext("SERVICE_IDENTITY","operator","default",caps,"authz://review","review-1");
+      assertThatThrownBy(()->governance.decide(issue,before,chosen,"inspected",machine,auth)).isInstanceOf(SecurityException.class);
+      // Exercise the same transaction boundary as the Spring-managed API service.
+      var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
+      UUID decision=tx.execute(status->governance.decide(issue,before,chosen,"inspected",actor,auth));
+      assertThat(tx.execute(status->governance.decide(issue,before,chosen,"inspected",actor,auth))).isEqualTo(decision);
+      loop.tick();assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='human-b'").query(String.class).single()).isEqualTo("SUCCEEDED");
+      assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(chosen);
+      assertThat(db.sql("select canonical_payload->'geometry' = g.source_geometry_json from ouf_udp.urban_object_current_state c join ouf_udp.urban_geometry g on g.geometry_revision_id=:r where c.urban_object_id=:u").param("r",chosen).param("u",object).query(Boolean.class).single()).isTrue();
+      for(var source:List.of("spatial-source","survey")){
+        var reload=handoff("reload-"+source,"asset","ASSET",source.equals("survey")?polygon(0,0,2,2):polygon(0,0,1,1),"EPSG:4326");HandoffIntakeService.object(reload,"sourceIdentity").put("sourceId",source);intake.accept(reload);loop.tick();
+      }
+      assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(chosen);
+      assertThat(db.sql("select count(*) from ouf_udp.human_geometry_decision").query(Long.class).single()).isOne();
+      assertThat(db.sql("select count(*) from ouf_udp.property_conflict").query(Long.class).single()).isZero();
+      assertThatThrownBy(()->db.sql("delete from ouf_udp.human_geometry_decision").update()).hasStackTraceContaining("append-only");
+      var changed=handoff("new-shape","asset","ASSET",polygon(0,0,3,3),"EPSG:4326");HandoffIntakeService.object(changed,"sourceIdentity").put("sourceId",accept?"spatial-source":"survey");intake.accept(changed);loop.tick();
+      assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='new-shape'").query(String.class).single()).isEqualTo("QUARANTINED");
+    }
+  }
+
   private void storeTarget(String handoff,String object,Object geometryValue){Fixture f=create(handoff,object,"AREA","ouf:Area",geometryValue,"EPSG:4326");spatial.materialize(handoff,f.objectId,f.payload,new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of()));}
   private UdpPorts.SpatialProfile profile(String predicate){return new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of(new UdpPorts.SpatialRelationshipRule("ouf:insideArea","ouf:Area",predicate,"QUARANTINE_RELATION",null,null,null,"RESTRICTED",false)));}
   private Fixture create(String handoff,String object,String type,String canonicalType,Object geometryValue,String crs){Map<String,Object> payload=handoff(handoff,object,type,geometryValue,crs);intake.accept(payload);var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1",canonicalType,"identity","identity");UUID id=resolution.resolve(handoff,payload,rp).targetUrbanObjectId();canonical.materialize(handoff,id,payload,properties);return new Fixture(id,payload);}

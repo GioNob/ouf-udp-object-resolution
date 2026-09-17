@@ -34,7 +34,7 @@ public class SpatialMaterializer {
   }
   private UUID storeGeometry(String handoff,UUID object,Map<String,Object> payload,UdpPorts.SpatialProfile profile,Map<?,?> original,GovernedCrsTransform.Result transformed){return storeGeometry(handoff,object,payload,profile,original,transformed,true);}
   private UUID storeGeometry(String handoff,UUID object,Map<String,Object> payload,UdpPorts.SpatialProfile profile,Map<?,?> original,GovernedCrsTransform.Result transformed,boolean advance){
-    String hash=hash(Map.of("canonicalEwkb",transformed.canonicalEwkb(),"source",original,"transformation",transformed.evidence(),"contractRefs",payload.get("contractRefs"),"accessLabel",profile.geometry().accessLabel()));
+    String hash=hash(Map.of("canonicalEwkb",transformed.canonicalEwkb(),"source",original,"transformation",transformed.evidence(),"contractRefs",payload.get("contractRefs"),"accessLabel",profile.geometry().accessLabel(),"sourceIdentity",Map.of("sourceId",HandoffIntakeService.object(payload,"sourceIdentity").get("sourceId"),"typeCode",HandoffIntakeService.object(payload,"sourceIdentity").get("typeCode"),"sourceObjectId",HandoffIntakeService.object(payload,"sourceIdentity").get("sourceObjectId"))));
     List<UUID> old=db.sql("select geometry_revision_id from ouf_udp.urban_geometry where urban_object_id=:u and geometry_hash=:h and normalization_version=:n").param("u",object).param("h",hash).param("n",profile.geometry().normalizationVersion()).query(UUID.class).list();
     UUID id;if(old.isEmpty()){
       id=UUID.randomUUID();Map<String,Object> evidence=new LinkedHashMap<>(transformed.evidence());evidence.put("handoffRef","handoff://"+handoff);evidence.put("lineageRef",payload.get("lineageId"));evidence.put("normalizationVersion",profile.geometry().normalizationVersion());evidence.put("contractRefs",payload.get("contractRefs"));evidence.put("policyRef",profile.policyRef());
@@ -55,6 +55,9 @@ public class SpatialMaterializer {
     if(incoming<previous)return "ADVANCE";
     Map<?,?> original=(Map<?,?>)HandoffIntakeService.object(payload,"canonicalPayload").get(spatial.geometry().sourceField());
     UUID candidate=storeGeometry(handoff,object,payload,spatial,original,transformed,false);
+    var human=db.sql("select chosen_geometry_revision from ouf_udp.human_geometry_decision where urban_object_id=:u and policy_ref=:p and ((previous_geometry_revision=:old and candidate_geometry_revision=:candidate) or (previous_geometry_revision=:candidate and candidate_geometry_revision=:old)) order by decided_at desc limit 1")
+      .param("u",object).param("p",materialization.policyRef()).param("old",old.get("geometry_revision_id")).param("candidate",candidate).query(UUID.class).optional();
+    if(human.isPresent())return human.get().equals(candidate)?"ADVANCE":"RETAIN";
     if(incoming>previous)return "RETAIN";
     if(Boolean.TRUE.equals(old.get("equivalent"))&&spatial.geometry().accessLabel().equals(old.get("access_label")))return "RETAIN";
     issue(handoff,object,null,"SPATIAL_AUTHORITY_CONFLICT",List.of(object),Map.of("policyRef",materialization.policyRef(),"currentGeometryRevision",old.get("geometry_revision_id"),"candidateGeometryRevision",candidate,"geometryProperty",rule.propertyIri(),"comparison","TOPOLOGICAL_EQUALS_IN_SERVING_CRS","action","REVIEW_REQUIRED"));
