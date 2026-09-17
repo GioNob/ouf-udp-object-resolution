@@ -87,3 +87,39 @@ paths:
       x-ouf-mcp-eligible: false
       x-ouf-trusted-human-only: true
       responses: {'200': {description: Human decision recorded}}
+  /api/udp/v1/governance/geometry/issues/{id}:
+    get:
+      operationId: reviewGeometryConflict
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      description: Returns both geometries only after tenant, source and data-label authorization, including urban.geometry.read. Coordinates are in EPSG:4326; original envelopes and provenance are retained.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Exact current and candidate revisions with permitted actions}
+        '403': {description: Evidence is not authorized}
+        '404': {description: Issue or active tenant object is unavailable}
+  /api/udp/v1/governance/geometry/issues/{id}/decisions:
+    post:
+      operationId: decideGeometryConflict
+      x-ouf-capability: authority.override
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Human choice applies to this exact pair and policy. Atomically records immutable evidence and resumes the paused handoff. It does not create a global source priority.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedCurrentRevision, chosenRevision, reason]
+              properties:
+                expectedCurrentRevision: {type: string, format: uuid}
+                chosenRevision: {type: string, format: uuid}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Immutable decision reference; an identical authorized retry returns the same reference}
+        '403': {description: Human capability or access to either geometry is missing}
+        '409': {description: Stale geometry, invalid selection or conflicting repeated decision}

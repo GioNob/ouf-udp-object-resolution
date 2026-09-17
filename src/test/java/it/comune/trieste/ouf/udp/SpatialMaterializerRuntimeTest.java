@@ -112,7 +112,7 @@ class SpatialMaterializerRuntimeTest {
       // Exercise the same transaction boundary as the Spring-managed API service.
       var tx=new org.springframework.transaction.support.TransactionTemplate(transactions);
       UUID decision=tx.execute(status->governance.decide(issue,before,chosen,"inspected",actor,auth));
-      assertThat(tx.execute(status->governance.decide(issue,before,chosen,"inspected",actor,auth))).isEqualTo(decision);
+      UUID retried=tx.execute(status->governance.decide(issue,before,chosen,"inspected",actor,auth));assertThat(retried).isEqualTo(decision);
       loop.tick();assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='human-b'").query(String.class).single()).isEqualTo("SUCCEEDED");
       assertThat(db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single()).isEqualTo(chosen);
       assertThat(db.sql("select canonical_payload->'geometry' = g.source_geometry_json from ouf_udp.urban_object_current_state c join ouf_udp.urban_geometry g on g.geometry_revision_id=:r where c.urban_object_id=:u").param("r",chosen).param("u",object).query(Boolean.class).single()).isTrue();
