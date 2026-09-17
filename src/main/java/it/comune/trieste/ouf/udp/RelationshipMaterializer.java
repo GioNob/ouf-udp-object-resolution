@@ -18,10 +18,12 @@ public class RelationshipMaterializer {
   @Transactional public Result materialize(String handoffId,UUID sourceObjectId,Map<String,Object> handoff,UdpPorts.RelationshipProfile profile){
     Map<String,Object> payload=HandoffIntakeService.object(handoff,"canonicalPayload");int matched=0,quarantined=0,skipped=0;
     if(profile.relationships().size()>64)throw new IllegalArgumentException("UDP_RELATION_LIMIT");
+    int valueCount=0;
     for(var rule:profile.relationships()){
       if(!"CANONICAL_KEY".equals(rule.resolutionStrategy()))throw new IllegalArgumentException("UDP_RELATION_STRATEGY_UNSUPPORTED");
       if(!payload.containsKey(rule.sourceField()))continue;
       for(Object sourceValue:values(payload.get(rule.sourceField()))){
+        if(++valueCount>256)throw new IllegalArgumentException("UDP_RELATION_LIMIT");
         String valueHash=hash(sourceValue);UUID contribution=contribution(handoffId,sourceObjectId,handoff,profile,rule,sourceValue,valueHash);
         List<UUID> candidates=candidates(sourceObjectId,rule,sourceValue);
         if(candidates.size()!=1){String reason=candidates.isEmpty()?"NO_MATCH":"MULTIPLE_MATCHES";if(candidates.isEmpty()&&!"QUARANTINE_RELATION".equals(rule.onNoMatch())){skipped++;continue;}issue(handoffId,contribution,sourceObjectId,rule,reason,candidates,valueHash);quarantined++;continue;}

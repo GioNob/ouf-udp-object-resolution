@@ -61,7 +61,7 @@ public class PublishedRuntimeConfiguration {
         boolean bound=false;
         for(Object raw:declared){if(!(raw instanceof Map<?,?> d))throw invalid();
           var mapped=mappings.stream().filter(m->m instanceof Map<?,?> mm&&Objects.equals(mm.get("sourceField"),d.get("sourceField"))&&Objects.equals(mm.get("targetPropertyIri"),rule.sourceField())).findFirst();
-          if(mapped.isPresent()&&Objects.equals(d.get("relationIri"),rule.relationIri())&&Objects.equals(d.get("targetClassIri"),rule.targetCanonicalType())&&d.get("resolution") instanceof Map<?,?> r&&Objects.equals(r.get("strategy"),rule.resolutionStrategy())&&Objects.equals(r.get("onNoMatch"),rule.onNoMatch())&&"REVIEW_REQUIRED".equals(r.get("onMultipleMatches"))&&strategies.contains(d.get("mappingId")))bound=true;
+          if(mapped.isPresent()&&Objects.equals(d.get("relationIri"),rule.relationIri())&&Objects.equals(d.get("targetClassIri"),rule.targetCanonicalType())&&d.get("resolution") instanceof Map<?,?> r&&Objects.equals(r.get("strategy"),rule.resolutionStrategy())&&Objects.equals(r.get("onNoMatch"),rule.onNoMatch())&&Objects.equals(r.get("targetKeyProperty"),rule.targetPropertyIri())&&"REVIEW_REQUIRED".equals(r.get("onMultipleMatches"))&&strategies.contains(d.get("mappingId")))bound=true;
         }
         if(!bound)throw invalid();
       }

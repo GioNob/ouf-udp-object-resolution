@@ -16,6 +16,7 @@ public class RelationshipReconciliation {
     lock();
     var identity=HandoffIntakeService.object(payload,"sourceIdentity");
     String binding=write(List.of(identity.get("sourceId"),identity.get("typeCode"),identity.get("sourceObjectId")));
+    if(profile==null&&db.sql("select count(*) from ouf_udp.relationship_reconciliation where binding_key=:b and active").param("b",binding).query(Long.class).single()==0)return;
     if(!db.sql("select task_id from ouf_udp.relationship_reconciliation where handoff_id=:h and source_object_id=:s").param("h",handoff).param("s",source).query(UUID.class).list().isEmpty())return;
     // A delayed older observation must not restore a superseded edge or policy.
     long newer=db.sql("select count(*) from ouf_udp.relationship_reconciliation t join ouf_udp.handoff_intake old on old.handoff_id=t.handoff_id join ouf_udp.handoff_intake incoming on incoming.handoff_id=:h where t.binding_key=:b and t.active and (cast(old.payload_json->'sourceIdentity'->>'observedAt' as timestamptz),old.received_at,old.handoff_id) > (cast(incoming.payload_json->'sourceIdentity'->>'observedAt' as timestamptz),incoming.received_at,incoming.handoff_id)").param("h",handoff).param("b",binding).query(Long.class).single();
@@ -27,7 +28,6 @@ public class RelationshipReconciliation {
     db.sql("insert into ouf_udp.relationship_reconciliation(task_id,handoff_id,source_object_id,binding_key,profile_json) values(:i,:h,:s,:b,cast(:p as jsonb))").param("i",task).param("h",handoff).param("s",source).param("b",binding).param("p",write(profile==null?new UdpPorts.RelationshipProfile("policy://relationships/none",List.of()):profile)).update();
     resolve(task,handoff,source,payload,profile);refresh(source);
   }
-  @Scheduled(fixedDelayString="${ouf.udp.relationships.poll-delay-ms:5000}")
   @Transactional public void tick(){
     lock();
     var tasks=db.sql("select t.task_id,t.handoff_id,t.source_object_id,t.profile_json::text profile,h.payload_json::text payload from ouf_udp.relationship_reconciliation t join ouf_udp.handoff_intake h on h.handoff_id=t.handoff_id where t.active and t.next_attempt_at<=transaction_timestamp() order by t.next_attempt_at,t.task_id limit 10 for update of t skip locked").query().listOfRows();
