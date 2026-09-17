@@ -16,6 +16,7 @@ public class RelationshipMaterializer {
   public RelationshipMaterializer(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
 
   @Transactional public Result materialize(String handoffId,UUID sourceObjectId,Map<String,Object> handoff,UdpPorts.RelationshipProfile profile){
+    db.sql("set local statement_timeout='5s'").update();
     Map<String,Object> payload=HandoffIntakeService.object(handoff,"canonicalPayload");int matched=0,quarantined=0,skipped=0;
     if(profile.relationships().size()>64)throw new IllegalArgumentException("UDP_RELATION_LIMIT");
     int valueCount=0;
