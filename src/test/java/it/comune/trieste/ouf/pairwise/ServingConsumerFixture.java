@@ -27,7 +27,7 @@ public class ServingConsumerFixture {
       var service=TestAuthorization.runtime("fixture-ingestion","SERVICE",serviceCaps);var human=TestAuthorization.runtime("fixture-human","HUMAN",humanCaps);
       var descriptors=new ArrayList<CapabilityDescriptor>(service.currentSnapshot().bundle().capabilities());descriptors.addAll(human.currentSnapshot().bundle().capabilities());
       var grants=new ArrayList<Grant>(service.currentSnapshot().bundle().grants());grants.addAll(human.currentSnapshot().bundle().grants());
-      TestAuthorization.install(service,new PolicyBundle("fixture-combined",2,Instant.now(),descriptors,grants));
+      TestAuthorization.install(service,new PolicyBundle("fixture",2,Instant.now(),descriptors,grants));
       Filter filter=(input,output,chain)->{
         var request=(HttpServletRequest)input;var response=(HttpServletResponse)output;String header=request.getHeader("Authorization");
         boolean workload=matches(header,serviceToken),person=matches(header,humanToken);
