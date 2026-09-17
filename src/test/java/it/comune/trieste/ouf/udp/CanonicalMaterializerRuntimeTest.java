@@ -12,7 +12,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest
 class CanonicalMaterializerRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
-  @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;
+  @Autowired PropertyGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;
   private final UdpPorts.ResolutionProfile resolutionProfile=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code");
   private final UdpPorts.MaterializationProfile authorityProfile=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry","survey")),new UdpPorts.PropertyRule("surface","ouf:surface","number","RESTRICTED",List.of("survey","registry"))));
 
@@ -67,6 +67,53 @@ class CanonicalMaterializerRuntimeTest {
     assertThat(db.sql("select score_evidence::text from ouf_udp.resolution_decision where handoff_id='missing-b'").query(String.class).single()).contains("missingSignals","name:EXACT").doesNotContain("Via Roma");
     assertThat(resolution.resolve("missing-b",incoming,profile).duplicate()).isTrue();
     assertThat(db.sql("select count(*) from ouf_udp.resolution_issue where handoff_id='missing-b'").query(Long.class).single()).isOne();
+  }
+
+  @Test void humanPropertyChoiceIsAuthorizedImmutableAndScopedToExactEvidence(){
+    var profile=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    Fixture a=resolved("human-a","source-a","a","R1","First",1);materializer.materialize("human-a",a.objectId,a.payload,profile);
+    Fixture b=resolved("human-b","source-b","b","R1","Second",1);materializer.materialize("human-b",b.objectId,b.payload,profile);
+    UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
+    UUID before=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='human-b'").query(UUID.class).single();
+    var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
+    var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+    var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThat(governance.review(issue,auth)).containsEntry("currentRevision",before);
+    var machine=new TrustedHumanContext("SERVICE_IDENTITY","operator","default",caps,"authz://review","review-1");
+    assertThatThrownBy(()->governance.decide(issue,before,chosen,"Verified",machine,auth)).isInstanceOf(SecurityException.class);
+    var denied=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of(),"authz://review","review-1");
+    assertThatThrownBy(()->governance.review(issue,denied)).hasMessageContaining("403");
+    var foreign=new ServingAuthorizationContext("HUMAN","operator","other",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThatThrownBy(()->governance.review(issue,foreign)).hasMessageContaining("404");
+    assertThatThrownBy(()->governance.decide(issue,UUID.randomUUID(),chosen,"Verified",actor,auth)).hasMessageContaining("409");
+    UUID decision=governance.decide(issue,before,chosen,"Verified",actor,auth);
+    assertThat(governance.decide(issue,before,chosen,"Verified",actor,auth)).isEqualTo(decision);
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
+    assertThat(db.sql("select authority_state::text from ouf_udp.urban_object_current_state").query(String.class).single()).contains("property-decision://"+decision);
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation").query(Long.class).single()).isEqualTo(2);
+    assertThatThrownBy(()->db.sql("update ouf_udp.human_property_decision set reason='changed'").update()).hasStackTraceContaining("append-only");
+    Fixture repeat=resolved("human-repeat","source-b","b","R1","Second",1);materializer.materialize("human-repeat",repeat.objectId,repeat.payload,profile);
+    assertThat(db.sql("select count(*) from ouf_udp.property_conflict").query(Long.class).single()).isOne();
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
+    Fixture changed=resolved("human-changed","source-b","b","R1","Third",1);materializer.materialize("human-changed",changed.objectId,changed.payload,profile);
+    assertThat(db.sql("select count(*) from ouf_udp.property_conflict where state='OPEN'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
+  }
+
+  @Test void propertyChoiceRejectsStaleContributionsEvenWhenCanonicalRevisionIsUnchanged(){
+    var profile=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    Fixture a=resolved("stale-a","source-a","a","R1","First",1);materializer.materialize("stale-a",a.objectId,a.payload,profile);
+    Fixture b=resolved("stale-b","source-b","b","R1","Second",1);materializer.materialize("stale-b",b.objectId,b.payload,profile);
+    UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
+    UUID before=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='stale-b'").query(UUID.class).single();
+    Fixture c=resolved("stale-c","source-b","b","R1","Third",1);materializer.materialize("stale-c",c.objectId,c.payload,profile);
+    var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
+    var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+    var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThatThrownBy(()->governance.decide(issue,before,chosen,"Verified",actor,auth)).hasMessageContaining("409");
+    assertThat(db.sql("select count(*) from ouf_udp.human_property_decision").query(Long.class).single()).isZero();
   }
 
   private Fixture resolved(String handoff,String source,String object,String code,String name,int surface){Map<String,Object> payload=handoff(handoff,source,object,code,name,surface);intake.accept(payload);var decision=resolution.resolve(handoff,payload,resolutionProfile);return new Fixture(decision.targetUrbanObjectId(),payload);}
