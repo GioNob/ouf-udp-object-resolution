@@ -32,19 +32,25 @@ public final class WeightedIdentity {
       if (blockingProperties.isEmpty() && blockingDistanceMeters == null) throw invalid();
     }
   }
-  public record Candidate(UUID id, double score, Map<String, Double> signals, boolean nonSpatialEvidence) {}
+  public record Candidate(UUID id, double score, Map<String, Double> signals, boolean nonSpatialEvidence,
+      List<String> missingSignals) {}
   public record Outcome(String outcome, UUID target, String reason, List<Candidate> candidates) {}
 
   public static Candidate score(UUID id, Map<String, Object> incoming, Map<String, Object> existing,
       Map<String, Double> spatialFacts, Policy policy) {
-    var evidence = new LinkedHashMap<String, Double>(); double total = 0; boolean nonSpatial = false;
+    var evidence = new LinkedHashMap<String, Double>();
+    var missing = new ArrayList<String>(); double total = 0; boolean nonSpatial = false;
     for (Signal signal : policy.signals()) {
       double value;
       if (signal.spatial()) {
         Double fact = spatialFacts.get(signal.comparator());
+        if (fact == null || !Double.isFinite(fact) || fact < 0)
+          missing.add(signal.property() + ":" + signal.comparator());
         value = fact == null || !Double.isFinite(fact) || fact < 0 ? 0
             : signal.comparator().equals("DISTANCE") ? Math.max(0, 1 - fact / signal.tolerance()) : Math.min(1, fact);
       } else {
+        if (!comparable(incoming.get(signal.property()), existing.get(signal.property()), signal))
+          missing.add(signal.property() + ":" + signal.comparator());
         value = similarity(incoming.get(signal.property()), existing.get(signal.property()), signal);
         nonSpatial |= value > 0;
       }
@@ -52,7 +58,7 @@ public final class WeightedIdentity {
       total += signal.weight() * value;
     }
     // Missing evidence contributes zero; never re-normalize weights over available fields.
-    return new Candidate(id, Math.max(0, Math.min(1, total)), Collections.unmodifiableMap(evidence), nonSpatial);
+    return new Candidate(id, Math.max(0, Math.min(1, total)), Collections.unmodifiableMap(evidence), nonSpatial, List.copyOf(missing));
   }
 
   public static Outcome decide(List<Candidate> candidates, Policy policy, boolean tooBroad) {
@@ -60,7 +66,13 @@ public final class WeightedIdentity {
     if (tooBroad || candidates.size() > policy.maxCandidates()) return new Outcome("REVIEW_REQUIRED", null, "RESOLUTION_TOO_BROAD", sorted);
     if (sorted.isEmpty()) return new Outcome("NEW_OBJECT", null, "NO_CANDIDATES", sorted);
     Candidate best = sorted.getFirst();
-    if (best.score() < policy.reviewThreshold()) return new Outcome("NEW_OBJECT", null, "BELOW_REVIEW_THRESHOLD", sorted);
+    if (best.score() < policy.reviewThreshold()) {
+      // Absence of evidence is not evidence that the object is different. Keep zero
+      // weights in the score, but do not create a duplicate because a field is missing.
+      if (sorted.stream().anyMatch(candidate -> !candidate.missingSignals().isEmpty()))
+        return new Outcome("REVIEW_REQUIRED", null, "IDENTITY_EVIDENCE_INCOMPLETE", sorted);
+      return new Outcome("NEW_OBJECT", null, "BELOW_REVIEW_THRESHOLD", sorted);
+    }
     double margin = sorted.size() < 2 ? 1 : best.score() - sorted.get(1).score();
     if (best.score() >= policy.highThreshold() && margin >= policy.minimumMargin()
         && (best.nonSpatialEvidence() || policy.allowSpatialIdentity()))
@@ -85,6 +97,12 @@ public final class WeightedIdentity {
       previous = next;
     }
     return 1 - (double) previous[y.length()] / Math.max(x.length(), y.length());
+  }
+  private static boolean comparable(Object a, Object b, Signal rule) {
+    if (a == null || b == null || a instanceof Map || b instanceof Map || a instanceof Collection || b instanceof Collection) return false;
+    if (rule.comparator().equals("NUMBER"))
+      return a instanceof Number x && b instanceof Number y && Double.isFinite(x.doubleValue()) && Double.isFinite(y.doubleValue());
+    return !normalize(a).isEmpty() && !normalize(b).isEmpty();
   }
   private static String normalize(Object value) { return Normalizer.normalize(String.valueOf(value), Normalizer.Form.NFKC).strip().toLowerCase(Locale.ROOT).replaceAll("\\s+", " "); }
   private static boolean unit(double value) { return Double.isFinite(value) && value >= 0 && value <= 1; }

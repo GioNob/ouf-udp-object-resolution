@@ -49,6 +49,26 @@ class CanonicalMaterializerRuntimeTest {
     assertThat(resolution.resolve("weighted-b",incoming,weighted).duplicate()).isTrue();
   }
 
+  @Test void incompleteWeightedEvidenceOpensReviewWithoutCreatingAnotherObjectOrBinding(){
+    var mapped=new UdpPorts.MaterializationProfile("policy://weighted-fixture",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of()),new UdpPorts.PropertyRule("surface","surface","number","OPEN",List.of())));
+    Fixture first=resolved("missing-a","registry","native-a","KEY-A","Via Roma",42);
+    materializer.materialize("missing-a",first.objectId,first.payload,mapped);
+    var policy=new WeightedIdentity.Policy(List.of(new WeightedIdentity.Signal("name","EXACT",.7,null),new WeightedIdentity.Signal("surface","NUMBER",.3,10.0)),List.of("surface"),null,10,.85,.5,.1,false);
+    var profile=new UdpPorts.ResolutionProfile("COMPOSITE","1","policy://weighted/1","ouf:Road","code","code",policy);
+    var incoming=handoff("missing-b","survey","native-b","DIFFERENT-KEY","unused",42);
+    incoming.put("canonicalPayload",Map.of("code","DIFFERENT-KEY","surface",42));
+    intake.accept(incoming);
+    var decision=resolution.resolve("missing-b",incoming,profile);
+    assertThat(decision.outcome()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(decision.targetUrbanObjectId()).isNull();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_udp.source_binding where source_id='survey'").query(Long.class).single()).isZero();
+    assertThat(db.sql("select reason_code from ouf_udp.resolution_issue where handoff_id='missing-b'").query(String.class).single()).isEqualTo("IDENTITY_EVIDENCE_INCOMPLETE");
+    assertThat(db.sql("select score_evidence::text from ouf_udp.resolution_decision where handoff_id='missing-b'").query(String.class).single()).contains("missingSignals","name:EXACT").doesNotContain("Via Roma");
+    assertThat(resolution.resolve("missing-b",incoming,profile).duplicate()).isTrue();
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_issue where handoff_id='missing-b'").query(Long.class).single()).isOne();
+  }
+
   private Fixture resolved(String handoff,String source,String object,String code,String name,int surface){Map<String,Object> payload=handoff(handoff,source,object,code,name,surface);intake.accept(payload);var decision=resolution.resolve(handoff,payload,resolutionProfile);return new Fixture(decision.targetUrbanObjectId(),payload);}
   private static Map<String,Object> handoff(String id,String source,String object,String code,String name,int surface){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"typeCode","ROAD","sourceObjectId",object,"observedAt","2026-09-12T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",code,"name",name,"surface",surface)),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
