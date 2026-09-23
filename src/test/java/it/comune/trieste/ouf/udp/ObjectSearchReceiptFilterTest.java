@@ -60,6 +60,20 @@ class ObjectSearchReceiptFilterTest {
     assertThat(((TrustedPrincipal)result.principal()).context().tenantId()).isEqualTo("tenant-a");
     assertThat(result.body()).isEqualTo(new String(body,StandardCharsets.UTF_8));assertThat(result.correlation()).isEqualTo("corr-1");
   }
+  @Test void acceptsGatewayLuaReceiptOnExactForwardedBody()throws Exception{
+    String fixture=System.getenv("OUF_GATEWAY_SEARCH_FIXTURE");
+    org.junit.jupiter.api.Assumptions.assumeTrue(fixture!=null&&!fixture.isBlank(),"cross-repository Gateway fixture");
+    var generated=json.readTree(Files.readString(Path.of(fixture)));
+    byte[] body=generated.path("body").asText().getBytes(StandardCharsets.UTF_8);
+    String header=generated.path("receipt").asText();
+    Run accepted=run(payload(body),body,header);
+    assertThat(accepted.status()).isEqualTo(200);
+    assertThat(accepted.principal()).isInstanceOf(TrustedPrincipal.class);
+    assertThat(accepted.body()).isEqualTo(new String(body,StandardCharsets.UTF_8));
+    assertThat(accepted.correlation()).isEqualTo("corr");
+    assertThat(run(payload(body),"{}".getBytes(StandardCharsets.UTF_8),header).status()).isEqualTo(403);
+    assertThat(run(payload(body),body,header,true).status()).isEqualTo(403);
+  }
   @Test void rejectsForgedBodySignatureTenantScopeAndExpiry()throws Exception{
     byte[] body="{\"type\":\"ouf:Asset\"}".getBytes(StandardCharsets.UTF_8);
     Map<String,Object> original=payload(body);
