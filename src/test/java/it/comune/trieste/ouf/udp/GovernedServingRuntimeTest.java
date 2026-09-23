@@ -67,6 +67,21 @@ class GovernedServingRuntimeTest {
     http.perform(authorized).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
       .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.containsString(f.objectId.toString())))
       .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("classified"))));
+    for(String invalid:List.of("{\"type\":\"*\"}","{\"type\":\"ouf:Asset\",\"sql\":\"select 1\"}","{\"type\":\"ouf:Asset\",\"pageSize\":\"10\"}","{\"type\":\"ouf:Asset\",\"cursor\":\"invalid\"}")){
+      http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+        .contentType("application/json").content(invalid))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+    http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content("{\"type\":\"ouf:Asset\"}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+    db.sql("update ouf_udp.urban_object set tenant_id='another-tenant' where urban_object_id=:id").param("id",f.objectId).update();
+    http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content("{\"type\":\"ouf:Asset\"}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(f.objectId.toString()))));
   }
 
   @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{
