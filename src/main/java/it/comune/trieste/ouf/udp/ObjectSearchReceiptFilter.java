@@ -24,6 +24,7 @@ public final class ObjectSearchReceiptFilter extends OncePerRequestFilter {
   private final Environment env;
   private final Clock clock;
   private final ObjectMapper json=new ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+  @org.springframework.beans.factory.annotation.Autowired
   public ObjectSearchReceiptFilter(Environment env){this(env,Clock.systemUTC());}
   ObjectSearchReceiptFilter(Environment env,Clock clock){this.env=env;this.clock=clock;}
   @Override protected boolean shouldNotFilter(HttpServletRequest req){return !PATH.equals(req.getRequestURI());}
