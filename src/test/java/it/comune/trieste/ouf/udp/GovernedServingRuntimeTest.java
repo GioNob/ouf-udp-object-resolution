@@ -84,6 +84,30 @@ class GovernedServingRuntimeTest {
       .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(f.objectId.toString()))));
   }
 
+  @Test void postSearchUsesOpaqueCursorAcrossPages()throws Exception{
+    Fixture first=materialize("post-page-a","post-page-a","First","secret-a",null);
+    Fixture second=materialize("post-page-b","post-page-b","Second","secret-b",null);
+    db.sql("update ouf_udp.urban_object set tenant_id='tenant-a'").update();
+    var firstPage=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content("{\"type\":\"ouf:Asset\",\"pageSize\":1}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    var page1=json.readTree(firstPage.getResponse().getContentAsString());
+    assertThat(page1.path("items").size()).isEqualTo(1);
+    String cursor=page1.path("nextCursor").asText();
+    assertThat(cursor).isNotBlank().doesNotContain(first.objectId.toString()).doesNotContain(second.objectId.toString());
+    var secondPage=http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content(json.writeValueAsString(Map.of("type","ouf:Asset","pageSize",1,"cursor",cursor)))
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
+    var page2=json.readTree(secondPage.getResponse().getContentAsString());
+    assertThat(page2.path("items").size()).isEqualTo(1);
+    assertThat(Set.of(page1.path("items").get(0).path("urbanObjectId").asText(),page2.path("items").get(0).path("urbanObjectId").asText()))
+      .containsExactlyInAnyOrder(first.objectId.toString(),second.objectId.toString());
+    assertThat(page2.path("nextCursor").isNull()).isTrue();
+  }
+
   @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{
     Fixture f=materialize("http-label","http-object","Visible","classified",null);db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
     http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/udp/v1/objects/"+f.objectId).with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));request.setAttribute("ouf.allowedDataLabels",Set.of("OPEN","RESTRICTED"));return request;}))
