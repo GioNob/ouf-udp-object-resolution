@@ -43,8 +43,11 @@ class ObjectSearchReceiptFilterTest {
   }
   private record Run(int status,Principal principal,String body,String correlation){}
   private Run run(Map<String,Object> receipt,byte[] body,String header)throws Exception {
+    return run(receipt,body,header,false);
+  }
+  private Run run(Map<String,Object> receipt,byte[] body,String header,boolean denyOwner)throws Exception {
     var req=new MockHttpServletRequest("POST",ObjectSearchReceiptFilter.PATH);req.setContent(body);req.addHeader(ObjectSearchReceiptFilter.HEADER,header==null?signed(receipt):header);
-    TestAuthorization.bind(req,"human-a","HUMAN",Set.of("urban.object.search"));
+    TestAuthorization.bind(req,denyOwner?"someone-else":"human-a","HUMAN",Set.of("urban.object.search"));
     var res=new MockHttpServletResponse();var chain=new MockFilterChain();
     new ObjectSearchReceiptFilter(environment(),Clock.fixed(Instant.ofEpochSecond(1001),ZoneOffset.UTC)).doFilter(req,res,chain);
     var forwarded=chain.getRequest() instanceof jakarta.servlet.http.HttpServletRequest r?r:null;
@@ -60,6 +63,8 @@ class ObjectSearchReceiptFilterTest {
   @Test void rejectsForgedBodySignatureTenantScopeAndExpiry()throws Exception{
     byte[] body="{\"type\":\"ouf:Asset\"}".getBytes(StandardCharsets.UTF_8);
     Map<String,Object> original=payload(body);
+    assertThat(run(original,body,"").status()).isEqualTo(403);
+    assertThat(run(original,body,null,true).status()).isEqualTo(403);
     assertThat(run(original,"{}".getBytes(StandardCharsets.UTF_8),null).status()).isEqualTo(403);
     assertThat(run(original,body,signed(original)+"corrupt").status()).isEqualTo(403);
     for(String field:List.of("tenant","scope","exp")){
