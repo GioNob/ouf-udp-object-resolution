@@ -55,6 +55,20 @@ class GovernedServingRuntimeTest {
 
   @Test void searchRequiresIndexedExactTypeAndBoundedPage(){assertThatThrownBy(()->serving.search("*",10,null,open)).isInstanceOf(IllegalArgumentException.class);assertThatThrownBy(()->serving.search("ouf:Asset",101,null,open)).hasMessageContaining("UDP_PAGE_SIZE_OUT_OF_RANGE");}
 
+  @Test void postSearchUsesOwnerAuthorizationAndMinimizesProperties()throws Exception{
+    Fixture f=materialize("post-search","post-asset","Visible","classified",null);
+    db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
+    var post=org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content("{\"type\":\"ouf:Asset\",\"pageSize\":10}");
+    http.perform(post).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+    var authorized=org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content("{\"type\":\"ouf:Asset\",\"pageSize\":10}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;});
+    http.perform(authorized).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.containsString(f.objectId.toString())))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("classified"))));
+  }
+
   @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{
     Fixture f=materialize("http-label","http-object","Visible","classified",null);db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
     http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/udp/v1/objects/"+f.objectId).with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));request.setAttribute("ouf.allowedDataLabels",Set.of("OPEN","RESTRICTED"));return request;}))
