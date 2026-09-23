@@ -50,3 +50,9 @@ ouf.udp.query-budget:
 ouf.udp.spatial:
   canonical-srid: ${OUF_UDP_CANONICAL_SRID:4326}
   grid-manifest: ${OUF_UDP_GRID_MANIFEST:}
+ouf.udp.search:
+  tenant-id: ${OUF_UDP_SEARCH_TENANT_ID:}
+  issuer: ${OUF_UDP_SEARCH_ISSUER:}
+  audience: ${OUF_UDP_SEARCH_AUDIENCE:}
+  workload: ${OUF_UDP_SEARCH_WORKLOAD:}
+  owner-key-file: ${OUF_UDP_SEARCH_OWNER_KEY_FILE:}
