@@ -48,6 +48,15 @@ public class PublishedRuntimeConfiguration {
       // Spatial relationship policy binding is deferred to R2e; do not accept unbound edge labels.
       if(!spatial.relationships().isEmpty())throw invalid();
     }
+    if(resolution.weighted()!=null){
+      Set<String> mapped=materialization.properties().stream().map(UdpPorts.PropertyRule::propertyIri).collect(java.util.stream.Collectors.toSet());
+      if(!mapped.containsAll(resolution.weighted().blockingProperties()))throw invalid();
+      for(var signal:resolution.weighted().signals()){
+        if(!mapped.contains(signal.property()))throw invalid();
+        if(signal.spatial()&&(spatial==null||!signal.property().equals(spatial.geometry().sourceField())))throw invalid();
+      }
+      if(resolution.weighted().blockingDistanceMeters()!=null&&spatial==null)throw invalid();
+    }
     UdpPorts.RelationshipProfile relationships=null;
     if(profile.containsKey("relationships")){
       relationships=json.convertValue(object(profile,"relationships"),UdpPorts.RelationshipProfile.class);
