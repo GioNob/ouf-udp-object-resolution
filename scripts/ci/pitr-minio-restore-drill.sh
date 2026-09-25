@@ -70,7 +70,7 @@ printf '{"dr":"baseline"}\n' >"$dr_root/object.json"
 content_hash="sha256:$(sha256sum "$dr_root/object.json" | awk '{print $1}')"
 content_size="$(wc -c <"$dr_root/object.json" | tr -d ' ')"
 
-docker run -d --name "$primary_minio" -p 59000:9000 -e MINIO_ROOT_USER="$minio_user" -e MINIO_ROOT_PASSWORD="$minio_password" -v "$dr_root/minio-primary:/data" docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data >/dev/null
+docker run -d --name "$primary_minio" -p 59000:9000 -e MINIO_ROOT_USER="$minio_user" -e MINIO_ROOT_PASSWORD="$minio_password" -v "$dr_root/minio-primary:/data" docker.io/tobi312/minio@sha256:e2226dea4b9aef896db02f7396102d48eb58cd339d930332e3d8bdac80012a78 server /data >/dev/null
 wait_http http://127.0.0.1:59000/minio/health/live
 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_DEFAULT_REGION=us-east-1 aws --endpoint-url http://127.0.0.1:59000 s3api create-bucket --bucket ouf-udp-dr >/dev/null
 AWS_ACCESS_KEY_ID="$minio_user" AWS_SECRET_ACCESS_KEY="$minio_password" AWS_DEFAULT_REGION=us-east-1 aws --endpoint-url http://127.0.0.1:59000 s3api put-object --bucket ouf-udp-dr --key dr/object.json --body "$dr_root/object.json" --metadata "ouf-content-hash=$content_hash" >/dev/null
@@ -109,7 +109,7 @@ restore_started="$(date +%s)"
 docker run -d --name "$restored_db" -p 127.0.0.1::5432 -v "$dr_root/pg-restored:/var/lib/postgresql/data" -v "$dr_root/pg-archive:/archive:ro" postgis/postgis:17-3.5-alpine >/dev/null
 restored_db_port="$(docker port "$restored_db" 5432/tcp | awk -F: '{print $NF}')"
 wait_postgres "$restored_db"
-docker run -d --name "$restored_minio" -p 59001:9000 -e MINIO_ROOT_USER="$minio_user" -e MINIO_ROOT_PASSWORD="$minio_password" -v "$dr_root/minio-restored:/data" docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data >/dev/null
+docker run -d --name "$restored_minio" -p 59001:9000 -e MINIO_ROOT_USER="$minio_user" -e MINIO_ROOT_PASSWORD="$minio_password" -v "$dr_root/minio-restored:/data" docker.io/tobi312/minio@sha256:e2226dea4b9aef896db02f7396102d48eb58cd339d930332e3d8bdac80012a78 server /data >/dev/null
 wait_http http://127.0.0.1:59001/minio/health/live
 restore_completed="$(date +%s)"
 step restored_systems_ready
