@@ -18,7 +18,7 @@ final class OwnerQueryGuard {
  }
  Map<UUID,Boolean> geometries(String capability,Collection<UUID> ids,ServingAuthorizationContext auth){
   var allowed=new HashMap<UUID,Boolean>();if(auth.owner()==null){ids.forEach(id->allowed.put(id,true));return allowed;}if(ids.isEmpty())return allowed;
-  var rows=db.sql("select c.urban_object_id,g.access_label,h.source_id,h.ingestion_run_id from ouf_udp.urban_geometry_current c join ouf_udp.urban_geometry g on g.geometry_revision_id=c.geometry_revision_id join ouf_udp.handoff_intake h on h.handoff_id=g.handoff_id join ouf_udp.urban_object o on o.urban_object_id=c.urban_object_id where c.urban_object_id in (:ids) and o.tenant_id=:tenant").param("ids",new HashSet<>(ids)).param("tenant",auth.tenantId()).query().listOfRows();
+  var rows=db.sql("select c.urban_object_id,g.access_label,h.source_id,h.ingestion_run_id from ouf_udp.urban_geometry_active c join ouf_udp.urban_geometry g on g.geometry_revision_id=c.geometry_revision_id join ouf_udp.handoff_intake h on h.handoff_id=g.handoff_id join ouf_udp.urban_object o on o.urban_object_id=c.urban_object_id where c.urban_object_id in (:ids) and o.tenant_id=:tenant").param("ids",new HashSet<>(ids)).param("tenant",auth.tenantId()).query().listOfRows();
   for(var row:rows){UUID id=(UUID)row.get("urban_object_id");var scope=Map.of("projection","geometry","sourceRef",row.get("source_id").toString(),"jobRef",row.get("ingestion_run_id").toString());String label=(String)row.get("access_label");boolean permit=object(id,auth)&&auth.permits("urban.geometry.read","object",id,label,scope)&&auth.permits(capability,"object",id,label,scope);allowed.put(id,permit);if(!permit)audit(auth,capability,"geometry://"+id,label);}
   return allowed;
  }

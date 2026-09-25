@@ -13,7 +13,24 @@ import org.springframework.web.server.ResponseStatusException;
 @org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 @SpringBootTest
 class GovernedServingRuntimeTest {
-  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
+  private static final String SEARCH_KEY="ab".repeat(32);
+  private static final java.nio.file.Path SEARCH_KEY_FILE=searchKeyFile();
+  private static java.nio.file.Path searchKeyFile(){try{var file=java.nio.file.Files.createTempFile("ouf-udp-search-test-",".key");java.nio.file.Files.writeString(file,SEARCH_KEY);file.toFile().deleteOnExit();return file;}catch(Exception e){throw new IllegalStateException(e);}}
+  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));r.add("ouf.udp.search.tenant-id",()->"tenant-a");r.add("ouf.udp.search.issuer",()->"https://auth.test/realms/ouf");r.add("ouf.udp.search.audience",()->"gateway");r.add("ouf.udp.search.workload",()->"workload");r.add("ouf.udp.search.owner-key-file",SEARCH_KEY_FILE::toString);}
+  private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder searchPost(String body)throws Exception{
+    byte[] bytes=body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var receipt=new LinkedHashMap<String,Object>();long now=java.time.Instant.now().getEpochSecond();
+    receipt.put("v",1);receipt.put("purpose","udp-object-search-owner");receipt.put("method","POST");receipt.put("path","/api/udp/v1/objects/search");
+    receipt.put("bodyHash",java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)));
+    receipt.put("capability","urban.object.search");receipt.put("iat",now);receipt.put("exp",now+30);
+    receipt.put("issuer","https://auth.test/realms/ouf");receipt.put("audience","gateway");receipt.put("workload","workload");
+    receipt.put("subject","reader");receipt.put("tenant","tenant-a");receipt.put("client","chatgpt");receipt.put("acr","1");receipt.put("roles","");receipt.put("scope","urban.object.search");
+    receipt.put("requestHash","a".repeat(64));receipt.put("correlationId","test-correlation");
+    String payload=Base64.getUrlEncoder().withoutPadding().encodeToString(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(receipt));
+    var hmac=javax.crypto.Mac.getInstance("HmacSHA256");hmac.init(new javax.crypto.spec.SecretKeySpec(SEARCH_KEY.getBytes(java.nio.charset.StandardCharsets.US_ASCII),"HmacSHA256"));
+    String signed=payload+"."+Base64.getUrlEncoder().withoutPadding().encodeToString(hmac.doFinal(("ouf-udp-search-owner-v1."+payload).getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
+    return org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search").contentType("application/json").content(body).header("X-OUF-UDP-Search-Receipt",signed);
+  }
   @Autowired org.springframework.test.web.servlet.MockMvc http;
   @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer canonical;@Autowired RelationshipMaterializer relationship;@Autowired GovernedServingService serving;@Autowired JdbcClient db;
   private final UdpPorts.ResolutionProfile resolutionProfile=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","identity","identity");
@@ -54,6 +71,53 @@ class GovernedServingRuntimeTest {
   }
 
   @Test void searchRequiresIndexedExactTypeAndBoundedPage(){assertThatThrownBy(()->serving.search("*",10,null,open)).isInstanceOf(IllegalArgumentException.class);assertThatThrownBy(()->serving.search("ouf:Asset",101,null,open)).hasMessageContaining("UDP_PAGE_SIZE_OUT_OF_RANGE");}
+
+  @Test void postSearchUsesOwnerAuthorizationAndMinimizesProperties()throws Exception{
+    Fixture f=materialize("post-search","post-asset","Visible","classified",null);
+    db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
+    var post=org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/udp/v1/objects/search")
+      .contentType("application/json").content("{\"type\":\"ouf:Asset\",\"pageSize\":10}");
+    http.perform(post).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+    var authorized=searchPost("{\"type\":\"ouf:Asset\",\"pageSize\":10}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;});
+    http.perform(authorized).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.containsString(f.objectId.toString())))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("classified"))));
+    for(String invalid:List.of("{\"type\":\"*\"}","{\"type\":\"ouf:Asset\",\"sql\":\"select 1\"}","{\"type\":\"ouf:Asset\",\"pageSize\":\"10\"}","{\"type\":\"ouf:Asset\",\"cursor\":\"invalid\"}")){
+      http.perform(searchPost(invalid).with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+    http.perform(searchPost("{\"type\":\"ouf:Asset\"}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.read"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+    db.sql("update ouf_udp.urban_object set tenant_id='another-tenant' where urban_object_id=:id").param("id",f.objectId).update();
+    http.perform(searchPost("{\"type\":\"ouf:Asset\"}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(f.objectId.toString()))));
+  }
+
+  @Test void postSearchUsesOpaqueCursorAcrossPages()throws Exception{
+    Fixture first=materialize("post-page-a","post-page-a","First","secret-a",null);
+    Fixture second=materialize("post-page-b","post-page-b","Second","secret-b",null);
+    db.sql("update ouf_udp.urban_object set tenant_id='tenant-a'").update();
+    var firstPage=http.perform(searchPost("{\"type\":\"ouf:Asset\",\"pageSize\":1}")
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    var page1=json.readTree(firstPage.getResponse().getContentAsString());
+    assertThat(page1.path("items").size()).isEqualTo(1);
+    String cursor=page1.path("nextCursor").asText();
+    assertThat(cursor).isNotBlank().doesNotContain(first.objectId.toString()).doesNotContain(second.objectId.toString());
+    var secondPage=http.perform(searchPost(json.writeValueAsString(Map.of("type","ouf:Asset","pageSize",1,"cursor",cursor)))
+      .with(request->{it.comune.trieste.ouf.authorization.TestAuthorization.bind(request,"reader","HUMAN",Set.of("urban.object.search"));return request;}))
+      .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
+    var page2=json.readTree(secondPage.getResponse().getContentAsString());
+    assertThat(page2.path("items").size()).isEqualTo(1);
+    assertThat(Set.of(page1.path("items").get(0).path("urbanObjectId").asText(),page2.path("items").get(0).path("urbanObjectId").asText()))
+      .containsExactlyInAnyOrder(first.objectId.toString(),second.objectId.toString());
+    assertThat(page2.path("nextCursor").isNull()).isTrue();
+  }
 
   @Test void httpNeverTrustsAllowedLabelsAndDeniesWrongObject()throws Exception{
     Fixture f=materialize("http-label","http-object","Visible","classified",null);db.sql("update ouf_udp.urban_object set tenant_id='tenant-a' where urban_object_id=:id").param("id",f.objectId).update();
