@@ -37,7 +37,7 @@ jobs:
           docker run -d --name udp-minio -p 9000:9000 \
             -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
             -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
-            docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            docker.io/tobi312/minio@sha256:e2226dea4b9aef896db02f7396102d48eb58cd339d930332e3d8bdac80012a78 server /data
           for attempt in $(seq 1 30); do
             curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
             sleep 1
