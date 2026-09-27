@@ -1,5 +1,7 @@
 # R4a resolution review gate
 
+Cross-module live snapshot and PET 1.7 handoff: [OUF handoff 27 September 2026](https://github.com/GioNob/ouf-semantic-registry/blob/codex/r4a-smoke-semantic-inventory/docs/handoffs/OUF_HANDOFF_2026-09-27_R4A.md). This branch is a prerequisite under review, not a deployed complete identity engine. The Semantic publication is live, while the Onboarding DRAFT for asset `8ec8ae90-808a-4d9e-907c-d56de119e376` is inactive and no Ingestion/UDP result is attested. Issue #35 tracks the general executable policy. Do not activate a weighted definition solely because Onboarding validates its shape.
+
 The UDP PET separates durable handoff acknowledgement from later object
 resolution. A handoff can be durable while its individual resolution job is
 quarantined for HUMAN review. No canonical revision may be served for that
