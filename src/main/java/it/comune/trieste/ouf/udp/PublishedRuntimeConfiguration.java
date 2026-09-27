@@ -39,6 +39,12 @@ public class PublishedRuntimeConfiguration {
     for(Object p:policies){if(!(p instanceof Map<?,?> policy)||!Set.of("PROPERTY","RELATIONSHIP").contains(policy.get("scope")))throw invalid();labels.put(String.valueOf(policy.get("scope"))+":"+policy.get("target"),String.valueOf(policy.get("label")));}
     if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||mappings.isEmpty())throw invalid();
     var targets=new HashSet<String>();for(Object m:mappings){if(!(m instanceof Map<?,?> mapping))throw invalid();targets.add(String.valueOf(mapping.get("targetPropertyIri")));}
+    if(!resolution.matchProperties().isEmpty()){
+      if(!"ATTRIBUTE_EXACT".equals(resolution.strategyId())||resolution.matchProperties().size()<2
+          ||resolution.matchProperties().size()>8||new HashSet<>(resolution.matchProperties()).size()!=resolution.matchProperties().size()
+          ||!targets.containsAll(resolution.matchProperties()))throw invalid();
+      for(String property:resolution.matchProperties())if(!labels.containsKey("PROPERTY:"+property))throw invalid();
+    }
     for(var property:materialization.properties())if(!targets.remove(property.propertyIri())||!property.sourceField().equals(property.propertyIri())||!property.accessLabel().equals(labels.get("PROPERTY:"+property.propertyIri())))throw invalid();
     if(!targets.isEmpty())throw invalid();
     UdpPorts.SpatialProfile spatial=null;
