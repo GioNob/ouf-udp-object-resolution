@@ -32,17 +32,26 @@ jobs:
         run: python3 scripts/ci/verify-tool-selection-regression.py
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '21', cache: maven}
-      - name: Start MinIO acceptance service
+      - name: Start pinned MinIO acceptance service
         run: |
-          docker run -d --name udp-minio -p 9000:9000 \
-            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
-            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          minio_binary="$RUNNER_TEMP/minio"
+          curl --fail --location --retry 3 --max-time 240 \
+            --output "$minio_binary" \
+            https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z
+          printf '%s  %s\n' \
+            7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f \
+            "$minio_binary" | sha256sum --check --status
+          chmod 700 "$minio_binary"
+          "$minio_binary" --version
+          mkdir -p "$RUNNER_TEMP/udp-minio-data"
+          MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            "$minio_binary" server "$RUNNER_TEMP/udp-minio-data" \
+            > "$RUNNER_TEMP/udp-minio.log" 2>&1 &
           for attempt in $(seq 1 30); do
             curl --fail --silent http://127.0.0.1:9000/minio/health/live && exit 0
             sleep 1
           done
-          docker logs udp-minio
+          cat "$RUNNER_TEMP/udp-minio.log"
           exit 1
       - name: Verify and package
         run: |

@@ -14,7 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 @SpringBootTest
 class IdentityGovernanceRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
-  @Autowired IdentityGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired JdbcClient db;
+  @Autowired IdentityGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired ResolutionRepository jobs;@Autowired JdbcClient db;
   private final TrustedHumanContext human=new TrustedHumanContext("HUMAN_USER","operator-1","tenant-1",Set.of("urban.merge.plan","urban.object.merge","urban.split.plan","urban.object.split","resolution.match.approve"),"authz://decision/1","corr-1");
 
   @BeforeEach void clean(){db.sql("truncate table ouf_udp.merge_resolution_issue,ouf_udp.merge_property_contribution_link,ouf_udp.human_resolution_decision,ouf_udp.split_resolution_issue,ouf_udp.relationship_identity_history,ouf_udp.source_binding_history,ouf_udp.object_identity_history,ouf_udp.governance_audit,ouf_udp.governance_plan,ouf_udp.spatial_resolution_issue,ouf_udp.urban_geometry_current,ouf_udp.urban_geometry,ouf_udp.relationship_issue,ouf_udp.relationship_revision,ouf_udp.relationship_contribution,ouf_udp.urban_relationship,ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
@@ -26,6 +26,27 @@ class IdentityGovernanceRuntimeTest {
   @Test void machineActorAndStaleVersionCannotExecuteGovernance(){UUID a=object("A"),b=object("B");TrustedHumanContext machine=new TrustedHumanContext("SERVICE_IDENTITY","worker","tenant-1",Set.of("urban.merge.plan"),"authz://machine","corr-2");assertThatThrownBy(()->governance.planMerge(a,b,machine)).isInstanceOf(SecurityException.class);var plan=governance.planMerge(a,b,human);assertThatThrownBy(()->governance.executeMerge(plan.planId(),1,"reason","merge-key-stale",human)).isInstanceOf(ResponseStatusException.class).hasMessageContaining("409");assertThat(db.sql("select status from ouf_udp.urban_object where urban_object_id=:i").param("i",b).query(String.class).single()).isEqualTo("ACTIVE");}
 
   @Test void humanIssueDecisionAddsBindingWithoutRewritingAutomaticDecision(){UUID a=seedCandidate("A","same"),b=seedCandidate("B","same");Map<String,Object> payload=handoff("review-h","incoming","same");intake.accept(payload);var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");assertThat(resolution.resolve("review-h",payload,profile).outcome()).isEqualTo("REVIEW_REQUIRED");UUID issue=db.sql("select issue_id from ouf_udp.resolution_issue").query(UUID.class).single();governance.decideResolutionIssue(issue,0,"APPROVE","operator inspected evidence",a,human);assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:i").param("i",issue).query(String.class).single()).isEqualTo("RESOLVED");assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'").query(UUID.class).single()).isEqualTo(a);assertThat(db.sql("select count(*) from ouf_udp.resolution_decision where handoff_id='review-h' and outcome='REVIEW_REQUIRED'").query(Long.class).single()).isOne();assertThat(db.sql("select action from ouf_udp.human_resolution_decision").query(String.class).single()).isEqualTo("APPROVE_MATCH");assertThatThrownBy(()->db.sql("delete from ouf_udp.human_resolution_decision").update()).hasStackTraceContaining("append-only");assertThat(List.of(a,b)).contains(a);}
+
+  @Test void ambiguousHandoffWaitsForHumanThenResumesWithoutChangingDurableAck(){
+    UUID selected=seedCandidate("A","same");seedCandidate("B","same");
+    Map<String,Object> payload=handoff("review-resume","incoming","same");
+    intake.accept(payload);
+    var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");
+    var claim=jobs.claim("review-worker",java.time.Duration.ofMinutes(2)).orElseThrow();
+    assertThat(resolution.resolve("review-resume",payload,profile).outcome()).isEqualTo("REVIEW_REQUIRED");
+    jobs.quarantine(claim,"UDP_RESOLUTION_REVIEW_REQUIRED");
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='review-resume'").query(String.class).single()).isEqualTo("QUARANTINED");
+    assertThat(db.sql("select state from ouf_udp.handoff_intake where handoff_id='review-resume'").query(String.class).single()).isEqualTo("DURABLE");
+    assertThat(jobs.claim("other-worker",java.time.Duration.ofMinutes(2))).isEmpty();
+    UUID issue=db.sql("select issue_id from ouf_udp.resolution_issue where handoff_id='review-resume'").query(UUID.class).single();
+    governance.decideResolutionIssue(issue,0,"APPROVE","verified same object",selected,human);
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='review-resume'").query(String.class).single()).isEqualTo("READY");
+    var resumed=jobs.claim("review-worker",java.time.Duration.ofMinutes(2)).orElseThrow();
+    var decision=resolution.resolve(resumed.handoffId(),resumed.payload(),profile);
+    assertThat(decision.outcome()).isEqualTo("MATCH");
+    assertThat(decision.targetUrbanObjectId()).isEqualTo(selected);
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_decision where handoff_id='review-resume'").query(Long.class).single()).isOne();
+  }
 
   @Test void actorHeadersAreRejectedInsteadOfBecomingTrustContext(){MockHttpServletRequest request=new MockHttpServletRequest();request.addHeader("X-Actor-Type","HUMAN_USER");request.setAttribute("ouf.actorType","HUMAN_USER");request.setAttribute("ouf.subject","operator");request.setAttribute("ouf.tenantId","tenant");request.setAttribute("ouf.capabilities",Set.of("urban.object.merge"));request.setAttribute("ouf.authorizationDecisionRef","authz://1");request.setAttribute("ouf.correlationId","corr");assertThatThrownBy(()->TrustedHumanApi.trusted(request)).isInstanceOf(ResponseStatusException.class).hasMessageContaining("400");}
 
