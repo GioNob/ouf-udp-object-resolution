@@ -31,9 +31,10 @@ a generic identity policy is ready. Onboarding already validates an optional
 thresholds and maximum candidate count), but UDP does not execute those
 weights. One existing format fixture assigns all weight to a text NAME. Such
 a profile can silently merge the first two same-named objects if the
-single-field resolver is allowed to handle it. Publishing or activating a
-weighted profile must be gated on an end-to-end UDP implementation and
-versioned contract test, not merely on Onboarding validation.
+single-field resolver is allowed to handle it. The UDP historical profile resolver now rejects a weighted definition with
+`UDP_WEIGHTED_RUNTIME_UNAVAILABLE` before any identity decision. Publishing or
+activating a weighted profile must be gated on an end-to-end UDP implementation
+and versioned contract test, not merely on Onboarding validation.
 
 The implemented policy must separate four questions:
 
