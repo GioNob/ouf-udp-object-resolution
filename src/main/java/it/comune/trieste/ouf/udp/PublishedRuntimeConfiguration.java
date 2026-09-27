@@ -30,7 +30,11 @@ public class PublishedRuntimeConfiguration {
     var semantic=object(bundle,"semanticMapping");var source=object(semantic,"sourceType");
     if(!type.equals(source.get("typeCode"))||!envelope.get("sourceId").equals(source.get("sourceId")))throw invalid();
     var profile=object(object(object(bundle,"extractionProfile"),"runtime"),"udp");
-    UdpPorts.ResolutionProfile resolution=json.convertValue(object(profile,"resolution"),UdpPorts.ResolutionProfile.class);
+    var resolutionDefinition=object(profile,"resolution");
+    // Onboarding can validate weighted proposals, but this UDP runtime does not execute them yet.
+    // Silently falling back to matchProperty could merge unrelated same-named objects.
+    if(resolutionDefinition.containsKey("weighted"))throw new IllegalArgumentException("UDP_WEIGHTED_RUNTIME_UNAVAILABLE");
+    UdpPorts.ResolutionProfile resolution=json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
     UdpPorts.MaterializationProfile materialization=json.convertValue(object(profile,"materialization"),UdpPorts.MaterializationProfile.class);
     if(resolution.canonicalType()==null||resolution.policyRef()==null||materialization.properties().isEmpty())throw invalid();
     if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&resolution.canonicalType().equals(target.get("classIri"))))throw invalid();
