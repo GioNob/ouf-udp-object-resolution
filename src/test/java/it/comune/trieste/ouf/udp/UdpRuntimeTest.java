@@ -23,6 +23,21 @@ class UdpRuntimeTest {
 
   @Test void resolutionCreatesThenMatchesByDeterministicEvidence(){Map<String,Object> first=handoff("h-new","o-1","R1","Main Street");intake.accept(first);var created=resolution.resolve("h-new",first,profile);assertThat(created.outcome()).isEqualTo("NEW_OBJECT");UUID target=db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='o-1'").query(UUID.class).single();Map<String,Object> second=handoff("h-match","o-2","R2","Main Street");intake.accept(second);var matched=resolution.resolve("h-match",second,profile);assertThat(matched.outcome()).isEqualTo("MATCH");assertThat(matched.targetUrbanObjectId()).isEqualTo(target);assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();}
 
+  @Test void exactAttributeSetRequiresBothValuesAndMatchesAcrossSourceObjects(){
+    var exact=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://cinema-exact/1",
+        "ouf:Road",null,null,List.of("code","name"));
+    var first=handoff("h-exact-1","asset-1-row-1","CINEMA","First Address");
+    intake.accept(first);
+    assertThat(resolution.resolve("h-exact-1",first,exact).outcome()).isEqualTo("NEW_OBJECT");
+    var different=handoff("h-exact-2","asset-2-row-1","CINEMA","Second Address");
+    intake.accept(different);
+    assertThat(resolution.resolve("h-exact-2",different,exact).outcome()).isEqualTo("NEW_OBJECT");
+    var repeated=handoff("h-exact-3","asset-3-row-8","CINEMA","First Address");
+    intake.accept(repeated);
+    assertThat(resolution.resolve("h-exact-3",repeated,exact).outcome()).isEqualTo("MATCH");
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isEqualTo(2);
+  }
+
   @Test void ambiguousCandidatesCreateReviewIssueWithoutArbitraryBinding(){seed("R1","same");seed("R2","same");Map<String,Object> payload=handoff("h-review","o-3","R3","Same");intake.accept(payload);var decision=resolution.resolve("h-review",payload,profile);assertThat(decision.outcome()).isEqualTo("REVIEW_REQUIRED");assertThat(db.sql("select reason_code from ouf_udp.resolution_issue").query(String.class).single()).isEqualTo("UDP_RESOLUTION_AMBIGUOUS");assertThat(db.sql("select count(*) from ouf_udp.source_binding where source_object_id='o-3'").query(Long.class).single()).isZero();}
 
   @Test void resolutionDecisionAndEventsAreAppendOnly(){Map<String,Object> payload=handoff("h-history","o-4","R4","History");intake.accept(payload);resolution.resolve("h-history",payload,profile);assertThatThrownBy(()->db.sql("delete from ouf_udp.resolution_decision where handoff_id='h-history'").update()).hasStackTraceContaining("append-only");assertThatThrownBy(()->db.sql("delete from ouf_udp.handoff_event where handoff_id='h-history'").update()).hasStackTraceContaining("append-only");}
