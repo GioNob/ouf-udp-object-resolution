@@ -29,44 +29,62 @@ The current single-`matchProperty` resolver must not be used as evidence that
 a generic identity policy is ready. Onboarding already validates an optional
 `resolution.weighted` structure (signals, weights, blocking properties,
 thresholds and maximum candidate count), but UDP does not execute those
-weights. One existing format fixture assigns all weight to a text NAME. Such
-a profile can silently merge the first two same-named objects if the
-single-field resolver is allowed to handle it. The UDP historical profile resolver now rejects a weighted definition with
+weights. One existing format fixture assigns all weight to a text NAME. Such a profile could silently merge distinct objects if a single-field
+resolver handles it. The UDP historical profile resolver rejects a weighted
+definition with
 `UDP_WEIGHTED_RUNTIME_UNAVAILABLE` before any identity decision. Publishing or
 activating a weighted profile must be gated on an end-to-end UDP implementation
 and versioned contract test, not merely on Onboarding validation.
 
-The implemented policy must separate four questions:
+The general rule is expressed over *semantic evidence and its declared
+constraints*, not over field names, example values or a frequency cutoff.
+A property mapping identifies the meaning of a value; it does not claim the
+value uniquely identifies an object. The published identity policy declares
+the evidence role, comparator/version, scope and constraints of each mapped
+property or relationship, including any justified uniqueness, cardinality,
+temporal or geometric semantics. A many-to-one relationship cannot identify
+one of its children just because the related object is the same. Repeatedness
+and estimated selectivity can optimize candidate retrieval and inform a
+review card; they do not turn evidence into or out of identity authority.
 
-1. **Find candidates:** blocking properties and spatial windows narrow a
-   tenant/class-scoped search. A common value such as a generic name or a
-   shared controller can be useful here but is not identity evidence.
-2. **Assess shared evidence:** compare only version-compatible semantic
-   property references and normalized values. Measure value prevalence,
-   independence of signals and observed coverage; missing properties are
-   not equalities or contradictions. A controller relation is many-to-one
-   unless an approved contract explicitly states otherwise.
-3. **Decide:** retain a source binding when its identity is stable. Automatic
-   MATCH requires the approved combination of discriminating signals and
-   separation from runners-up; a score or single common value is never
-   enough. Automatic NEW is allowed only under an explicit source policy
-   with traceable provenance and later governed merge. Plausible competing
-   identities require REVIEW_REQUIRED. Over-limit candidate generation
-   yields RESOLUTION_TOO_BROAD per PET, never a truncated first-match choice.
-4. **Operate:** simulate the policy on representative source samples before
-   activation, including common literals and dense geometry. Report the
-   fraction of MATCH/NEW/REVIEW_REQUIRED/TOO_BROAD by source and class.
-   An excessive broad-result rate blocks scheduled activation so that
-   operators do not inherit a large per-record review queue.
+The executable engine is class-neutral and uses the same steps for every
+published policy:
 
-Acceptance fixtures must include: same-name traffic lights with different
-positions; multiple lights attached to one controller; genuinely identical
-source binding across runs; a cinema with five properties compared against
-another with twelve and four mapped shared properties; close but distinct
-geometry; and a true conflict requiring HUMAN review. The result must be
-invariant under record order and must retain the versioned evidence and
-lineage. A matched object unions non-conflicting property contributions;
-conflicting overlapping values follow approved authority or HUMAN choice.
+1. **Bind known source identity.** A valid existing
+   `(sourceId,typeCode,sourceObjectId)` binding retains continuity. Source
+   identity and canonical Urban Object identity remain separate.
+2. **Generate candidates.** Apply the policy's bounded, indexed blocking
+   predicates within compatible tenant, class and time scopes. Blocking is
+   retrieval only. Overflow yields `RESOLUTION_TOO_BROAD` under the PET,
+   never a truncated first-match decision.
+3. **Compare evidence.** Align version-compatible semantic property and
+   relationship references, normalize values with typed/versioned
+   comparators, and evaluate their declared cardinality, uniqueness,
+   temporal and geometry constraints. Compare the shared property set;
+   missing observations are neither agreement nor contradiction. Preserve
+   both positive and negative evidence, mapping and normalization versions,
+   provenance and coverage.
+4. **Decide under an explicit policy.** Automatic MATCH requires an
+   approved sufficient identity rule whose premises are satisfied and whose
+   competing candidates are excluded under that rule. A weighted score can
+   rank and explain candidates but is not by itself an identity proof.
+   Automatic NEW requires an explicit source-scoped creation policy and
+   traceable provenance, with governed merge available later. Genuine
+   unresolved competing identities or conflicting evidence yield
+   `REVIEW_REQUIRED`, followed by the durable HUMAN workflow.
+5. **Validate before scheduled activation.** Exercise the *same executable
+   engine* on representative source observations and adversarial fixtures,
+   checking decision invariance, candidate bounds and review volume. Fix
+   a policy causing broad or excessive ambiguous outcomes before the source
+   is scheduled; do not add an example-specific exception to the resolver.
+
+Examples are regression tests of these general rules, never special cases
+in the implementation: objects with equal labels but distinct evidence,
+several children sharing one controller, repeated source bindings, unequal
+property counts with a shared mapped subset, nearby geometries, and truly
+ambiguous observations. Results must be invariant to input order. A confirmed
+match unions non-conflicting contributions; conflicting overlapping values
+follow governed property authority or explicit HUMAN choice.
 
 Release evidence still needed: database-backed test of the published worker
 path, a HUMAN approval through the Gateway, property conflict handling and
