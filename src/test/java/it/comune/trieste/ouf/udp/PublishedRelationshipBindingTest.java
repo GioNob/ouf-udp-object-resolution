@@ -28,6 +28,12 @@ class PublishedRelationshipBindingTest {
     var b=bundle();map(((List<Map<String,Object>>)b.get("relationshipMappings")).getFirst(),"resolution").put("onMultipleMatches","FIRST");
     assertThatThrownBy(()->resolve(b)).hasMessage("UDP_PINNED_PROFILE_INVALID");
   }
+  @Test void weightedProposalCannotSilentlyFallBackToSinglePropertyMatch()throws Exception{
+    var b=bundle();var runtime=map(map(b,"extractionProfile"),"runtime");
+    var udp=map(runtime,"udp");var resolution=map(udp,"resolution");
+    resolution.put("weighted",Map.of("signals",List.of(Map.of("property","name","comparator","TEXT","weight",1)),"blockingProperties",List.of("controller"),"maxCandidates",10,"highThreshold",.85,"reviewThreshold",.5,"minimumMargin",.1,"allowSpatialIdentity",false));
+    assertThatThrownBy(()->resolve(b)).hasMessage("UDP_WEIGHTED_RUNTIME_UNAVAILABLE");
+  }
   private PublishedRuntimeConfiguration.Profiles resolve(Map<String,Object> bundle)throws Exception{
     bundle.remove("checksum");String hash="sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(new TreeMap<>(bundle))));bundle.put("checksum",hash);
     byte[] response=json.writeValueAsBytes(Map.of("tenantId","tenant-a","sourceId","cameras","checksum",hash,"bundle",bundle));
