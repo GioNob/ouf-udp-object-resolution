@@ -31,6 +31,7 @@ public class PublishedResolutionLoop {
         GovernedCrsTransform.Result geometry=null;
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
         var decision=resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution());
+        if("REVIEW_REQUIRED".equals(decision.outcome())){jobs.quarantine(claim,"UDP_RESOLUTION_REVIEW_REQUIRED");return;}
         if(Set.of("MATCH","NEW_OBJECT").contains(decision.outcome())){
           if(profiles.spatial()!=null)spatial.materializePrepared(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.spatial(),geometry);
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),profiles.materialization());
