@@ -139,9 +139,10 @@ le conferme sono registrate append-only. Nuove issue arrivate **dopo** la
 lettura sotto lock appartengono al successivo pacchetto; non esiste un lock
 globale sulle ingestion del tenant.
 
-La THS deve ancora rendere il card model e il bottone di conferma trusted
-attraverso Gateway; il chatbot/MCP deve ancora esporre una proiezione
-autorizzata e minimizzata della tabella. Per i casi senza candidato,
+La THS Onboarding prepara una pagina trusted condizionata alla configurazione
+del Gateway; il percorso browser→Gateway→UDP e i claim IAM richiedono ancora
+collaudo reale. Il chatbot/MCP deve ancora esporre una proiezione autorizzata
+e minimizzata della tabella. Per i casi senza candidato,
 `DISMISS` è una decisione esplicita ma non sostituisce un futuro comando
 governato di creazione manuale: questo resta un gate funzionale.
 
