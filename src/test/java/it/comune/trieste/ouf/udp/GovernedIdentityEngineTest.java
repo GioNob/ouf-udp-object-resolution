@@ -26,9 +26,12 @@ class GovernedIdentityEngineTest {
         "{\"b\":[2,{\"z\":true,\"a\":1}],\"a\":null}","handoff://1")));
     var candidate=new Candidate(id,"tenant","Place",Map.of("details",new Value(signal.semanticRef(),
         "{\"a\":null,\"b\":[2.0,{\"a\":1.0,\"z\":true}]}","object://1")));
-    assertThat(engine.decide(policy,subject,rows(candidate)).objectId()).isEqualTo(id);
-    assertThat(engine.decide(policy,subject,rows(new Candidate(UUID.randomUUID(),"tenant","Place",
-        Map.of("details",new Value(signal.semanticRef(),"{\"a\":false}","object://2"))))).outcome())
+    assertThat(engine.decide(policy,subject,new Candidates(policy.ref(),policy.version(),"tenant","Place",
+        "fixture://json",true,List.of(candidate))).objectId()).isEqualTo(id);
+    var different=new Candidate(UUID.randomUUID(),"tenant","Place",
+        Map.of("details",new Value(signal.semanticRef(),"{\"a\":false}","object://2")));
+    assertThat(engine.decide(policy,subject,new Candidates(policy.ref(),policy.version(),"tenant","Place",
+        "fixture://json",true,List.of(different))).outcome())
         .isEqualTo(Outcome.NEW_OBJECT);
   }
 
