@@ -81,8 +81,11 @@ large class. Migration V22 adds a transaction-scoped tenant/class advisory
 lock on every `urban_object` insert/update; `GovernedIdentityScopeLock`
 acquires the same key before retrieval in an explicit transaction. Its
 database-backed test checks both sides against a second connection. The
-published worker does not yet use this protocol. Source-binding changes and
-HUMAN repointing still need continuity checks in the atomic decision path.
+legacy resolver also acquires that key before reading its candidates, so its
+read-before-insert path cannot race the governed scan for the same class. The
+published worker does not yet invoke the governed service. Source-binding
+changes and HUMAN repointing still need continuity checks in the atomic
+decision path.
 
 The returned evidence includes comparator version and both provenance refs,
 without copying raw values into the decision.
