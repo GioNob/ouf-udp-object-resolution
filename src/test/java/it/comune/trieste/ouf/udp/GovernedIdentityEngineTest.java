@@ -48,7 +48,10 @@ class GovernedIdentityEngineTest {
     candidateValues.put("unmapped",new Value("urn:unmapped@set-1","additional","fixture://candidate"));
     var candidate=new Candidate(UUID.randomUUID(),"tenant","Place",candidateValues);
     var incoming=new Subject("tenant","Place","source",values);
-    var matched=engine.decide(POLICY,incoming,rows(candidate));
+    var twoFieldPolicy=new Policy(POLICY.ref(),POLICY.version(),"tenant","Place","source",10,true,
+        SIGNALS,List.of(new SufficientRule("name-and-address",Set.of("name","address"),
+            "policy://approved/name-and-address")));
+    var matched=engine.decide(twoFieldPolicy,incoming,rows(candidate));
     assertThat(matched.outcome()).isEqualTo(Outcome.MATCH);
     assertThat(matched.objectId()).isEqualTo(candidate.objectId());
     assertThat(matched.assessments()).singleElement().satisfies(a -> {
@@ -58,7 +61,7 @@ class GovernedIdentityEngineTest {
     var conflicting=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
         "name",values.get("name"),
         "address",new Value(ADDRESS,"Via Milano 9","fixture://candidate")));
-    assertThat(engine.decide(POLICY,incoming,rows(conflicting)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(engine.decide(twoFieldPolicy,incoming,rows(conflicting)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
     assertThat(engine.decide(POLICY,incoming,rows(candidate,
         candidate(UUID.randomUUID(),"Aurora","Via Roma 1","shop","elsewhere"))).outcome())
         .isEqualTo(Outcome.REVIEW_REQUIRED);
@@ -66,11 +69,14 @@ class GovernedIdentityEngineTest {
 
   @Test void incomingObjectMayHaveMoreFieldsThanTheExistingObject() {
     var incoming=subject("Aurora","Via Roma 1","cinema","entrance");
+    var twoFieldPolicy=new Policy(POLICY.ref(),POLICY.version(),"tenant","Place","source",10,true,
+        SIGNALS,List.of(new SufficientRule("name-and-address",Set.of("name","address"),
+            "policy://approved/name-and-address")));
     UUID id=UUID.randomUUID();
     var existing=new Candidate(id,"tenant","Place",Map.of(
         "name",new Value(NAME," aurora ","fixture://candidate"),
         "address",new Value(ADDRESS,"Via Roma 1","fixture://candidate")));
-    assertThat(engine.decide(POLICY,incoming,rows(existing)).objectId()).isEqualTo(id);
+    assertThat(engine.decide(twoFieldPolicy,incoming,rows(existing)).objectId()).isEqualTo(id);
     var conflicting=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
         "name",new Value(NAME,"Aurora","fixture://candidate"),
         "address",new Value(ADDRESS,"Via Milano 9","fixture://candidate")));
@@ -117,7 +123,13 @@ class GovernedIdentityEngineTest {
     var withExtra=new HashMap<>(other.values());
     withExtra.put("unmapped",new Value("urn:unmapped@set-1","unknown","fixture://candidate"));
     assertThat(engine.decide(POLICY,incoming,rows(new Candidate(UUID.randomUUID(),"tenant","Place",withExtra))).outcome())
-        .isEqualTo(Outcome.REVIEW_REQUIRED);
+        .isEqualTo(Outcome.NEW_OBJECT);
+    var oneCommonDifferent=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
+        "name",new Value(NAME,"Boreale","fixture://candidate"),
+        "unmapped",new Value("urn:unmapped@set-1","unknown","fixture://candidate")));
+    assertThat(engine.decide(POLICY,new Subject("tenant","Place","source",Map.of(
+        "name",new Value(NAME,"Aurora","fixture://subject"))),rows(oneCommonDifferent)).outcome())
+        .isEqualTo(Outcome.NEW_OBJECT);
     var exact=candidate(UUID.randomUUID(),"Aurora","Via Roma 1","cinema","entrance");
     assertThat(engine.decide(POLICY,incoming,rows(exact,partlySimilar)).outcome())
         .isEqualTo(Outcome.REVIEW_REQUIRED);
@@ -136,9 +148,17 @@ class GovernedIdentityEngineTest {
     assertThat(engine.decide(POLICY,subject,incomplete).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
   }
 
-  @Test void subsetAndUniqueAssertionsCannotAuthorizeAutomaticMatch() {
+  @Test void onlyAnExplicitSufficientRuleAuthorizesAutomaticMatch() {
+    var nameOnly=new Subject("tenant","Place","source",Map.of(
+        "name",new Value(NAME,"Aurora","fixture://subject")));
+    var existing=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
+        "name",new Value(NAME,"Aurora","fixture://candidate")));
+    assertThat(engine.decide(POLICY,nameOnly,rows(existing)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    var explicitlyApproved=new Policy("p","1","tenant","Place","source",10,true,SIGNALS,
+        List.of(new SufficientRule("name",Set.of("name"),"assertion://name-sufficient")));
+    assertThat(engine.decide(explicitlyApproved,nameOnly,rows(existing)).outcome()).isEqualTo(Outcome.MATCH);
     assertThatThrownBy(()->new Policy("p","1","tenant","Place","source",10,true,SIGNALS,
-        List.of(new SufficientRule("subset",Set.of("name"),"assertion://subset"))))
+        List.of(new SufficientRule("other",Set.of("not-mapped"),"assertion://invalid"))))
         .hasMessage("UDP_IDENTITY_POLICY_INVALID");
     var unique=List.of(new Signal("name",NAME,ComparatorKind.TEXT_V1,false,true,"assertion://unique"));
     assertThatThrownBy(()->new Policy("p","1","tenant","Place","source",10,true,unique,
