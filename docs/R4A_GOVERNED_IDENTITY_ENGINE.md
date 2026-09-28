@@ -76,9 +76,12 @@ the coverage reference. An extra row marks the envelope incomplete and
 forces `RESOLUTION_TOO_BROAD`. A small class has complete coverage at that
 statement snapshot; no blocking-key subset can silently omit competitors.
 This deliberately conservative scan is not a selective identity index for a
-large class. Before live decisions, all identity writes, including HUMAN
-repointing, must share a scope lock or an equivalent serializable protocol so
-the statement snapshot cannot race a new object or change of identity.
+large class. Migration V22 adds a transaction-scoped tenant/class advisory
+lock on every `urban_object` insert/update; `GovernedIdentityScopeLock`
+acquires the same key before retrieval in an explicit transaction. Its
+database-backed test checks both sides against a second connection. The
+published worker does not yet use this protocol. Source-binding changes and
+HUMAN repointing still need continuity checks in the atomic decision path.
 
 The returned evidence includes comparator version and both provenance refs,
 without copying raw values into the decision.
@@ -104,7 +107,8 @@ not a separate simulation algorithm.
    temporal applicability; a semantic mapping must never imply uniqueness.
    Add relation, temporal and spatial comparators with explicit applicability.
 2. Extend the current whole-class indexed snapshot to temporal scope and
-   production scale, and serialize all identity writes with retrieval.
+   production scale, and hold the new scope lock across retrieval, decision,
+   append-only persistence and binding writes in the published worker.
    If a selective identity index is introduced, backfill existing canonical
    objects and prove complete coverage before activation. An incomplete
    index must fail closed. Persist the coverage reference with each decision
