@@ -92,7 +92,8 @@ class IdentityGovernanceRuntimeTest {
     var resumed=governed.resolve("governed-review",handoff("governed-review","incoming","same"),mapping,policy);
     assertThat(resumed.outcome()).isEqualTo("MATCH");
     assertThat(resumed.targetUrbanObjectId()).isEqualTo(selected);
-    assertThat(resumed.duplicate()).isTrue();
+    assertThat(resumed.duplicate()).isFalse();
+    assertThat(resumed.coverageRef()).isNull();
     assertThat(db.sql("select count(*) from ouf_udp.resolution_decision where handoff_id='governed-review'")
         .query(Long.class).single()).isOne();
   }
