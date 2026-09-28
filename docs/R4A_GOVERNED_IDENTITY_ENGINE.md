@@ -152,8 +152,12 @@ scegliere `APPROVE` su un candidato oppure `CREATE_NEW` senza target. La seconda
 scelta viene registrata nel pacchetto atomico, ma l'oggetto viene creato solo
 nella transazione del worker, insieme alla materializzazione e all'aggiornamento
 dell'indice. La copertura deve essere ancora quella della revisione e restare
-completa sia alla conferma sia all'esecuzione; una modifica nel frattempo
-blocca l'esecuzione. `DISMISS` chiude il caso senza creare l'oggetto.
+completa sia alla conferma sia all'esecuzione. Se una nuova copertura completa
+sostituisce quella confermata, UDP riapre il caso con versione ed evidenze
+aggiornate, preservando append-only le precedenti decisioni umane: l'utente
+deve confermare un nuovo pacchetto. Se la copertura è incompleta, il worker
+non crea alcun oggetto e richiede prima un nuovo preflight e retry del job.
+`DISMISS` chiude il caso senza creare l'oggetto.
 
 Il percorso governed è collegato a `PublishedResolutionLoop`; Onboarding
 interroga la copertura attuale attraverso Gateway prima di attivarlo. Senza
