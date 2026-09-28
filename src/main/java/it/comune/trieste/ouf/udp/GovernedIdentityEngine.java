@@ -3,10 +3,11 @@ package it.comune.trieste.ouf.udp;
 import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Deterministic identity decision core. Candidate retrieval and persistence are separate ports. */
 public final class GovernedIdentityEngine {
-  public enum ComparatorKind { CONCEPT, TEXT_V1, DECIMAL_V1 }
+  public enum ComparatorKind { CONCEPT, TEXT_V1, DECIMAL_V1, JSON_V1 }
   public enum Outcome { MATCH, NEW_OBJECT, REVIEW_REQUIRED, RESOLUTION_TOO_BROAD }
   public enum EvidenceKind { AGREE, DISAGREE, MISSING }
 
@@ -182,7 +183,24 @@ public final class GovernedIdentityEngine {
       case TEXT_V1 -> Normalizer.normalize(raw, Normalizer.Form.NFKC).strip()
           .replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
       case DECIMAL_V1 -> new BigDecimal(raw.strip()).stripTrailingZeros().toPlainString();
+      case JSON_V1 -> canonicalJson(raw);
     };
+  }
+  private static String canonicalJson(String raw) {
+    try {
+      ObjectMapper json=new ObjectMapper();
+      return json.writeValueAsString(sortedJson(json.readValue(raw,Object.class)));
+    } catch(Exception invalid) { throw new IllegalArgumentException("UDP_IDENTITY_JSON_INVALID",invalid); }
+  }
+  private static Object sortedJson(Object value) {
+    if(value instanceof Map<?,?> map){
+      Map<String,Object> sorted=new TreeMap<>();
+      map.forEach((key,item)->sorted.put(String.valueOf(key),sortedJson(item)));
+      return sorted;
+    }
+    if(value instanceof List<?> list)return list.stream().map(GovernedIdentityEngine::sortedJson).toList();
+    if(value instanceof Number number)return new BigDecimal(number.toString()).stripTrailingZeros();
+    return value;
   }
   private static boolean blank(String value) { return value == null || value.isBlank(); }
   private static IllegalArgumentException invalid() { return new IllegalArgumentException("UDP_IDENTITY_POLICY_INVALID"); }
