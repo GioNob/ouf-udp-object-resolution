@@ -1,142 +1,62 @@
-# R4a governed identity engine: implementation boundary
+# R4a: identità degli oggetti canonici
 
-`GovernedIdentityEngine` is a deterministic decision core for issue #35.
-PostgreSQL candidate, locking, decision and review adapters are available,
-but the governed path is not yet wired to `PublishedResolutionLoop` or
-`PublishedRuntimeConfiguration`. The
-current `weighted` fail-closed gate remains in force. No
-source activation or R-SMOKE claim follows from this branch.
+## Confine della fonte
 
-`PublishedIdentityPolicy.decode` now reads the proposed `governedIdentity`
-shape under `resolution` strictly and constructs the same policy record used
-by the decision core. It checks exact fields, tenant/source/class scope,
-mapped signal IDs, pinned semantic reference syntax and required assertion
-references. It is not invoked by the active publication resolver. A syntactic
-assertion reference does not verify that an approved identity policy grants the
-claimed uniqueness, exclusion or sufficient rule; that verification is still
-a prerequisite for activation. The Semantic Registry pins the meaning and
-version of the mapped property, not object-resolution authority.
-The identical `identity-governed-proposal-v1.json` fixture is exercised by
-Onboarding proposal validation and this UDP decoder; it is a contract example,
-not a deployed policy or a proof of semantic authority.
-`GovernedIdentitySubjectMapper` projects one Ingestion handoff through the
-published materialization mapping, matching policy signal IRIs to mapped
-canonical fields and the handoff's semantic publication. A missing value stays
-missing; an unmapped signal or publication mismatch fails closed. The source
-file format and originating vertical do not enter identity comparison.
+Una fonte può essere un file (CSV compreso) o un verticale che trasmette via API.
+Onboarding configura la fonte; Ingestion acquisisce, interpreta e produce gli
+oggetti canonici con lineage e riferimenti ai contratti. UDP riceve gli handoff
+canonici, non il file originale né la sua estensione. L'esempio dei cinema è
+soltanto una fixture, non uno schema di identità di produzione.
 
-The published resolver now accepts only the six explicit legacy fields
-(`strategyId`, `strategyVersion`, `policyRef`, `canonicalType`,
-`canonicalKeyProperty`, `matchProperty`) and requires nonblank values.
-`weighted`, `governedIdentity`, any other unrecognized field in the published
-resolution configuration, or an incomplete legacy profile cannot be
-interpreted as an executable single-property strategy. This concerns the
-configuration bundle resolved from Onboarding, not the source file or the
-Ingestion-to-UDP handoff. UDP receives per-record handoffs from Ingestion with
-`sourceIdentity`, `canonicalPayload`, lineage and contract references; UDP
-decides the canonical Urban Object identity and materializes its revision.
-This compatibility check preserves the existing runtime gate while the new
-policy contract and indexed retrieval are developed.
+## Decisione
 
-The policy is pinned by `ref` and `version` and scoped to tenant, canonical
-class and source. Every signal names an exact versioned semantic reference
-and comparator. Signals that assert uniqueness or exclude on disagreement,
-and every sufficient rule, must now carry an explicit governance assertion
-reference. Comparison evidence retains the signal assertion reference.
-These references are traceability fields, not self-authenticating grants:
-Onboarding and UDP still need to resolve them against an approved, immutable
-identity-policy publication and verify scope, cardinality and validity before
-activation. Semantic publication compatibility is checked separately.
-A sufficient rule requires an explicit uniqueness assertion within that
-policy scope. Text normalization is NFKC, whitespace collapse and
-locale-independent lowercase; concept IDs are exact; decimals are canonical
-numeric values. Changing normalization requires a new comparator version.
+Non si presume che esista un identificatore stabile. Coordinate e indirizzo
+possono descrivere punti diversi dello stesso oggetto e costituiscono indizi.
+Una policy di una classe e una fonte dichiara la proiezione completa delle
+proprietà canoniche mappate, con versione semantica e comparatore per ciascuna.
+La sola regola sufficiente comprende **tutte** queste proprietà: una coincidenza
+parziale non è una corrispondenza automatica. Con quattro campi, tutti e quattro
+devono essere presenti, semanticamente compatibili e uguali ai corrispondenti
+campi di un oggetto attivo. Una sola corrispondenza completa identifica lo stesso
+oggetto; due corrispondenze complete richiedono revisione. Campi mancanti,
+versioni semantiche diverse o valori discordanti restano evidenza per l'umano;
+nessuna differenza esclude da sola un candidato.
 
-Candidate retrieval must supply the *complete* bounded result, querying at
-least `maxCandidates + 1`. The decision API now requires a `Candidates`
-envelope pinned to policy ref/version, tenant and canonical class, with a
-coverage reference for a complete index snapshot. Missing coverage returns
-`REVIEW_REQUIRED` with `CANDIDATE_COVERAGE_UNVERIFIED`, even for an empty
-candidate set or an otherwise sufficient match. A mismatched scope or policy
-is invalid. This is an interface contract, not proof that an index is complete:
-the future retrieval adapter must establish and retain the coverage reference
-transactionally. If the extra row exists, the engine returns
-`RESOLUTION_TOO_BROAD`; neither retrieval nor decision may truncate to a
-first match. The engine rejects cross-tenant/class candidates and duplicate
-object IDs. A missing or differently published semantic reference is neutral,
-not an agreement. A competitor remains plausible unless a published signal
-explicitly excludes it on disagreement. One sufficient candidate with no
-plausible competitor may MATCH. Creation needs the source-scoped policy flag.
-If a candidate satisfies a sufficient identity rule yet another signal
-excludes it, the conflicting evidence requires HUMAN review rather than
-automatic creation of a second object.
-`ScopedIdentityCandidateRepository` scans active objects in the entire
-tenant/class through `urban_object_tenant_type_status_idx`, ordered by object
-ID and limited to `maxCandidates + 1`. It reads signal values from each
-object's current revision and the winning contribution's semantic publication
-reference in the same SQL statement. The PostgreSQL snapshot is recorded in
-the coverage reference. An extra row marks the envelope incomplete and
-forces `RESOLUTION_TOO_BROAD`. A small class has complete coverage at that
-statement snapshot; no blocking-key subset can silently omit competitors.
-This deliberately conservative scan is not a selective identity index for a
-large class. Migration V22 adds a transaction-scoped tenant/class advisory
-lock on every `urban_object` insert/update; `GovernedIdentityScopeLock`
-acquires the same key before retrieval in an explicit transaction. Its
-database-backed test checks both sides against a second connection. The
-legacy resolver also acquires that key before reading its candidates, so its
-read-before-insert path cannot race the governed scan for the same class. The
-HUMAN merge/split execution locks the affected scopes before repointing
-bindings. The published worker does not yet invoke the governed service.
+Senza candidati nel perimetro completo e verificato si può creare un oggetto
+solo quando la policy della fonte abilita `allowAutoNew`. Con almeno un
+candidato ma senza un'unica uguaglianza completa, il risultato è
+`REVIEW_REQUIRED`. Un insieme troppo grande o una copertura non attestata
+blocca la decisione automatica. La normalizzazione `TEXT_V1` applica NFKC,
+spazi normalizzati e minuscole indipendenti dalla locale; `CONCEPT` confronta
+l'identificatore esatto e `DECIMAL_V1` il valore numerico canonico. Cambiare
+comparatore richiede una nuova versione.
 
-The returned evidence includes comparator version and both provenance refs,
-without copying raw values into the decision.
-`GovernedIdentityReviewRepository` can persist a non-automatic outcome in the
-existing append-only `resolution_decision` and durable `resolution_issue`,
-including policy version, snapshot coverage, all assessments and signal
-provenance. It maps `RESOLUTION_TOO_BROAD` to a review decision with a distinct
-reason and an empty selectable candidate list; the existing HUMAN approval
-endpoint therefore cannot approve one of the truncated rows. This repository
-is not invoked by the published worker yet. `GovernedIdentityResolutionService`
-holds the scope lock across current-state retrieval, comparison, append-only
-MATCH/NEW_OBJECT decision and source-binding write in one transaction. A
-previous decision is idempotent. An existing binding must agree with the
-governed result; divergence creates a non-selectable HUMAN issue rather than
-reassigning that binding. The prepared service does not grant policy authority
-or bypass the publication gate.
-The shared HUMAN approval path now parses candidate IDs as exact JSON entries.
-For governed issues it takes the scope lock and checks that the selected object
-is still ACTIVE in the recorded tenant/class and that each identity signal's
-current winning contribution still matches the recorded comparison. A
-concurrent ACTIVE binding conflict aborts the approval transaction.
+La forma attuale del contratto mantiene per compatibilità i nomi `signals` e
+`sufficientRules`, ma rifiuta `uniqueWithinScope: true`,
+`excludesOnDisagreement: true`, regole su sottoinsiemi e proprietà mappate non
+comprese nel confronto. `assertionRef` della regola è una traccia della policy
+approvata, non una dichiarazione di unicità di un campo.
 
-`preflight` calls the same `decide` method used for individual observations
-and reports the decision distribution and largest candidate set. Activation
-will need governed acceptance limits for review volume and broad outcomes,
-not a separate simulation algorithm.
+## Revisione umana e attivazione
 
-## Integration gates still open
+L'adapter persiste decisione, prove, candidati, versione e copertura in
+`resolution_issue`. Il chatbot deve poter mostrare **tutti** i casi aperti
+accessibili al tenant in una tabella con indizi, candidati e soluzione proposta.
+L'utente può modificare le scelte; THS presenta l'intero pacchetto congelato
+con versioni degli issue e impronta. Solo l'umano autenticato può approvare
+l'intero pacchetto, in una transazione: se un caso, il set dei casi aperti o
+una prova è cambiata, la conferma fallisce e si prepara un nuovo pacchetto.
+Un caso senza proposta utilizzabile resta nel pacchetto e richiede una scelta
+esplicita; la revisione non deve trasformare un'ipotesi in una decisione
+silenziosa. L'endpoint attuale decide un issue alla volta: lista, proposta
+modificabile e conferma atomica sono ancora da implementare.
 
-1. Agree the published, immutable identity-policy schema with Onboarding,
-   and check semantic property/version compatibility with the Semantic
-   Registry. Resolve each governance assertion ref against an approved
-   identity-policy publication, verifying scope, cardinality and temporal
-   applicability; a semantic mapping must never imply uniqueness.
-   Add relation, temporal and spatial comparators with explicit applicability.
-2. Extend the current whole-class indexed snapshot to temporal scope and
-   production scale, and hold the new scope lock across retrieval, decision,
-   append-only persistence and binding writes in the published worker.
-   If a selective identity index is introduced, backfill existing canonical
-   objects and prove complete coverage before activation. An incomplete
-   index must fail closed. Persist the coverage reference with each decision
-   and carry it through preflight probes.
-3. Connect the prepared atomic path to the published worker only after the
-   policy's assertions are verified and candidate coverage is certified for
-   its scope. A HUMAN approval checks candidate-signal contribution stability;
-   governance must also define how to reopen an issue when those signals have
-   changed since review.
-4. Reconcile property conflicts under governed authority or HUMAN choice
-   before serving a confirmed merge. Exercise exact historical replay,
-   concurrent workers and the database-backed Gateway/THS acceptance path.
-
-The cinema and traffic-light examples belong in regression fixtures only.
-No field name or example literal has identity authority in production code.
+Il percorso governed è preparato ma non collegato a `PublishedResolutionLoop`:
+la gate di attivazione resta chiusa. Occorre attestare la completezza dei
+candidati anche su classi grandi, verificare il confronto di tutti i valori
+canonici (comprese proprietà multivalore e geometrie), versionare la policy,
+validare la copertura nel preflight e definire la provenienza del tenant per
+*ogni* issue prima di esporre una lista multi-tenant. Il controllo attuale
+confronta i valori scalari mappati; non equivale ancora a un confronto completo
+di ogni possibile struttura canonica. Le regole di autorità dei valori e la
+riapertura degli issue con prove mutate rimangono gate di integrazione.
