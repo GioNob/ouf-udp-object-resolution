@@ -2,6 +2,10 @@
 
 Cross-module live snapshot and PET 1.7 handoff: [OUF handoff 27 September 2026](https://github.com/GioNob/ouf-semantic-registry/blob/codex/r4a-smoke-semantic-inventory/docs/handoffs/OUF_HANDOFF_2026-09-27_R4A.md). This branch is a prerequisite under review, not a deployed complete identity engine. The Semantic publication is live, while the Onboarding DRAFT for asset `8ec8ae90-808a-4d9e-907c-d56de119e376` is inactive and no Ingestion/UDP result is attested. Issue #35 tracks the general executable policy. Do not activate a weighted definition solely because Onboarding validates its shape.
 
+La preparazione successiva dell'identità canonica e dell'indice inverso è in
+[`R4A_GOVERNED_IDENTITY_ENGINE.md`](R4A_GOVERNED_IDENTITY_ENGINE.md).
+Il percorso pubblicato descritto qui rimane legacy finché il gate R4a è chiuso.
+
 The UDP PET separates durable handoff acknowledgement from later object
 resolution. A handoff can be durable while its individual resolution job is
 quarantined for HUMAN review. No canonical revision may be served for that
@@ -68,8 +72,9 @@ published policy:
    provenance and coverage.
 4. **Decide under an explicit policy.** Automatic MATCH requires an
    approved sufficient identity rule whose premises are satisfied and whose
-   competing candidates are excluded under that rule. A weighted score can
-   rank and explain candidates but is not by itself an identity proof.
+   competing candidates are excluded under that rule. The UDP PET permits
+   an approved weighted strategy above its versioned HIGH threshold; its
+   score is not authority outside that strategy and its constraints.
    Automatic NEW requires an explicit source-scoped creation policy and
    traceable provenance, with governed merge available later. Genuine
    unresolved competing identities or conflicting evidence yield
