@@ -63,3 +63,21 @@ end$$;
 create trigger identity_lookup_token_change after insert or update or delete
   on ouf_udp.identity_lookup_token for each row
   execute function ouf_udp.invalidate_identity_lookup_token_coverage();
+
+-- A current revision can still receive an append-only property_value row.
+-- Serialize that change with candidate reads and invalidate its coverage.
+create function ouf_udp.invalidate_identity_lookup_property() returns trigger language plpgsql as $$
+declare scope_tenant text; scope_class text;
+begin
+  select o.tenant_id,o.canonical_type into scope_tenant,scope_class
+    from ouf_udp.object_revision r join ouf_udp.urban_object o on o.urban_object_id=r.urban_object_id
+    where r.revision_id=new.revision_id and o.current_revision_id=new.revision_id;
+  if found then
+    perform pg_advisory_xact_lock(hashtextextended('identity:' || scope_tenant || ':' || scope_class,0));
+    update ouf_udp.identity_lookup_coverage set complete=false,updated_at=transaction_timestamp()
+      where tenant_id=scope_tenant and canonical_class=scope_class and complete;
+  end if;
+  return null;
+end$$;
+create trigger identity_lookup_current_property after insert on ouf_udp.property_value
+  for each row execute function ouf_udp.invalidate_identity_lookup_property();
