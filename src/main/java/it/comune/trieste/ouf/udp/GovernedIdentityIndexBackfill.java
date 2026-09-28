@@ -74,6 +74,12 @@ public class GovernedIdentityIndexBackfill {
       String normalized;
       try{normalized=GovernedIdentityEngine.normalize(signal.comparator(),String.valueOf(scalar));}
       catch(IllegalArgumentException failure){throw invalid("COMPARATOR_UNSUPPORTED");}
+      Object canonical=current.get(property);
+      if(!(canonical instanceof String||canonical instanceof Number))throw invalid("CURRENT_VALUE_UNSUPPORTED");
+      String canonicalNormalized;
+      try{canonicalNormalized=GovernedIdentityEngine.normalize(signal.comparator(),String.valueOf(canonical));}
+      catch(IllegalArgumentException failure){throw invalid("CURRENT_VALUE_UNSUPPORTED");}
+      if(!normalized.equals(canonicalNormalized))throw invalid("CURRENT_VALUE_MISMATCH");
       db.sql("insert into ouf_udp.identity_lookup_token(tenant_id,canonical_class,policy_ref,policy_version,urban_object_id,revision_id,property_iri,semantic_ref,comparator,value_hash) values(:tenant,:type,:policy,:version,:id,:revision,:property,:semantic,:comparator,:hash)")
           .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
           .param("policy",policy.ref()).param("version",policy.version())
