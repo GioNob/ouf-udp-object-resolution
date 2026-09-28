@@ -71,10 +71,12 @@ ricerche indicizzate e dai candidati trovati, non da `m × n` oggetti.
 
 La migrazione `V23` prepara l'indice inverso dei valori, un indice delle
 forme dei campi e una tabella di attestazione per tenant, classe e versione
-della policy, con impronta dei segnali, semantiche e comparatori effettivi.
-La lettura usa una sola snapshot SQL: unisce i candidati che
-condividono un valore a quelli con una forma dei campi diversa, cercati nei
-due intervalli indicizzati prima e dopo l'impronta della forma in ingresso.
+della policy. `V24` aggiunge un catalogo dei **distinti insiemi di campi**.
+La lettura usa una sola snapshot SQL: unisce i candidati che condividono un
+valore a quelli la cui forma non ha **alcun** campo comune, selezionando
+prima le forme nel catalogo e poi gli ID tramite indice. Una forma diversa
+che condivide campi, ma nessun valore, è distinta secondo la regola
+governata e non richiede il caricamento degli oggetti corrispondenti.
 Applica il limite e carica le
 proprietà complete solo per quegli ID. Le mutazioni di `urban_object`, della
 proiezione corrente, dei valori correnti o dei token invalidano
@@ -96,9 +98,9 @@ atomicamente con le revisioni correnti, con i nuovi oggetti non ancora
 materializzati, con merge/split e con le rimozioni. Una mutazione non coperta
 deve lasciare la classe non attestata. Solo allora la verifica di copertura
 può essere pubblicata senza ripetere una scansione completa a ogni handoff.
-Le forme eterogenee sono indicizzate separatamente: un oggetto senza valori
-uguali, ma con campi in più o in meno, resta un candidato incerto. Se questi
-candidati superano `maxCandidates`, la risposta è `RESOLUTION_TOO_BROAD`;
+Le forme disgiunte sono indicizzate separatamente: un oggetto senza valori
+uguali e senza campi comuni resta un candidato incerto. Se questi candidati
+superano `maxCandidates`, la risposta è `RESOLUTION_TOO_BROAD`;
 il limite non viene aggirato con una scansione della classe. Il backfill
 registra anche il numero degli oggetti verificati: con **zero** oggetti, la
 copertura è valida per qualunque sottoinsieme non vuoto di campi e consente
