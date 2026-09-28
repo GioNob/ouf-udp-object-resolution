@@ -55,8 +55,9 @@ class GovernedIdentityEngineTest {
       assertThat(a.evidence()).extracting(Evidence::signalId).containsExactly("address","category","geo","name","unmapped");
       assertThat(a.evidence()).filteredOn(e->e.kind()==EvidenceKind.AGREE).hasSize(2);
     });
-    var conflicting=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of("name",
-        new Value(NAME,"Different","fixture://candidate")));
+    var conflicting=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
+        "name",values.get("name"),
+        "address",new Value(ADDRESS,"Via Milano 9","fixture://candidate")));
     assertThat(engine.decide(POLICY,incoming,rows(conflicting)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
     assertThat(engine.decide(POLICY,incoming,rows(candidate,
         candidate(UUID.randomUUID(),"Aurora","Via Roma 1","shop","elsewhere"))).outcome())
@@ -101,6 +102,24 @@ class GovernedIdentityEngineTest {
         new Value("urn:amount@set-1","invalid-decimal","fixture://candidate")));
     var retrieved=new Candidates(policy.ref(),policy.version(),"tenant","Place","index://snapshot",true,List.of(existing));
     assertThat(engine.decide(policy,incoming,retrieved).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+  }
+
+  @Test void entirelyDifferentComparableFieldsEstablishDistinctObjects() {
+    var incoming=subject("Aurora","Via Roma 1","cinema","entrance");
+    var other=candidate(UUID.randomUUID(),"Boreale","Via Milano 9","shop","other-place");
+    var decision=engine.decide(POLICY,incoming,rows(other));
+    assertThat(decision.outcome()).isEqualTo(Outcome.NEW_OBJECT);
+    assertThat(decision.reason()).isEqualTo("ALL_CANDIDATES_DISTINCT");
+    assertThat(decision.assessments()).singleElement().satisfies(a->assertThat(a.excluded()).isTrue());
+    var partlySimilar=candidate(UUID.randomUUID(),"Aurora","Via Milano 9","shop","other-place");
+    assertThat(engine.decide(POLICY,incoming,rows(other,partlySimilar)).outcome())
+        .isEqualTo(Outcome.REVIEW_REQUIRED);
+    var exact=candidate(UUID.randomUUID(),"Aurora","Via Roma 1","cinema","entrance");
+    assertThat(engine.decide(POLICY,incoming,rows(exact,partlySimilar)).outcome())
+        .isEqualTo(Outcome.REVIEW_REQUIRED);
+    var noCreate=new Policy(POLICY.ref(),POLICY.version(),"tenant","Place","source",10,false,
+        SIGNALS,POLICY.sufficientRules());
+    assertThat(engine.decide(noCreate,incoming,rows(other)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
   }
 
   @Test void duplicateExactRecordsRequireHumanAndEmptyScopeCanCreate() {
