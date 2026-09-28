@@ -41,9 +41,11 @@ public class IdentityGovernanceService {
     if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_REASON_REQUIRED");
     boolean approve="APPROVE".equals(action);
     if(!approve&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
-    Map<String,Object> issue=db.sql("select i.handoff_id,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
+    Map<String,Object> issue=db.sql("select i.handoff_id,i.tenant_id,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
         .param("i",issueId).param("v",expectedVersion).query().listOfRows().stream().findFirst()
         .orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"UDP_ISSUE_VERSION_CONFLICT"));
+    if(!actor.tenantId().equals(issue.get("tenant_id")))
+      throw new SecurityException("UDP_REVIEW_TENANT_REQUIRED");
     if(approve){
       Object rawCandidates=readAny(String.valueOf(issue.get("candidates")));
       if(target==null||!(rawCandidates instanceof List<?> candidates)
