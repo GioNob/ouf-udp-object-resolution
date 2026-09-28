@@ -65,6 +65,30 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThatThrownBy(()->backfill.rebuild(policy())).hasMessageContaining("CURRENT_VALUE_MISMATCH");
     assertThat(candidates.retrieve(policy(),subject("Alpha")).complete()).isFalse();
   }
+  @Test void unionsIndexedSeedsFromEveryExposedField(){
+    clearObjects();
+    UUID first=materializeWithAddress("a","Alpha","Via Roma");
+    UUID second=materializeWithAddress("b","Beta","Via Milano");
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/two","1","default","ouf:Road","registry",2,true,
+        List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
+                GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1"),
+            new GovernedIdentityEngine.Signal("ouf:address","ouf:address@semantic://publication/1",
+                GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://address/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("whole",Set.of("ouf:name","ouf:address"),"assertion://whole/1")));
+    assertThat(backfill.rebuild(policy).indexedObjects()).isEqualTo(2);
+    var subject=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of(
+        "ouf:name",new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Beta","handoff://probe/name"),
+        "ouf:address",new GovernedIdentityEngine.Value("ouf:address@semantic://publication/1","Via Roma","handoff://probe/address")));
+    var result=candidates.retrieve(policy,subject);
+    assertThat(result.complete()).isTrue();
+    assertThat(result.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactlyInAnyOrder(first,second);
+    assertThat(new GovernedIdentityEngine().decide(policy,subject,result).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED);
+    var narrow=new GovernedIdentityEngine.Policy(policy.ref(),policy.version(),policy.tenantId(),
+        policy.canonicalClass(),policy.sourceId(),1,true,policy.signals(),policy.sufficientRules());
+    assertThat(new GovernedIdentityEngine().decide(narrow,subject,candidates.retrieve(narrow,subject)).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.RESOLUTION_TOO_BROAD);
+  }
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
   private GovernedIdentityEngine.Policy policy(){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",1,true,
         List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
@@ -78,6 +102,16 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     UUID object=resolver.resolve("candidate-"+id,envelope,new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code")).targetUrbanObjectId();
     materializer.materialize("candidate-"+id,object,envelope,new UdpPorts.MaterializationProfile("policy://authority/1",
         List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry")))));
+    return object;
+  }
+  private UUID materializeWithAddress(String id,String name,String address){
+    Map<String,Object> envelope=envelope(id,name);
+    envelope.put("canonicalPayload",Map.of("code",id,"name",name,"address",address));
+    intake.accept(envelope);
+    UUID object=resolver.resolve("candidate-"+id,envelope,new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code")).targetUrbanObjectId();
+    materializer.materialize("candidate-"+id,object,envelope,new UdpPorts.MaterializationProfile("policy://authority/1",
+        List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry")),
+            new UdpPorts.PropertyRule("address","ouf:address","string","OPEN",List.of("registry")))));
     return object;
   }
   private Map<String,Object> envelope(String id,String name){return new LinkedHashMap<>(Map.ofEntries(
