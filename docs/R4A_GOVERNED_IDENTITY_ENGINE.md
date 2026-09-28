@@ -1,8 +1,9 @@
 # R4a governed identity engine: implementation boundary
 
-`GovernedIdentityEngine` is a deterministic decision core for issue #35. It is
-not yet wired to `PublishedResolutionLoop`, `PublishedRuntimeConfiguration`, or
-the database. The current `weighted` fail-closed gate remains in force. No
+`GovernedIdentityEngine` is a deterministic decision core for issue #35. A
+read-only PostgreSQL candidate adapter is available, but the core is not yet
+wired to `PublishedResolutionLoop` or `PublishedRuntimeConfiguration`. The
+current `weighted` fail-closed gate remains in force. No
 source activation or R-SMOKE claim follows from this branch.
 
 `PublishedIdentityPolicy.decode` now reads the proposed `governedIdentity`
@@ -61,6 +62,19 @@ plausible competitor may MATCH. Creation needs the source-scoped policy flag.
 If a candidate satisfies a sufficient identity rule yet another signal
 excludes it, the conflicting evidence requires HUMAN review rather than
 automatic creation of a second object.
+`ScopedIdentityCandidateRepository` scans active objects in the entire
+tenant/class through `urban_object_tenant_type_status_idx`, ordered by object
+ID and limited to `maxCandidates + 1`. It reads signal values from each
+object's current revision and the winning contribution's semantic publication
+reference in the same SQL statement. The PostgreSQL snapshot is recorded in
+the coverage reference. An extra row marks the envelope incomplete and
+forces `RESOLUTION_TOO_BROAD`. A small class has complete coverage at that
+statement snapshot; no blocking-key subset can silently omit competitors.
+This deliberately conservative scan is not a selective identity index for a
+large class. Before live decisions, all identity writes, including HUMAN
+repointing, must share a scope lock or an equivalent serializable protocol so
+the statement snapshot cannot race a new object or change of identity.
+
 The returned evidence includes comparator version and both provenance refs,
 without copying raw values into the decision.
 
@@ -76,11 +90,12 @@ not a separate simulation algorithm.
    ref against an approved publication, verifying scope, cardinality and
    temporal applicability; a semantic mapping must never imply uniqueness.
    Add relation, temporal and spatial comparators with explicit applicability.
-2. Implement indexed, tenant/class/time-scoped candidate retrieval and
-   transactional coverage checks that issue the `Candidates` envelope.
-   Existing canonical objects must be indexed or rebuilt before the policy
-   is active; an incomplete index must fail closed. Persist the coverage
-   reference with each decision and carry it through preflight probes.
+2. Extend the current whole-class indexed snapshot to temporal scope and
+   production scale, and serialize all identity writes with retrieval.
+   If a selective identity index is introduced, backfill existing canonical
+   objects and prove complete coverage before activation. An incomplete
+   index must fail closed. Persist the coverage reference with each decision
+   and carry it through preflight probes.
 3. Persist the complete comparison evidence with the append-only resolution
    decision. Connect `REVIEW_REQUIRED` and `RESOLUTION_TOO_BROAD` to durable
    HUMAN quarantine, and preserve the source binding continuity path.
