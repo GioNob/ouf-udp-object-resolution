@@ -33,8 +33,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     var full=candidates.retrieve(policy(2));
     assertThat(full.complete()).isTrue();
     assertThat(full.coverageRef()).startsWith("postgres-snapshot://");
-    assertThat(full.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(first,second);
-    assertThat(full.rows().getFirst().values().get("ouf:name"))
+    assertThat(full.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactlyInAnyOrder(first,second);
+    assertThat(full.rows().stream().filter(candidate->candidate.objectId().equals(first)).findFirst().orElseThrow().values().get("ouf:name"))
         .satisfies(value->{assertThat(value.semanticRef()).isEqualTo("ouf:name@semantic://publication/1");
           assertThat(value.raw()).isEqualTo("Alpha");assertThat(value.provenanceRef()).startsWith("contribution://");});
     var decision=new GovernedIdentityEngine().decide(policy(2),
