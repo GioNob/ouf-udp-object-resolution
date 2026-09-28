@@ -152,7 +152,10 @@ public class GovernedIdentityResolutionService {
       String observed=evidence.get(0).path("coverageRef").asText();
       String prefix="indexed-snapshot://";
       if(current==null||!current.startsWith(prefix)||!observed.startsWith(prefix))return false;
-      String currentRef=current.substring(prefix.length()).split("/",2)[0];
+      int snapshotSeparator=current.lastIndexOf('/');
+      int transactionSeparator=current.lastIndexOf('/',snapshotSeparator-1);
+      if(transactionSeparator<=prefix.length())return false;
+      String currentRef=current.substring(prefix.length(),transactionSeparator);
       return observed.startsWith(prefix+currentRef+"/");
     }catch(Exception failure){throw new IllegalStateException("UDP_IDENTITY_EVIDENCE_INVALID",failure);}
   }
