@@ -39,6 +39,8 @@ public class PublishedResolutionLoop {
         String outcome=identity==null?legacyDecision.outcome():governedDecision.outcome();
         if("REVIEW_REQUIRED".equals(outcome)){jobs.quarantine(claim,"UDP_RESOLUTION_REVIEW_REQUIRED");return;}
         if(Set.of("MATCH","NEW_OBJECT").contains(outcome)&&!(identity!=null&&governedDecision.duplicate())){
+          if(identity!=null&&governedDecision.coverageRef()==null)
+            throw new IllegalStateException("UDP_IDENTITY_COVERAGE_UNVERIFIED");
           UUID target=identity==null?legacyDecision.targetUrbanObjectId():governedDecision.targetUrbanObjectId();
           if(profiles.spatial()!=null)spatial.materializePrepared(claim.handoffId(),target,claim.payload(),profiles.spatial(),geometry);
           materializer.materialize(claim.handoffId(),target,claim.payload(),profiles.materialization());
