@@ -26,18 +26,21 @@ public final class PublishedIdentityPolicy {
         || !Objects.equals(raw.get("canonicalClass"),canonicalClass)
         || !(raw.get("maxCandidates") instanceof Number max) || max.doubleValue()!=max.intValue()
         || !(raw.get("allowAutoNew") instanceof Boolean))throw invalid();
-    List<?> signals=list(raw.get("signals"),1,32),rules=list(raw.get("sufficientRules"),1,16);
+    List<?> signals=list(raw.get("signals"),1,32),rules=list(raw.get("sufficientRules"),1,1);
+    Set<String> compared=new HashSet<>();
     for(Object item:signals){
       Map<?,?> signal=map(item,SIGNAL);
       if(!(signal.get("id") instanceof String id) || mappedProperties==null || !mappedProperties.contains(id)
           || !(signal.get("semanticRef") instanceof String ref) || !ref.matches("[^@\\s]+@[^@\\s]+")
-          || !(signal.get("excludesOnDisagreement") instanceof Boolean)
-          || !(signal.get("uniqueWithinScope") instanceof Boolean))throw invalid();
+          || !(signal.get("assertionRef") instanceof String assertion) || assertion.isBlank()
+          || !Boolean.FALSE.equals(signal.get("excludesOnDisagreement"))
+          || !Boolean.FALSE.equals(signal.get("uniqueWithinScope")) || !compared.add(id))throw invalid();
     }
+    if(!compared.equals(mappedProperties))throw invalid();
     for(Object item:rules){
       Map<?,?> rule=map(item,RULE);
-      if(!(rule.get("signalIds") instanceof List<?> ids) || ids.isEmpty()
-          || new HashSet<>(ids).size()!=ids.size())throw invalid();
+      if(!(rule.get("signalIds") instanceof List<?> ids) || !new HashSet<>(ids).equals(compared)
+          || ids.size()!=compared.size())throw invalid();
     }
     try{return json.copy().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,true)
         .convertValue(raw,GovernedIdentityEngine.Policy.class);
