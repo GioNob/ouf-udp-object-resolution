@@ -19,6 +19,10 @@ class GovernedIdentitySubjectMapperTest {
         .isEqualTo(new GovernedIdentityEngine.Value("urn:key@set-1","A-123",
             "handoff://h-1#canonicalPayload/identity"));
     assertThat(mapper.map("h-2",handoff("set-1",null),mapping,policy).values()).isEmpty();
+    var unsupported=new HashMap<String,Object>(handoff("set-1",null));
+    unsupported.put("canonicalPayload",Map.of("identity",List.of("A-123")));
+    assertThatThrownBy(()->mapper.map("h-3",unsupported,mapping,policy))
+        .hasMessage("UDP_IDENTITY_SUBJECT_MAPPING_INVALID");
   }
 
   @Test void rejectsMismatchedPublicationOrUnmappedIdentitySignal()throws Exception{
