@@ -16,6 +16,10 @@ public class GovernedIdentityReviewRepository {
 
   @Transactional public UUID record(String handoffId,GovernedIdentityEngine.Decision decision,
       GovernedIdentityEngine.Candidates retrieved){
+    return record(handoffId,decision,retrieved,true);
+  }
+  @Transactional public UUID record(String handoffId,GovernedIdentityEngine.Decision decision,
+      GovernedIdentityEngine.Candidates retrieved,boolean allowCandidateSelection){
     if(handoffId==null||handoffId.isBlank()||decision==null||retrieved==null
         || !Set.of(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,
             GovernedIdentityEngine.Outcome.RESOLUTION_TOO_BROAD).contains(decision.outcome())
@@ -45,7 +49,7 @@ public class GovernedIdentityReviewRepository {
     evidence.put("assessments",decision.assessments());
     String details=write(List.of(evidence));
     // Incomplete coverage cannot present a selectable subset to the HUMAN endpoint.
-    List<UUID> selectable=retrieved.complete()
+    List<UUID> selectable=allowCandidateSelection&&retrieved.complete()
         && decision.outcome()==GovernedIdentityEngine.Outcome.REVIEW_REQUIRED
         ?retrieved.rows().stream().map(GovernedIdentityEngine.Candidate::objectId).toList():List.of();
     db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,target_urban_object_id,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref) values(:id,:h,:c,'REVIEW_REQUIRED',null,'GOVERNED_IDENTITY',:v,cast(:e as jsonb),'SERVICE_IDENTITY',:p)")
