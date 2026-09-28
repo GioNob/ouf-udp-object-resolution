@@ -165,6 +165,14 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         Set.of("resolution.match.approve"),"authz://review","corr-distinct");
     governance.decideResolutionIssue(issue,0,"CREATE_NEW","verified distinct physical object",null,human);
     assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    backfill.rebuild(policy);
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:i").param("i",issue)
+        .query(String.class).single()).isEqualTo("OPEN");
+    assertThat(db.sql("select version from ouf_udp.resolution_issue where issue_id=:i").param("i",issue)
+        .query(Long.class).single()).isEqualTo(2L);
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    governance.decideResolutionIssue(issue,2,"CREATE_NEW","rechecked distinct physical object",null,human);
     loop.tick();
     assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-distinct-reviewed'")
         .query(String.class).single()).isEqualTo("SUCCEEDED");
@@ -173,8 +181,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(created).isNotEqualTo(existing);
     assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id='candidate-distinct-reviewed'")
         .query(Long.class).single()).isOne();
-    assertThat(db.sql("select action from ouf_udp.human_resolution_decision where issue_id=:i")
-        .param("i",issue).query(String.class).single()).isEqualTo("CREATE_NEW");
+    assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision where issue_id=:i and action='CREATE_NEW'")
+        .param("i",issue).query(Long.class).single()).isEqualTo(2L);
     assertThat(db.sql("select complete from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Boolean.class).single()).isTrue();
   }
