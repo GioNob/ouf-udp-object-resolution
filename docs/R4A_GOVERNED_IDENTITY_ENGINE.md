@@ -44,7 +44,8 @@ completa richiedono `REVIEW_REQUIRED`. Un insieme troppo grande o una copertura 
 blocca la decisione automatica. La normalizzazione `TEXT_V1` applica NFKC,
 spazi normalizzati e minuscole indipendenti dalla locale; `CONCEPT` confronta
 l'identificatore esatto e `DECIMAL_V1` il valore numerico canonico. Cambiare
-comparatore richiede una nuova versione.
+comparatore richiede una nuova versione. `JSON_V1` canonizza oggetti e liste
+JSON (chiavi ordinate, ordine delle liste conservato, numeri normalizzati).
 
 ## Ricerca dei candidati e costo
 
@@ -80,22 +81,24 @@ governata e non richiede il caricamento degli oggetti corrispondenti.
 Applica il limite e carica le
 proprietà complete solo per quegli ID. Le mutazioni di `urban_object`, della
 proiezione corrente, dei valori correnti o dei token invalidano
-automaticamente l'attestazione. La materializzazione acquisisce il lock del
+automaticamente l'attestazione. `V26` serializza l'invalidazione con il lock
+di ambito anche per le scritture su oggetti, token e forme. La materializzazione acquisisce il lock del
 perimetro prima di modificare la proiezione. La precedente scansione della
 classe è stata rimossa. **Nessun processo di produzione pubblica ancora
 attestazioni complete**: senza un'attestazione il motore produce soltanto
 `REVIEW_REQUIRED`. `GovernedIdentityIndexBackfill.rebuild` offre una scansione
 **una tantum** in preattivazione sotto il lock degli scrittori: ricostruisce
 token e forme e attesta soltanto oggetti con proprietà correnti complete e
-valori scalari confrontabili per i campi dichiarati nella policy. Un oggetto
+valori confrontabili, inclusi JSON strutturati con `JSON_V1`, per i campi dichiarati nella policy. Un oggetto
 senza revisione, una proprietà non rappresentata nella revisione o un valore
 non confrontabile per una proprietà dichiarata fa fallire la transazione. Il test invoca il
 backfill come fixture; nessun flusso di produzione lo invoca ancora.
 
 Restano da collegare il backfill al preflight governato e da validare le
-policy pubblicate. Occorre anche mantenere i token
-atomicamente con le revisioni correnti, con i nuovi oggetti non ancora
-materializzati, con merge/split e con le rimozioni. Una mutazione non coperta
+policy pubblicate. `refreshOne` mantiene atomicamente token e forme di un
+oggetto materializzato dopo una ricerca completa nella stessa transazione;
+non è ancora collegato al worker. Merge/split, rimozioni e altre mutazioni
+fuori da quel percorso richiedono riconciliazione. Una mutazione non coperta
 deve lasciare la classe non attestata. Solo allora la verifica di copertura
 può essere pubblicata senza ripetere una scansione completa a ogni handoff.
 Le forme disgiunte sono indicizzate separatamente: un oggetto senza valori
@@ -151,7 +154,7 @@ la gate di attivazione resta chiusa. Occorre attestare la completezza dei
 candidati anche su classi grandi, verificare il confronto di tutti i valori
 canonici esposti (comprese proprietà multivalore e geometrie), versionare la policy,
 validare la copertura nel preflight e riconciliare le issue storiche che
-non hanno ancora un tenant attestato. Il controllo attuale
-confronta i valori scalari mappati; non equivale ancora a un confronto completo
-di ogni possibile struttura canonica. Le regole di autorità dei valori e la
+non hanno ancora un tenant attestato. Il controllo attuale confronta anche i
+valori JSON strutturati mappati, ma richiede verifica per ogni tipo canonico
+e policy concreta. Le regole di autorità dei valori e la
 riapertura degli issue con prove mutate rimangono gate di integrazione.
