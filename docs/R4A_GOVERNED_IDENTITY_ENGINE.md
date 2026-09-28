@@ -13,7 +13,14 @@ locale-independent lowercase; concept IDs are exact; decimals are canonical
 numeric values. Changing normalization requires a new comparator version.
 
 Candidate retrieval must supply the *complete* bounded result, querying at
-least `maxCandidates + 1`. If the extra row exists, the engine returns
+least `maxCandidates + 1`. The decision API now requires a `Candidates`
+envelope pinned to policy ref/version, tenant and canonical class, with a
+coverage reference for a complete index snapshot. Missing coverage returns
+`REVIEW_REQUIRED` with `CANDIDATE_COVERAGE_UNVERIFIED`, even for an empty
+candidate set or an otherwise sufficient match. A mismatched scope or policy
+is invalid. This is an interface contract, not proof that an index is complete:
+the future retrieval adapter must establish and retain the coverage reference
+transactionally. If the extra row exists, the engine returns
 `RESOLUTION_TOO_BROAD`; neither retrieval nor decision may truncate to a
 first match. The engine rejects cross-tenant/class candidates and duplicate
 object IDs. A missing or differently published semantic reference is neutral,
@@ -35,8 +42,10 @@ not a separate simulation algorithm.
    implying a uniqueness assertion. Add relation, temporal and spatial
    comparator contracts with explicit cardinality and applicability.
 2. Implement indexed, tenant/class/time-scoped candidate retrieval and
-   coverage checks. Existing canonical objects must be indexed or rebuilt
-   before the policy is active; an incomplete index must fail closed.
+   transactional coverage checks that issue the `Candidates` envelope.
+   Existing canonical objects must be indexed or rebuilt before the policy
+   is active; an incomplete index must fail closed. Persist the coverage
+   reference with each decision and carry it through preflight probes.
 3. Persist the complete comparison evidence with the append-only resolution
    decision. Connect `REVIEW_REQUIRED` and `RESOLUTION_TOO_BROAD` to durable
    HUMAN quarantine, and preserve the source binding continuity path.
