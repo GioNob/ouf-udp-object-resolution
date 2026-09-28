@@ -136,7 +136,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .digest(json.copy().configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true)
             .writeValueAsBytes(configuration)));
     var admin=new TrustedHumanContext("HUMAN_USER","ouf-admin","default",
-        Set.of("authorization.policy.admin"),"authz://preflight","corr-preflight");
+        Set.of("urban.identity.preflight"),"authz://preflight","corr-preflight");
     assertThatThrownBy(()->preflight.prepare("registry","sha256:wrong",configuration,admin))
         .hasMessage("UDP_IDENTITY_PREFLIGHT_CONFIGURATION_HASH");
     var attestation=preflight.prepare("registry",hash,configuration,admin);
