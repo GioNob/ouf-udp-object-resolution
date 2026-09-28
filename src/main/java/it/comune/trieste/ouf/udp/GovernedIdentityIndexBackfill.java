@@ -56,6 +56,57 @@ public class GovernedIdentityIndexBackfill {
         .param("shape",shape).param("count",indexed).update();
     return new Result(ref,indexed);
   }
+  /** Called in the same transaction as a resolution made against complete coverage and its materialization. */
+  @Transactional public void refreshOne(GovernedIdentityEngine.Policy policy,UUID objectId,
+      String observedCoverageRef){
+    if(policy==null||objectId==null||observedCoverageRef==null||!observedCoverageRef.startsWith("indexed-snapshot://"))
+      throw invalid("REFRESH_PRECONDITION");
+    locks.acquire(policy.tenantId(),policy.canonicalClass());
+    Map<String,Object> coverage=db.sql("select coverage_ref,policy_fingerprint,field_set_hash,indexed_objects from ouf_udp.identity_lookup_coverage where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version for update")
+        .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).query().singleRow();
+    String ref=String.valueOf(coverage.get("coverage_ref"));
+    String currentTx=db.sql("select txid_current()::text").query(String.class).single();
+    if(!observedCoverageRef.startsWith("indexed-snapshot://"+ref+"/"+currentTx+"/")
+        ||!ScopedIdentityCandidateRepository.fingerprint(policy).equals(coverage.get("policy_fingerprint"))
+        ||!ScopedIdentityCandidateRepository.hash(String.join("\u0000",new TreeSet<>(
+            policy.signals().stream().map(GovernedIdentityEngine.Signal::id).toList())))
+            .equals(coverage.get("field_set_hash")))throw invalid("REFRESH_COVERAGE_STALE");
+    List<String> previous=db.sql("select field_set_hash from ouf_udp.identity_lookup_shape where urban_object_id=:id and tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
+        .param("id",objectId).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).query(String.class).list();
+    if(previous.size()>1)throw invalid("REFRESH_SHAPE_CONFLICT");
+    if(!previous.isEmpty()){
+      long members=db.sql("select indexed_objects from ouf_udp.identity_lookup_shape_catalog where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version and field_set_hash=:shape for update")
+          .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+          .param("policy",policy.ref()).param("version",policy.version())
+          .param("shape",previous.getFirst()).query(Long.class).single();
+      if(members==1)db.sql("delete from ouf_udp.identity_lookup_shape_catalog where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version and field_set_hash=:shape")
+          .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+          .param("policy",policy.ref()).param("version",policy.version()).param("shape",previous.getFirst()).update();
+      else db.sql("update ouf_udp.identity_lookup_shape_catalog set indexed_objects=indexed_objects-1 where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version and field_set_hash=:shape")
+          .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+          .param("policy",policy.ref()).param("version",policy.version()).param("shape",previous.getFirst()).update();
+    }
+    db.sql("delete from ouf_udp.identity_lookup_token where urban_object_id=:id and tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
+        .param("id",objectId).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).update();
+    db.sql("delete from ouf_udp.identity_lookup_shape where urban_object_id=:id and tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
+        .param("id",objectId).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).update();
+    Map<String,Object> object=db.sql("select current_revision_id from ouf_udp.urban_object where urban_object_id=:id and tenant_id=:tenant and canonical_type=:type and status='ACTIVE'")
+        .param("id",objectId).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .query().listOfRows().stream().findFirst().orElseThrow(()->invalid("REFRESH_OBJECT_SCOPE"));
+    UUID revision=(UUID)object.get("current_revision_id");
+    if(revision==null)throw invalid("REFRESH_UNMATERIALIZED");
+    Map<String,GovernedIdentityEngine.Signal> signals=new HashMap<>();
+    policy.signals().forEach(signal->signals.put(signal.id(),signal));
+    indexObject(policy,signals,objectId,revision);
+    long count=((Number)coverage.get("indexed_objects")).longValue()+(previous.isEmpty()?1:0);
+    db.sql("update ouf_udp.identity_lookup_coverage set indexed_objects=:count,complete=true,updated_at=transaction_timestamp() where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
+        .param("count",count).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).update();
+  }
   private void indexObject(GovernedIdentityEngine.Policy policy,
       Map<String,GovernedIdentityEngine.Signal> signals,UUID id,UUID revision){
     String payload=db.sql("select canonical_payload::text from ouf_udp.urban_object_current_state where urban_object_id=:id and revision_id=:revision")
