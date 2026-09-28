@@ -136,7 +136,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     var issue=db.sql("select reason_code,candidate_refs::text candidate_refs from ouf_udp.resolution_issue where handoff_id='candidate-conflict'")
         .query().singleRow();
     assertThat(issue.get("reason_code")).isEqualTo("UNRESOLVED_IDENTITY");
-    assertThat(String.valueOf(issue.get("candidate_refs"))).contains(existing.toString());
+    assertThat(issue.get("candidate_refs")).isEqualTo("[]");
   }
   private void assertOtherConnectionCannotLock(ExecutorService worker){
     Future<Boolean> other=worker.submit(()->db.sql("select pg_try_advisory_xact_lock(hashtextextended(:key,0))")
