@@ -5,6 +5,14 @@ not yet wired to `PublishedResolutionLoop`, `PublishedRuntimeConfiguration`, or
 the database. The current `weighted` fail-closed gate remains in force. No
 source activation or R-SMOKE claim follows from this branch.
 
+The published resolver now accepts only the six explicit legacy fields
+(`strategyId`, `strategyVersion`, `policyRef`, `canonicalType`,
+`canonicalKeyProperty`, `matchProperty`) and requires nonblank values.
+`weighted`, `governedIdentity`, any other extension, or an incomplete legacy
+profile cannot be interpreted as an executable single-property strategy.
+This compatibility check preserves the existing runtime gate while the new
+policy contract and indexed retrieval are developed.
+
 The policy is pinned by `ref` and `version` and scoped to tenant, canonical
 class and source. Every signal names an exact versioned semantic reference
 and comparator. A sufficient rule requires an explicit uniqueness assertion
