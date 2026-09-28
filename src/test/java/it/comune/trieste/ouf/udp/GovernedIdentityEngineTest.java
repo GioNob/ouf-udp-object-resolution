@@ -90,6 +90,18 @@ class GovernedIdentityEngineTest {
     assertThat(engine.decide(POLICY,empty,rows()).reason()).isEqualTo("NO_EXPOSED_CANONICAL_FIELDS");
   }
 
+  @Test void unparseableCanonicalValueStaysUncertain() {
+    var signal=new Signal("amount","urn:amount@set-1",ComparatorKind.DECIMAL_V1,false,false,"policy://amount");
+    var policy=new Policy("policy://decimal","1","tenant","Place","source",10,true,List.of(signal),
+        List.of(new SufficientRule("whole-record",Set.of("amount"),"policy://whole-record/decimal")));
+    var incoming=new Subject("tenant","Place","source",Map.of("amount",
+        new Value("urn:amount@set-1","10","fixture://subject")));
+    var existing=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of("amount",
+        new Value("urn:amount@set-1","invalid-decimal","fixture://candidate")));
+    var retrieved=new Candidates(policy.ref(),policy.version(),"tenant","Place","index://snapshot",true,List.of(existing));
+    assertThat(engine.decide(policy,incoming,retrieved).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+  }
+
   @Test void duplicateExactRecordsRequireHumanAndEmptyScopeCanCreate() {
     var subject=subject("Aurora","Via Roma 1","cinema","entrance");
     assertThat(engine.decide(POLICY,subject,rows()).outcome()).isEqualTo(Outcome.NEW_OBJECT);
