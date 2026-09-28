@@ -8,8 +8,12 @@ PET conformance is tracked conservatively in [`docs/PET_TRACEABILITY.md`](docs/P
 
 The R4a canonical identity lookup and its activation constraints are documented
 in [`docs/R4A_GOVERNED_IDENTITY_ENGINE.md`](docs/R4A_GOVERNED_IDENTITY_ENGINE.md).
-Flyway V23 adds the inverted lookup tables without publishing a complete
-coverage marker or switching the production worker to governed identity.
+Flyway V23 adds the inverted lookup tables. The governed worker now refreshes
+one object's index in the same transaction as materialization. A HUMAN with
+`urban.identity.preflight` can rebuild and attest a frozen Onboarding policy via
+`POST /api/udp/v1/governance/identity/preflight`; the response is valid only
+while the exact indexed coverage remains complete. Publication remains gated
+by Onboarding's current attestation check and the lab IAM/Gateway rollout.
 
 ## Local verification
 
