@@ -1,6 +1,9 @@
 package it.comune.trieste.ouf.udp;
 
 import jakarta.servlet.http.HttpServletRequest;
+import it.comune.trieste.ouf.authorization.OwnerAuthorization;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.authorization.ResourceContext;
 import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +24,16 @@ public class TrustedHumanApi {
   @PostMapping("/split/plans/{id}/execute") IdentityGovernanceService.Plan executeSplit(@PathVariable UUID id,@RequestBody ExecuteRequest body,@RequestHeader("Idempotency-Key") String key,HttpServletRequest request){return service.executeSplit(id,body.expectedVersion(),body.reason(),key,trusted(request));}
   @PostMapping("/resolution/issues/{id}/decisions") void decideIssue(@PathVariable UUID id,@RequestBody IssueDecisionRequest body,HttpServletRequest request){service.decideResolutionIssue(id,body.expectedVersion(),body.action(),body.reason(),body.targetUrbanObjectId(),trusted(request));}
   @GetMapping("/resolution/issues/package") ResolutionReviewPackageService.PackageView reviewPackage(HttpServletRequest request){return packages.prepare(trusted(request));}
+  /** MCP reads use a separately authorized delegated HUMAN request and cannot commit decisions. */
+  @PostMapping("/internal/resolution/issues/package") ResolutionReviewPackageService.PackageView delegatedReviewPackage(HttpServletRequest request){
+    var owner=OwnerAuthorization.bind(request);
+    if(owner.principal().actorType()!=PrincipalContext.ActorType.HUMAN)
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_REVIEW_HUMAN_REQUIRED");
+    String tenant=owner.principal().tenantId();
+    owner.require("resolution.issue.read",new ResourceContext("resolution-issues",null,tenant,null,Map.of()));
+    return packages.prepare(new TrustedHumanContext("HUMAN",owner.principal().subjectId(),tenant,
+        Set.of("resolution.issue.read"),owner.decisionRef(),UUID.randomUUID().toString()));
+  }
   @PostMapping("/resolution/issues/package/confirm") ResolutionReviewPackageService.Confirmation confirmReviewPackage(@RequestBody PackageConfirmationRequest body,HttpServletRequest request){return packages.confirm(body.snapshotHash(),body.choices(),trusted(request));}
   @GetMapping("/objects/{id}/identity") Map<String,Object> identity(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("urban.object.read");return service.resolveIdentity(id);}
   @GetMapping("/plans/{id}") IdentityGovernanceService.Plan plan(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("resolution.issue.read");return service.getPlan(id);}
