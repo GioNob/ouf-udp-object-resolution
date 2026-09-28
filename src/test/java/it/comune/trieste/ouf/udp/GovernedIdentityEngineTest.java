@@ -17,6 +17,21 @@ class GovernedIdentityEngineTest {
   private static final Policy POLICY=new Policy("policy://objects","1","tenant","Place","source",10,true,
       SIGNALS,List.of(new SufficientRule("whole-record",Set.of("name","address","category","geo"),"policy://whole-record/1")));
 
+  @Test void structuredCanonicalValuesCompareRegardlessOfObjectKeyOrder() {
+    var signal=new Signal("details","urn:details@set-1",ComparatorKind.JSON_V1,false,false,"policy://details");
+    var policy=new Policy("policy://json","1","tenant","Place","source",10,true,List.of(signal),
+        List.of(new SufficientRule("details",Set.of("details"),"policy://details/sufficient")));
+    UUID id=UUID.randomUUID();
+    var subject=new Subject("tenant","Place","source",Map.of("details",new Value(signal.semanticRef(),
+        "{\"b\":[2,{\"z\":true,\"a\":1}],\"a\":null}","handoff://1")));
+    var candidate=new Candidate(id,"tenant","Place",Map.of("details",new Value(signal.semanticRef(),
+        "{\"a\":null,\"b\":[2.0,{\"a\":1.0,\"z\":true}]}","object://1")));
+    assertThat(engine.decide(policy,subject,rows(candidate)).objectId()).isEqualTo(id);
+    assertThat(engine.decide(policy,subject,rows(new Candidate(UUID.randomUUID(),"tenant","Place",
+        Map.of("details",new Value(signal.semanticRef(),"{\"a\":false}","object://2")))).outcome())
+        .isEqualTo(Outcome.NEW_OBJECT);
+  }
+
   @Test void exactCandidateWithAnotherPlausibleObjectRequiresReview() {
     UUID id=UUID.randomUUID();
     var subject=subject("Aurora","Via Roma 1","cinema","45.1,13.1");
