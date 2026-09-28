@@ -17,6 +17,11 @@ a prerequisite for activation.
 The identical `identity-governed-proposal-v1.json` fixture is exercised by
 Onboarding proposal validation and this UDP decoder; it is a contract example,
 not a deployed policy or a proof of semantic authority.
+`GovernedIdentitySubjectMapper` projects one Ingestion handoff through the
+published materialization mapping, matching policy signal IRIs to mapped
+canonical fields and the handoff's semantic publication. A missing value stays
+missing; an unmapped signal or publication mismatch fails closed. The source
+file format and originating vertical do not enter identity comparison.
 
 The published resolver now accepts only the six explicit legacy fields
 (`strategyId`, `strategyVersion`, `policyRef`, `canonicalType`,
