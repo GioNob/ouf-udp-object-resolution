@@ -34,9 +34,14 @@ public class PublishedRuntimeConfiguration {
     // Onboarding can validate weighted proposals, but this UDP runtime does not execute them yet.
     // Silently falling back to matchProperty could merge unrelated same-named objects.
     if(resolutionDefinition.containsKey("weighted"))throw new IllegalArgumentException("UDP_WEIGHTED_RUNTIME_UNAVAILABLE");
+    if(resolutionDefinition.containsKey("governedIdentity"))throw new IllegalArgumentException("UDP_GOVERNED_IDENTITY_RUNTIME_UNAVAILABLE");
+    if(!Set.of("strategyId","strategyVersion","policyRef","canonicalType","canonicalKeyProperty","matchProperty")
+        .equals(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
     UdpPorts.ResolutionProfile resolution=json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
     UdpPorts.MaterializationProfile materialization=json.convertValue(object(profile,"materialization"),UdpPorts.MaterializationProfile.class);
-    if(resolution.canonicalType()==null||resolution.policyRef()==null||materialization.properties().isEmpty())throw invalid();
+    if(java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
+        resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank())
+        ||materialization.properties().isEmpty())throw invalid();
     if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&resolution.canonicalType().equals(target.get("classIri"))))throw invalid();
     var labels=new HashMap<String,String>();
     if(!(bundle.get("dataAccessPolicies") instanceof List<?> policies)||policies.isEmpty())throw invalid();
