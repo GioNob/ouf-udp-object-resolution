@@ -53,6 +53,11 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
             GovernedIdentityEngine.ComparatorKind.CONCEPT,false,false,"assertion://name/1")),
         policy().sufficientRules());
     assertThat(candidates.retrieve(changedComparator,subject("ALPHA")).complete()).isFalse();
+    var changedRule=new GovernedIdentityEngine.Policy(policy().ref(),policy().version(),
+        policy().tenantId(),policy().canonicalClass(),policy().sourceId(),1,true,
+        policy().signals(),List.of(new GovernedIdentityEngine.SufficientRule("name",
+            Set.of("ouf:name"),"assertion://different-rule/2")));
+    assertThat(candidates.retrieve(changedRule,subject("ALPHA")).complete()).isFalse();
     var result=candidates.retrieve(policy(),subject("ALPHA"));
     assertThat(result.complete()).isTrue();
     assertThat(result.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(matching);
