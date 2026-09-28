@@ -149,10 +149,13 @@ public final class GovernedIdentityEngine {
           && (incoming.containsAll(existing) || existing.containsAll(incoming));
       Set<String> shared = new HashSet<>(incoming);
       shared.retainAll(existing);
+      boolean distinct = !shared.isEmpty() && shared.stream().allMatch(property ->
+          evidence.stream().anyMatch(item -> item.signalId().equals(property)
+              && item.kind() == EvidenceKind.DISAGREE));
       for (SufficientRule rule : policy.sufficientRules())
         if (nested && !shared.isEmpty() && rule.signalIds().containsAll(shared)
             && agreeing.containsAll(shared)) satisfied.add(rule.id());
-      assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), false));
+      assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), distinct));
     }
     assessments.sort(Comparator.comparing(Assessment::objectId));
     if (assessments.isEmpty()) {
@@ -161,8 +164,12 @@ public final class GovernedIdentityEngine {
     }
     // Every field of the smaller object must correspond; either side may carry additional fields.
     List<Assessment> exact = assessments.stream().filter(a -> !a.satisfiedRules().isEmpty()).toList();
-    if (exact.size() == 1)
+    if (exact.size() == 1 && assessments.stream().allMatch(a -> a == exact.getFirst() || a.excluded()))
       return result(policy, Outcome.MATCH, exact.getFirst().objectId(), "COMPLETE_CANONICAL_EQUALITY", assessments);
+    if (exact.isEmpty() && assessments.stream().allMatch(Assessment::excluded)) {
+      if (policy.allowAutoNew()) return result(policy, Outcome.NEW_OBJECT, null, "ALL_CANDIDATES_DISTINCT", assessments);
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "CREATION_NOT_AUTHORIZED", assessments);
+    }
     return result(policy, Outcome.REVIEW_REQUIRED, null, "UNRESOLVED_IDENTITY", assessments);
   }
 
