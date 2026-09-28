@@ -9,6 +9,7 @@ create table ouf_udp.identity_lookup_coverage(
   -- A complete marker is valid only for observations with this exact field set.
   -- The future verifier must establish this shape for every active object.
   field_set_hash text not null,
+  indexed_objects bigint not null check(indexed_objects>=0),
   complete boolean not null default false,
   updated_at timestamptz not null default transaction_timestamp(),
   primary key(tenant_id,canonical_class,policy_ref,policy_version)
