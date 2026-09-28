@@ -20,8 +20,14 @@ policy contract and indexed retrieval are developed.
 
 The policy is pinned by `ref` and `version` and scoped to tenant, canonical
 class and source. Every signal names an exact versioned semantic reference
-and comparator. A sufficient rule requires an explicit uniqueness assertion
-within that policy scope. Text normalization is NFKC, whitespace collapse and
+and comparator. Signals that assert uniqueness or exclude on disagreement,
+and every sufficient rule, must now carry an explicit governance assertion
+reference. Comparison evidence retains the signal assertion reference.
+These references are traceability fields, not self-authenticating grants:
+Onboarding and UDP still need to resolve them against an approved, immutable
+publication and verify scope, cardinality and validity before activation.
+A sufficient rule requires an explicit uniqueness assertion within that
+policy scope. Text normalization is NFKC, whitespace collapse and
 locale-independent lowercase; concept IDs are exact; decimals are canonical
 numeric values. Changing normalization requires a new comparator version.
 
@@ -51,9 +57,10 @@ not a separate simulation algorithm.
 ## Integration gates still open
 
 1. Agree the published, immutable policy schema and compatibility checks
-   with Onboarding and Semantic Registry. Prohibit a semantic mapping from
-   implying a uniqueness assertion. Add relation, temporal and spatial
-   comparator contracts with explicit cardinality and applicability.
+   with Onboarding and Semantic Registry. Resolve each governance assertion
+   ref against an approved publication, verifying scope, cardinality and
+   temporal applicability; a semantic mapping must never imply uniqueness.
+   Add relation, temporal and spatial comparators with explicit applicability.
 2. Implement indexed, tenant/class/time-scoped candidate retrieval and
    transactional coverage checks that issue the `Candidates` envelope.
    Existing canonical objects must be indexed or rebuilt before the policy
