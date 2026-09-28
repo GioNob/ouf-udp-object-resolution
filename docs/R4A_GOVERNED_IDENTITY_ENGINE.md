@@ -14,17 +14,23 @@ Non si presume che esista un identificatore stabile. Coordinate e indirizzo
 possono descrivere punti diversi dello stesso oggetto e costituiscono indizi.
 Una policy di una classe e una fonte dichiara i possibili campi canonici
 mappati, con versione semantica e comparatore per ciascuno. Ogni singolo
-oggetto può esporne un sottoinsieme diverso. Per decidere MATCH, tutti i
-campi dell'oggetto con meno proprietà devono esistere anche nell'altro e
-avere valori semanticamente compatibili e uguali. Questo vale in entrambe le
-direzioni: sia l'oggetto in ingresso sia quello già in UDP possono essere il
-più ricco. Se entrambi espongono campi propri che mancano nell'altro, o se un
-campo condiviso differisce, il caso resta incerto. L'insieme confrontato non
-può essere vuoto e un MATCH richiede un unico candidato che soddisfi la
-regola. Nessuna proprietà è assunta come identificatore stabile.
-Un candidato è invece certamente distinto se i due oggetti espongono gli
-stessi campi e **tutti** i relativi valori confrontabili sono diversi: non
-resta selezionabile come lo stesso oggetto.
+oggetto può esporne un sottoinsieme diverso. L'uguaglianza dei campi
+dell'oggetto con meno proprietà è una possibile strategia, non una prova
+universale: per un MATCH automatico tutti questi valori devono concordare e
+i campi comuni devono includere tutti i segnali di almeno una regola
+sufficiente della policy approvata. Vale in entrambe le direzioni. Se una
+regola richiede nome e indirizzo, un ingresso che espone soltanto il nome
+non basta, anche se coincide. Un'eventuale regola che dichiari sufficiente
+il solo nome richiede giustificazione e approvazione esplicite.
+Se entrambi espongono campi propri che mancano nell'altro, o se alcuni campi
+comuni concordano e altri differiscono, il caso resta incerto. L'insieme
+confrontato non può essere vuoto e un MATCH richiede un unico candidato
+che soddisfi la regola. Nessuna proprietà è assunta come identificatore stabile.
+Un candidato è distinto secondo questa strategia quando esiste almeno un
+campo comune confrontabile e **tutti i campi comuni** sono diversi, anche
+se uno dei due oggetti ha campi aggiuntivi: `{nome:A}` e
+`{nome:B, indirizzo:X}` sono distinti. Il PET non rende questa conclusione
+una legge universale per ogni strategia e contesto temporale.
 Se tutti i candidati sono distinti, `allowAutoNew` può autorizzare la
 creazione. Campi senza corrispondenza, versioni semantiche incompatibili o
 valori non confrontabili non bastano per concludere che due oggetti siano
@@ -99,10 +105,16 @@ copertura è valida per qualunque sottoinsieme non vuoto di campi e consente
 la prima creazione autorizzata. L'inserimento invalida subito l'attestazione.
 
 La forma attuale del contratto mantiene per compatibilità i nomi `signals` e
-`sufficientRules`, ma rifiuta `uniqueWithinScope: true`,
-`excludesOnDisagreement: true`, regole su sottoinsiemi e proprietà mappate non
-comprese nel confronto. `assertionRef` della regola è una traccia della policy
-approvata, non una dichiarazione di unicità di un campo.
+`sufficientRules`. Ogni regola dichiara un sottoinsieme non vuoto dei segnali
+mappati, tutti richiesti fra i campi comuni, oltre all'uguaglianza di tutti
+i campi dell'oggetto più piccolo. Rifiuta ancora `uniqueWithinScope: true`,
+`excludesOnDisagreement: true` e proprietà mappate non comprese nel confronto.
+`allowAutoNew` dichiara la creazione autorizzata per una fonte e per la prova
+di distinzione prevista da questa strategia. `assertionRef` è una traccia
+della giustificazione, non una prova verificata automaticamente; il gate di
+pubblicazione resta chiuso fino all'approvazione e all'integrazione runtime.
+Un source binding ACTIVE valido conserva la continuità canonica anche se
+cambiano proprietà; authority e conflitti dei valori si valutano separatamente.
 
 ## Revisione umana e attivazione
 
