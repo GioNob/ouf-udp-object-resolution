@@ -55,8 +55,9 @@ class GovernedIdentityEngineTest {
       assertThat(a.evidence()).extracting(Evidence::signalId).containsExactly("address","category","geo","name","unmapped");
       assertThat(a.evidence()).filteredOn(e->e.kind()==EvidenceKind.AGREE).hasSize(2);
     });
-    var incomplete=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of("name",values.get("name")));
-    assertThat(engine.decide(POLICY,incoming,rows(incomplete)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    var conflicting=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of("name",
+        new Value(NAME,"Different","fixture://candidate")));
+    assertThat(engine.decide(POLICY,incoming,rows(conflicting)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
     assertThat(engine.decide(POLICY,incoming,rows(candidate,
         candidate(UUID.randomUUID(),"Aurora","Via Roma 1","shop","elsewhere"))).outcome())
         .isEqualTo(Outcome.REVIEW_REQUIRED);
