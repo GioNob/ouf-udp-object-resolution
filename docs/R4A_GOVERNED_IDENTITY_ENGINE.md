@@ -46,6 +46,9 @@ object IDs. A missing or differently published semantic reference is neutral,
 not an agreement. A competitor remains plausible unless a published signal
 explicitly excludes it on disagreement. One sufficient candidate with no
 plausible competitor may MATCH. Creation needs the source-scoped policy flag.
+If a candidate satisfies a sufficient identity rule yet another signal
+excludes it, the conflicting evidence requires HUMAN review rather than
+automatic creation of a second object.
 The returned evidence includes comparator version and both provenance refs,
 without copying raw values into the decision.
 
