@@ -29,6 +29,9 @@ public class GovernedIdentityIndexBackfill {
     db.sql("delete from ouf_udp.identity_lookup_shape where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
         .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version()).update();
+    db.sql("delete from ouf_udp.identity_lookup_shape_catalog where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
+        .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).update();
     UUID after=null;long indexed=0;
     while(true){
       String sql="select urban_object_id,current_revision_id from ouf_udp.urban_object where tenant_id=:tenant and canonical_type=:type and status='ACTIVE' "
@@ -97,6 +100,14 @@ public class GovernedIdentityIndexBackfill {
         .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version())
         .param("id",id).param("revision",revision).param("shape",shape).update();
+    String fields;
+    try{fields=json.writeValueAsString(new TreeSet<>(found));}
+    catch(Exception failure){throw invalid("FIELD_SET_INVALID");}
+    int changed=db.sql("insert into ouf_udp.identity_lookup_shape_catalog(tenant_id,canonical_class,policy_ref,policy_version,field_set_hash,fields_json,indexed_objects) values(:tenant,:type,:policy,:version,:shape,cast(:fields as jsonb),1) on conflict(tenant_id,canonical_class,policy_ref,policy_version,field_set_hash) do update set indexed_objects=ouf_udp.identity_lookup_shape_catalog.indexed_objects+1 where ouf_udp.identity_lookup_shape_catalog.fields_json=excluded.fields_json")
+        .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version())
+        .param("shape",shape).param("fields",fields).update();
+    if(changed!=1)throw invalid("FIELD_SET_COLLISION");
   }
   private static IllegalStateException invalid(String reason){return new IllegalStateException("UDP_IDENTITY_BACKFILL_"+reason);}
   public record Result(String coverageRef,long indexedObjects){}
