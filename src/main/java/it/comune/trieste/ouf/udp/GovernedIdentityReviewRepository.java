@@ -42,6 +42,8 @@ public class GovernedIdentityReviewRepository {
     Map<String,Object> evidence=new LinkedHashMap<>();
     evidence.put("policyRef",decision.policyRef());
     evidence.put("policyVersion",decision.policyVersion());
+    evidence.put("tenantId",retrieved.tenantId());
+    evidence.put("canonicalClass",retrieved.canonicalClass());
     evidence.put("coverageRef",coverage);
     evidence.put("complete",retrieved.complete());
     evidence.put("outcome",decision.outcome().name());
