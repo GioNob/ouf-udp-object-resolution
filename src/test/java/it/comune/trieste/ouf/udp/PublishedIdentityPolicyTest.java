@@ -35,6 +35,23 @@ class PublishedIdentityPolicyTest {
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
   }
 
+  @Test @SuppressWarnings("unchecked") void aRuleMayRequireAProperSubsetOfMappedSignals() throws Exception {
+    var resolution=proposal();
+    var policy=(Map<String,Object>)resolution.get("governedIdentity");
+    var signals=(List<Map<String,Object>>)policy.get("signals");
+    signals.add(new LinkedHashMap<>(Map.of("id","urn:address","semanticRef","urn:address@set-1",
+        "comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,
+        "assertionRef","assertion://address/1")));
+    var decoded=PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",
+        Set.of("urn:key","urn:address"));
+    assertThat(decoded.sufficientRules()).singleElement().satisfies(rule->
+        assertThat(rule.signalIds()).containsExactly("urn:key"));
+    ((List<String>)((Map<String,Object>)((List<?>)policy.get("sufficientRules")).getFirst())
+        .get("signalIds")).set(0,"urn:unknown");
+    assertThatThrownBy(()->PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",
+        Set.of("urn:key","urn:address"))).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+  }
+
   @SuppressWarnings("unchecked") private Map<String,Object> proposal() throws Exception {
     try(var input=getClass().getResourceAsStream("/identity-governed-proposal-v1.json")) {
       return json.readValue(input,Map.class);
