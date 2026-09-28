@@ -61,13 +61,23 @@ l'unione supera `maxCandidates`, non si tronca per dichiarare un nuovo oggetto:
 si apre un caso troppo ampio. Il costo della ricerca ordinaria dipende dalle
 ricerche indicizzate e dai candidati trovati, non da `m × n` oggetti.
 
-L'indice va mantenuto atomicamente con le revisioni correnti, anche per
-merge/split e rimozioni; prima dell'attivazione occorre ricostruirlo per gli
-oggetti preesistenti e attestare la copertura per tenant, classe, policy e
-versione del comparatore. La precedente scansione della classe è stata
-rimossa dal repository. Fino a quando indice, backfill e attestazione non
-sono implementati e verificati, il repository restituisce copertura non
-attestata e il motore produce soltanto `REVIEW_REQUIRED`.
+La migrazione `V23` prepara l'indice inverso e una tabella di attestazione per
+tenant, classe e versione della policy. La lettura usa una sola snapshot SQL:
+seleziona l'unione dei valori indicizzati, applica il limite e carica le
+proprietà complete solo per quegli ID. Le mutazioni di `urban_object`
+invalidano automaticamente l'attestazione. La precedente scansione della
+classe è stata rimossa. **Nessun processo di produzione pubblica ancora
+attestazioni complete**: senza un'attestazione il motore produce soltanto
+`REVIEW_REQUIRED`. Il test che inserisce token e attestazione lo fa come
+fixture esplicita, non abilita il percorso pubblicato.
+
+Restano da implementare il backfill degli oggetti preesistenti e la verifica
+che ogni oggetto attivo abbia tutti i campi pertinenti confrontabili per ogni
+possibile sottoinsieme in ingresso. Occorre anche mantenere i token
+atomicamente con le revisioni correnti, con i nuovi oggetti non ancora
+materializzati, con merge/split e con le rimozioni. Una mutazione non coperta
+deve lasciare la classe non attestata. Solo allora la verifica di copertura
+può essere pubblicata senza ripetere una scansione completa a ogni handoff.
 
 La forma attuale del contratto mantiene per compatibilità i nomi `signals` e
 `sufficientRules`, ma rifiuta `uniqueWithinScope: true`,
