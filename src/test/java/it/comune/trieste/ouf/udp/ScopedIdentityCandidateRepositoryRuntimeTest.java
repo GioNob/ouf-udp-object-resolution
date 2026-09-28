@@ -89,6 +89,23 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(new GovernedIdentityEngine().decide(narrow,subject,candidates.retrieve(narrow,subject)).outcome())
         .isEqualTo(GovernedIdentityEngine.Outcome.RESOLUTION_TOO_BROAD);
   }
+  @Test void verifiedEmptyScopeCanCreateFirstObjectWithSubsetOfConfiguredFields(){
+    clearObjects();
+    var base=policy();
+    var two=new GovernedIdentityEngine.Policy("policy://identity/empty","1","default","ouf:Road","registry",2,true,
+        List.of(base.signals().getFirst(),new GovernedIdentityEngine.Signal("ouf:address",
+            "ouf:address@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,
+            false,false,"assertion://address/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("whole",Set.of("ouf:name","ouf:address"),"assertion://whole/1")));
+    assertThat(backfill.rebuild(two).indexedObjects()).isZero();
+    var result=candidates.retrieve(two,subject("Alpha"));
+    assertThat(result.complete()).isTrue();
+    assertThat(result.rows()).isEmpty();
+    assertThat(new GovernedIdentityEngine().decide(two,subject("Alpha"),result).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.NEW_OBJECT);
+    db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(gen_random_uuid(),'default','ouf:Road')").update();
+    assertThat(candidates.retrieve(two,subject("Alpha")).complete()).isFalse();
+  }
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
   private GovernedIdentityEngine.Policy policy(){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",1,true,
         List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
