@@ -88,7 +88,10 @@ La prima attestazione possibile copre soltanto classi in cui ogni oggetto ha
 esattamente la stessa forma di campi dell'osservazione: forme eterogenee
 richiedono un indice aggiuntivo per i campi mancanti oppure revisione. Questo
 limite conserva la regola di MATCH su sottoinsiemi nel motore, ma non la rende
-ancora automaticamente attivabile su una classe eterogenea.
+ancora automaticamente attivabile su una classe eterogenea. Il backfill
+registra anche il numero degli oggetti verificati: con **zero** oggetti, la
+copertura è valida per qualunque sottoinsieme non vuoto di campi e consente
+la prima creazione autorizzata. L'inserimento invalida subito l'attestazione.
 
 La forma attuale del contratto mantiene per compatibilità i nomi `signals` e
 `sufficientRules`, ma rifiuta `uniqueWithinScope: true`,
