@@ -46,6 +46,7 @@ public class GovernedIdentityReviewRepository {
     String details=write(List.of(evidence));
     // Incomplete coverage cannot present a selectable subset to the HUMAN endpoint.
     List<UUID> selectable=retrieved.complete()
+        && decision.outcome()==GovernedIdentityEngine.Outcome.REVIEW_REQUIRED
         ?retrieved.rows().stream().map(GovernedIdentityEngine.Candidate::objectId).toList():List.of();
     db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,target_urban_object_id,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref) values(:id,:h,:c,'REVIEW_REQUIRED',null,'GOVERNED_IDENTITY',:v,cast(:e as jsonb),'SERVICE_IDENTITY',:p)")
         .param("id",id).param("h",handoffId).param("c",coverage).param("v",decision.policyVersion())
