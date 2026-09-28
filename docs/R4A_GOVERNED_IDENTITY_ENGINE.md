@@ -149,8 +149,8 @@ Il percorso governed è preparato ma non collegato a `PublishedResolutionLoop`:
 la gate di attivazione resta chiusa. Occorre attestare la completezza dei
 candidati anche su classi grandi, verificare il confronto di tutti i valori
 canonici esposti (comprese proprietà multivalore e geometrie), versionare la policy,
-validare la copertura nel preflight e definire la provenienza del tenant per
-*ogni* issue prima di esporre una lista multi-tenant. Il controllo attuale
+validare la copertura nel preflight e riconciliare le issue storiche che
+non hanno ancora un tenant attestato. Il controllo attuale
 confronta i valori scalari mappati; non equivale ancora a un confronto completo
 di ogni possibile struttura canonica. Le regole di autorità dei valori e la
 riapertura degli issue con prove mutate rimangono gate di integrazione.
