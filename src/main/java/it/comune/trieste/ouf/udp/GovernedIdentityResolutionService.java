@@ -72,6 +72,8 @@ public class GovernedIdentityResolutionService {
         if(!healthy)return new Result("REVIEW_REQUIRED",null,true);
         boolean materialized=db.sql("select exists(select 1 from ouf_udp.materialization_observation where handoff_id=:h)")
             .param("h",handoffId).query(Boolean.class).single();
+        if("CREATE_NEW".equals(old.get("human_action"))&&!materialized)
+          throw new IllegalStateException("UDP_NEW_IDENTITY_BINDING_CONFLICT");
         if(materialized)return new Result("MATCH",bound,true);
         var coverage=candidates.retrieve(policy,subject);
         return new Result("MATCH",bound,false,coverage.complete()?coverage.coverageRef():null);
