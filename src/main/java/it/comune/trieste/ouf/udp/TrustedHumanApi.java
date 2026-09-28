@@ -43,8 +43,17 @@ public class TrustedHumanApi {
       @RequestBody IdentityPreflightRequest body,HttpServletRequest request){
     return preflight.prepare(body.sourceId(),body.configurationHash(),body.configuration(),trusted(request));
   }
-  @GetMapping("/identity/preflight/{id}") GovernedIdentityPreflight.Attestation identityPreflight(
-      @PathVariable UUID id,HttpServletRequest request){return preflight.status(id,trusted(request));}
+  @GetMapping("/identity/preflight") GovernedIdentityPreflight.Attestation identityPreflight(
+      @RequestParam UUID id,HttpServletRequest request){return preflight.status(id,trusted(request));}
+  @GetMapping("/internal/identity/preflight") GovernedIdentityPreflight.Attestation identityPreflightForOnboarding(
+      @RequestParam String configurationHash,@RequestParam String sourceId,HttpServletRequest request){
+    var owner=OwnerAuthorization.bind(request);
+    if(owner.principal().actorType()!=PrincipalContext.ActorType.SERVICE)
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_IDENTITY_PREFLIGHT_SERVICE_REQUIRED");
+    String tenant=owner.principal().tenantId();
+    owner.require("ouf.udp.identity.attestation.read",new ResourceContext("identity-preflight",sourceId,tenant,null,Map.of()));
+    return preflight.latest(configurationHash,sourceId,tenant);
+  }
 
   static TrustedHumanContext trusted(HttpServletRequest request){
     for(String h:FORBIDDEN_HEADERS)if(request.getHeader(h)!=null)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_UNTRUSTED_ACTOR_HEADER");
