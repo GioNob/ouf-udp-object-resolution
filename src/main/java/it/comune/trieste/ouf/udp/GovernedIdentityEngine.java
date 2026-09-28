@@ -12,15 +12,17 @@ public final class GovernedIdentityEngine {
 
   /** A semantic reference includes its publication/version; a coincidentally equal IRI is insufficient. */
   public record Signal(String id, String semanticRef, ComparatorKind comparator,
-                       boolean excludesOnDisagreement, boolean uniqueWithinScope) {
+                       boolean excludesOnDisagreement, boolean uniqueWithinScope,
+                       String assertionRef) {
     public Signal {
-      if (blank(id) || blank(semanticRef) || comparator == null) throw invalid();
+      if (blank(id) || blank(semanticRef) || comparator == null
+          || ((excludesOnDisagreement || uniqueWithinScope) && blank(assertionRef))) throw invalid();
     }
   }
   /** All named signals must agree. Uniqueness is asserted by governance, never inferred from frequency. */
-  public record SufficientRule(String id, Set<String> signalIds) {
+  public record SufficientRule(String id, Set<String> signalIds, String assertionRef) {
     public SufficientRule {
-      if (blank(id) || signalIds == null || signalIds.isEmpty()) throw invalid();
+      if (blank(id) || signalIds == null || signalIds.isEmpty() || blank(assertionRef)) throw invalid();
       signalIds = Set.copyOf(signalIds);
     }
   }
@@ -62,7 +64,7 @@ public final class GovernedIdentityEngine {
     }
   }
   public record Evidence(String signalId, EvidenceKind kind, String subjectProvenance,
-                         String candidateProvenance, String comparatorVersion) {}
+                         String candidateProvenance, String comparatorVersion, String assertionRef) {}
   public record Assessment(UUID objectId, List<Evidence> evidence, Set<String> satisfiedRules,
                            boolean excluded) {}
   public record Decision(Outcome outcome, UUID objectId, String reason,
@@ -127,7 +129,7 @@ public final class GovernedIdentityEngine {
           kind = EvidenceKind.DISAGREE; excluded |= signal.excludesOnDisagreement();
         }
         evidence.add(new Evidence(signal.id(), kind, left == null ? null : left.provenanceRef(),
-            right == null ? null : right.provenanceRef(), signal.comparator().name()));
+            right == null ? null : right.provenanceRef(), signal.comparator().name(), signal.assertionRef()));
       }
       Set<String> satisfied = new TreeSet<>();
       if (!excluded) for (SufficientRule rule : policy.sufficientRules())
