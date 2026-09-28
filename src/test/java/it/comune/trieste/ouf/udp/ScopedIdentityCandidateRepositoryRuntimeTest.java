@@ -23,7 +23,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired GovernedIdentityIndexBackfill backfill;
   @Autowired JdbcClient db;
   @org.junit.jupiter.api.BeforeEach void clean(){
-    db.sql("truncate table ouf_udp.identity_lookup_token,ouf_udp.identity_lookup_coverage").update();
+    db.sql("truncate table ouf_udp.identity_lookup_token,ouf_udp.identity_lookup_shape,ouf_udp.identity_lookup_coverage").update();
   }
 
   @Test void neverInfersCompletenessFromClassSizeOrEmptyResults(){
@@ -105,6 +105,31 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .isEqualTo(GovernedIdentityEngine.Outcome.NEW_OBJECT);
     db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(gen_random_uuid(),'default','ouf:Road')").update();
     assertThat(candidates.retrieve(two,subject("Alpha")).complete()).isFalse();
+  }
+  @Test void differentFieldShapesAreIndexedAsPotentiallyUncertainCandidates(){
+    clearObjects();
+    UUID smaller=materialize("small","Alpha");
+    materializeWithAddress("large","Beta","Via Milano");
+    var base=policy();
+    var two=new GovernedIdentityEngine.Policy("policy://identity/heterogeneous","1","default","ouf:Road","registry",2,true,
+        List.of(base.signals().getFirst(),new GovernedIdentityEngine.Signal("ouf:address",
+            "ouf:address@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,
+            false,false,"assertion://address/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("whole",Set.of("ouf:name","ouf:address"),"assertion://whole/1")));
+    assertThat(backfill.rebuild(two).indexedObjects()).isEqualTo(2);
+    var incoming=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of(
+        "ouf:name",new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Alpha","handoff://probe/name"),
+        "ouf:address",new GovernedIdentityEngine.Value("ouf:address@semantic://publication/1","Via Roma","handoff://probe/address")));
+    var retrieved=candidates.retrieve(two,incoming);
+    assertThat(retrieved.complete()).isTrue();
+    assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(smaller);
+    assertThat(new GovernedIdentityEngine().decide(two,incoming,retrieved).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+    var allDifferent=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of(
+        "ouf:name",new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Other","handoff://probe/name"),
+        "ouf:address",new GovernedIdentityEngine.Value("ouf:address@semantic://publication/1","Via Nuova","handoff://probe/address")));
+    assertThat(new GovernedIdentityEngine().decide(two,allDifferent,candidates.retrieve(two,allDifferent)).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED);
   }
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
   private GovernedIdentityEngine.Policy policy(){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",1,true,
