@@ -39,8 +39,8 @@ public class IdentityGovernanceService {
   @Transactional public void decideResolutionIssue(UUID issueId,long expectedVersion,String action,String reason,UUID target,TrustedHumanContext actor){
     actor.require("resolution.match.approve");
     if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_REASON_REQUIRED");
-    boolean approve="APPROVE".equals(action);
-    if(!approve&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
+    boolean approve="APPROVE".equals(action),create="CREATE_NEW".equals(action);
+    if(!approve&&!create&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
     Map<String,Object> issue=db.sql("select i.handoff_id,i.tenant_id,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
         .param("i",issueId).param("v",expectedVersion).query().listOfRows().stream().findFirst()
         .orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"UDP_ISSUE_VERSION_CONFLICT"));
@@ -58,7 +58,19 @@ public class IdentityGovernanceService {
           .param("h",issue.get("handoff_id")).update();
       if(changed!=1)throw new IllegalStateException("UDP_BINDING_CONFLICT");
     }
-    String state=approve?"RESOLVED":"DISMISSED",decisionAction=approve?"APPROVE_MATCH":"DISMISS";
+    if(create){
+      if(target!=null||!"GOVERNED_IDENTITY".equals(issue.get("strategy_id")))
+        throw new IllegalArgumentException("UDP_NEW_IDENTITY_DECISION_INVALID");
+      Map<?,?> evidence=governedReviewEvidence(issue);
+      identityScope.acquire(String.valueOf(evidence.get("tenantId")),String.valueOf(evidence.get("canonicalClass")));
+      if(!Boolean.TRUE.equals(evidence.get("complete"))
+          ||!currentIdentityCoverage(evidence)
+          ||db.sql("select 1 from ouf_udp.source_binding where source_id=:s and type_code=:t and source_object_id=:o")
+              .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
+              .param("o",issue.get("source_object_id")).query(Integer.class).optional().isPresent())
+        throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_NEW_IDENTITY_EVIDENCE_STALE");
+    }
+    String state=approve||create?"RESOLVED":"DISMISSED",decisionAction=approve?"APPROVE_MATCH":create?"CREATE_NEW":"DISMISS";
     String evidence=hash(Map.of("issueId",issueId,"target",Objects.toString(target,"")));
     db.sql("insert into ouf_udp.human_resolution_decision(decision_id,issue_id,action,target_urban_object_id,actor_subject,authorization_decision_ref,reason,evidence_hash) values(gen_random_uuid(),:i,:x,:t,:a,:d,:r,:e)")
         .param("i",issueId).param("x",decisionAction).param("t",target,Types.OTHER)
@@ -67,8 +79,29 @@ public class IdentityGovernanceService {
         .param("s",state).param("a",actor.subject()).param("r",reason)
         .param("d",actor.authorizationDecisionRef()).param("i",issueId).param("v",expectedVersion).update();
     audit(decisionAction,null,actor,reason,evidence);
-    if(approve)db.sql("update ouf_udp.materialization_job set state='READY',state_version=state_version+1,safe_failure_code=null,updated_at=transaction_timestamp() where handoff_id=:h and state='QUARANTINED' and safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED'")
+    if(approve||create)db.sql("update ouf_udp.materialization_job set state='READY',state_version=state_version+1,safe_failure_code=null,updated_at=transaction_timestamp() where handoff_id=:h and state='QUARANTINED' and safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED'")
         .param("h",issue.get("handoff_id")).update();
+  }
+
+  private Map<?,?> governedReviewEvidence(Map<String,Object> issue){
+    Object raw=readAny(String.valueOf(issue.get("evidence")));
+    if(!(raw instanceof List<?> list)||list.isEmpty()||!(list.getFirst() instanceof Map<?,?> evidence)
+        ||!(evidence.get("tenantId") instanceof String tenant)||tenant.isBlank()
+        ||!tenant.equals(issue.get("tenant_id"))
+        ||!(evidence.get("canonicalClass") instanceof String canonicalClass)||canonicalClass.isBlank()
+        ||!(evidence.get("policyRef") instanceof String)||!(evidence.get("policyVersion") instanceof String))
+      throw new IllegalStateException("UDP_GOVERNED_REVIEW_SCOPE_MISSING");
+    return evidence;
+  }
+
+  private boolean currentIdentityCoverage(Map<?,?> evidence){
+    Object observed=evidence.get("coverageRef");
+    if(!(observed instanceof String ref)||!ref.startsWith("indexed-snapshot://"))return false;
+    String current=db.sql("select coverage_ref from ouf_udp.identity_lookup_coverage where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version and complete")
+        .param("tenant",evidence.get("tenantId")).param("type",evidence.get("canonicalClass"))
+        .param("policy",evidence.get("policyRef")).param("version",evidence.get("policyVersion"))
+        .query(String.class).optional().orElse(null);
+    return current!=null&&ref.startsWith("indexed-snapshot://"+current+"/");
   }
 
   private void lockObjectScopes(Collection<UUID> objects){
