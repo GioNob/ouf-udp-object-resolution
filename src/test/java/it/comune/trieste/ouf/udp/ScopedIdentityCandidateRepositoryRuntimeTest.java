@@ -20,6 +20,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired ObjectResolutionService resolver;
   @Autowired CanonicalMaterializer materializer;
   @Autowired ScopedIdentityCandidateRepository candidates;
+  @Autowired GovernedIdentityReviewRepository reviews;
   @Autowired JdbcClient db;
 
   private final UdpPorts.ResolutionProfile legacy=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code");
@@ -51,19 +52,47 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         policy(2).signals(),policy(2).sufficientRules())).rows()).isEmpty();
   }
 
+  @Test void persistsGovernedReviewEvidenceAndNeverOffersPartialCoverageForApproval(){
+    UUID first=materialize("one","Alpha");materialize("two","Beta");
+    var subject=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of("ouf:name",
+        new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Alpha","handoff://probe")));
+    var engine=new GovernedIdentityEngine();
+    var full=candidates.retrieve(policy(2));
+    var review=engine.decide(policy(2),subject,full);
+    intake.accept(envelope("review","Gamma"));
+    UUID decisionId=reviews.record("candidate-review",review,full);
+    assertThat(reviews.record("candidate-review",review,full)).isEqualTo(decisionId);
+    String evidence=db.sql("select evidence_refs::text from ouf_udp.resolution_decision where resolution_decision_id=:id")
+        .param("id",decisionId).query(String.class).single();
+    assertThat(evidence).contains("postgres-snapshot://","assertion://name/1","contribution://")
+        .doesNotContain("Alpha","Beta");
+    String selectable=db.sql("select candidate_refs::text from ouf_udp.resolution_issue where resolution_decision_id=:id")
+        .param("id",decisionId).query(String.class).single();
+    assertThat(selectable).contains(first.toString());
+
+    var bounded=candidates.retrieve(policy(1));
+    intake.accept(envelope("overflow","Delta"));
+    UUID broadId=reviews.record("candidate-overflow",engine.decide(policy(1),subject,bounded),bounded);
+    var issue=db.sql("select reason_code,candidate_refs::text candidate_refs from ouf_udp.resolution_issue where resolution_decision_id=:id")
+        .param("id",broadId).query().singleRow();
+    assertThat(issue.get("reason_code")).isEqualTo("UDP_RESOLUTION_TOO_BROAD");
+    assertThat(issue.get("candidate_refs")).isEqualTo("[]");
+  }
+
   private UUID materialize(String id,String name){
-    Map<String,Object> envelope=new LinkedHashMap<>(Map.ofEntries(
-        Map.entry("handoffId","candidate-"+id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),
-        Map.entry("sourceIdentity",Map.of("sourceId","registry","typeCode","ROAD","sourceObjectId",id,"observedAt","2026-09-12T00:00:00Z")),
-        Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",id,"name",name)),
-        Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),
-        Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),
-        Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));
+    Map<String,Object> envelope=envelope(id,name);
     intake.accept(envelope);
     UUID object=resolver.resolve("candidate-"+id,envelope,legacy).targetUrbanObjectId();
     materializer.materialize("candidate-"+id,object,envelope,authority);
     return object;
   }
+  private Map<String,Object> envelope(String id,String name){return new LinkedHashMap<>(Map.ofEntries(
+        Map.entry("handoffId","candidate-"+id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),
+        Map.entry("sourceIdentity",Map.of("sourceId","registry","typeCode","ROAD","sourceObjectId",id,"observedAt","2026-09-12T00:00:00Z")),
+        Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",id,"name",name)),
+        Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),
+        Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),
+        Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private GovernedIdentityEngine.Policy policy(int limit){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",limit,false,
       List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,true,"assertion://name/1")),
       List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));}
