@@ -20,6 +20,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired HandoffIntakeService intake;
   @Autowired ObjectResolutionService resolver;
   @Autowired CanonicalMaterializer materializer;
+  @Autowired GovernedIdentityIndexBackfill backfill;
   @Autowired JdbcClient db;
   @org.junit.jupiter.api.BeforeEach void clean(){
     db.sql("truncate table ouf_udp.identity_lookup_token,ouf_udp.identity_lookup_coverage").update();
@@ -39,23 +40,21 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();
-    UUID matching=materialize("one","Alpha"),other=materialize("two","Beta");
-    UUID revision=db.sql("select current_revision_id from ouf_udp.urban_object where urban_object_id=:u")
-        .param("u",matching).query(UUID.class).single();
-    db.sql("insert into ouf_udp.identity_lookup_token(tenant_id,canonical_class,policy_ref,policy_version,urban_object_id,revision_id,property_iri,semantic_ref,comparator,value_hash) values('default','ouf:Road','policy://identity/1','1',:u,:r,'ouf:name','ouf:name@semantic://publication/1','TEXT_V1',:v)")
-        .param("u",matching).param("r",revision).param("v",ScopedIdentityCandidateRepository.hash("alpha")).update();
-    UUID otherRevision=db.sql("select current_revision_id from ouf_udp.urban_object where urban_object_id=:u")
-        .param("u",other).query(UUID.class).single();
-    db.sql("insert into ouf_udp.identity_lookup_token(tenant_id,canonical_class,policy_ref,policy_version,urban_object_id,revision_id,property_iri,semantic_ref,comparator,value_hash) values('default','ouf:Road','policy://identity/1','1',:u,:r,'ouf:name','ouf:name@semantic://publication/1','TEXT_V1',:v)")
-        .param("u",other).param("r",otherRevision).param("v",ScopedIdentityCandidateRepository.hash("beta")).update();
-    // This marker models a completed activation backfill. Production has no publisher yet.
-    db.sql("insert into ouf_udp.identity_lookup_coverage(tenant_id,canonical_class,policy_ref,policy_version,coverage_ref,complete) values('default','ouf:Road','policy://identity/1','1','coverage://test',true)").update();
+    UUID matching=materialize("one","Alpha");materialize("two","Beta");
+    assertThat(backfill.rebuild(policy()).indexedObjects()).isEqualTo(2);
+    db.sql("update ouf_udp.identity_lookup_coverage set field_set_hash=:shape where policy_ref='policy://identity/1'")
+        .param("shape",ScopedIdentityCandidateRepository.hash("ouf:another-field")).update();
+    assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
+    db.sql("update ouf_udp.identity_lookup_coverage set field_set_hash=:shape where policy_ref='policy://identity/1'")
+        .param("shape",ScopedIdentityCandidateRepository.hash("ouf:name")).update();
     var result=candidates.retrieve(policy(),subject("ALPHA"));
     assertThat(result.complete()).isTrue();
     assertThat(result.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(matching);
     assertThat(new GovernedIdentityEngine().decide(policy(),subject("ALPHA"),result).outcome())
         .isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
     db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(gen_random_uuid(),'default','ouf:Road')").update();
+    assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
+    assertThatThrownBy(()->backfill.rebuild(policy())).hasMessageContaining("UNMATERIALIZED_OBJECT");
     assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
   }
   private GovernedIdentityEngine.Policy policy(){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",1,true,
