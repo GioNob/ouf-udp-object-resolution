@@ -67,7 +67,17 @@ public final class GovernedIdentityEngine {
                            boolean excluded) {}
   public record Decision(Outcome outcome, UUID objectId, String reason,
                          String policyRef, String policyVersion, List<Assessment> assessments) {}
-  public record Probe(Subject subject, List<Candidate> retrieved) {}
+  /** Retrieval attests index coverage for the entire policy scope at a stable snapshot. */
+  public record Candidates(String policyRef, String policyVersion, String tenantId,
+                           String canonicalClass, String coverageRef, boolean complete,
+                           List<Candidate> rows) {
+    public Candidates {
+      if (blank(policyRef) || blank(policyVersion) || blank(tenantId) || blank(canonicalClass)
+          || rows == null || (complete && blank(coverageRef))) throw invalid();
+      rows = List.copyOf(rows);
+    }
+  }
+  public record Probe(Subject subject, Candidates retrieved) {}
   public record Preflight(int total, Map<Outcome, Long> outcomes, int largestCandidateSet) {}
 
   /** Preactivation and runtime call the same decision method. The caller supplies representative probes. */
@@ -79,19 +89,25 @@ public final class GovernedIdentityEngine {
       if (probe == null || probe.retrieved() == null) throw invalid();
       Decision decision = decide(policy, probe.subject(), probe.retrieved());
       counts.merge(decision.outcome(), 1L, Long::sum);
-      largest = Math.max(largest, probe.retrieved().size());
+      largest = Math.max(largest, probe.retrieved().rows().size());
     }
     return new Preflight(probes.size(), Collections.unmodifiableMap(counts), largest);
   }
 
-  /** The caller must query maxCandidates + 1, never truncate an overflowing result to the limit. */
-  public Decision decide(Policy policy, Subject subject, List<Candidate> retrieved) {
-    Objects.requireNonNull(policy); Objects.requireNonNull(subject); Objects.requireNonNull(retrieved);
+  /** The caller must query maxCandidates + 1 and attest complete index coverage. */
+  public Decision decide(Policy policy, Subject subject, Candidates retrieval) {
+    Objects.requireNonNull(policy); Objects.requireNonNull(subject); Objects.requireNonNull(retrieval);
     if (!policy.tenantId().equals(subject.tenantId())
         || !policy.canonicalClass().equals(subject.canonicalClass())
         || !policy.sourceId().equals(subject.sourceId())) throw invalid();
+    if (!policy.ref().equals(retrieval.policyRef()) || !policy.version().equals(retrieval.policyVersion())
+        || !policy.tenantId().equals(retrieval.tenantId())
+        || !policy.canonicalClass().equals(retrieval.canonicalClass())) throw invalid();
+    List<Candidate> retrieved = retrieval.rows();
     if (retrieved.size() > policy.maxCandidates())
       return result(policy, Outcome.RESOLUTION_TOO_BROAD, null, "CANDIDATE_LIMIT", List.of());
+    if (!retrieval.complete())
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "CANDIDATE_COVERAGE_UNVERIFIED", List.of());
     Set<UUID> seen = new HashSet<>();
     List<Assessment> assessments = new ArrayList<>();
     for (Candidate candidate : retrieved) {
