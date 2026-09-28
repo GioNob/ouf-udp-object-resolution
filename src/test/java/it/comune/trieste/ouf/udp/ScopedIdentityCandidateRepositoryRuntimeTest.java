@@ -2,6 +2,7 @@ package it.comune.trieste.ouf.udp;
 
 import static org.assertj.core.api.Assertions.*;
 import java.util.*;
+import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -21,6 +22,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired CanonicalMaterializer materializer;
   @Autowired ScopedIdentityCandidateRepository candidates;
   @Autowired GovernedIdentityReviewRepository reviews;
+  @Autowired GovernedIdentityScopeLock scopeLock;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
   @Autowired JdbcClient db;
 
   private final UdpPorts.ResolutionProfile legacy=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code");
@@ -77,6 +80,32 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .param("id",broadId).query().singleRow();
     assertThat(issue.get("reason_code")).isEqualTo("UDP_RESOLUTION_TOO_BROAD");
     assertThat(issue.get("candidate_refs")).isEqualTo("[]");
+  }
+
+  @Test void objectWritesAndCandidateReadsUseTheSameTransactionScopeLock()throws Exception{
+    assertThatThrownBy(()->scopeLock.acquire("default","ouf:Road"))
+        .hasMessage("UDP_IDENTITY_TRANSACTION_REQUIRED");
+    ExecutorService worker=Executors.newSingleThreadExecutor();
+    try{
+      new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(status->{
+        scopeLock.acquire("default","ouf:Road");
+        assertThat(candidates.retrieve(policy(2)).complete()).isTrue();
+        assertOtherConnectionCannotLock(worker);
+      });
+      new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(status->{
+        db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(gen_random_uuid(),'default','ouf:Road')").update();
+        assertOtherConnectionCannotLock(worker);
+      });
+      assertThat(worker.submit(()->db.sql("select pg_try_advisory_xact_lock(hashtextextended(:key,0))")
+          .param("key","identity:default:ouf:Road").query(Boolean.class).single()).get(3,TimeUnit.SECONDS))
+          .isTrue();
+    }finally{worker.shutdownNow();}
+  }
+  private void assertOtherConnectionCannotLock(ExecutorService worker){
+    Future<Boolean> other=worker.submit(()->db.sql("select pg_try_advisory_xact_lock(hashtextextended(:key,0))")
+        .param("key","identity:default:ouf:Road").query(Boolean.class).single());
+    try{assertThat(other.get(3,TimeUnit.SECONDS)).isFalse();}
+    catch(Exception failure){throw new IllegalStateException(failure);}
   }
 
   private UUID materialize(String id,String name){
