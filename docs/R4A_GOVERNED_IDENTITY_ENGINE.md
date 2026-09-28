@@ -1,8 +1,9 @@
 # R4a governed identity engine: implementation boundary
 
-`GovernedIdentityEngine` is a deterministic decision core for issue #35. A
-read-only PostgreSQL candidate adapter is available, but the core is not yet
-wired to `PublishedResolutionLoop` or `PublishedRuntimeConfiguration`. The
+`GovernedIdentityEngine` is a deterministic decision core for issue #35.
+PostgreSQL candidate, locking, decision and review adapters are available,
+but the governed path is not yet wired to `PublishedResolutionLoop` or
+`PublishedRuntimeConfiguration`. The
 current `weighted` fail-closed gate remains in force. No
 source activation or R-SMOKE claim follows from this branch.
 
@@ -91,8 +92,13 @@ including policy version, snapshot coverage, all assessments and signal
 provenance. It maps `RESOLUTION_TOO_BROAD` to a review decision with a distinct
 reason and an empty selectable candidate list; the existing HUMAN approval
 endpoint therefore cannot approve one of the truncated rows. This repository
-is not invoked by the published worker yet. Successful MATCH and NEW_OBJECT
-still need an atomic write path and source-binding continuity checks.
+is not invoked by the published worker yet. `GovernedIdentityResolutionService`
+holds the scope lock across current-state retrieval, comparison, append-only
+MATCH/NEW_OBJECT decision and source-binding write in one transaction. A
+previous decision is idempotent. An existing binding must agree with the
+governed result; divergence creates a non-selectable HUMAN issue rather than
+reassigning that binding. The prepared service does not grant policy authority
+or bypass the publication gate.
 
 `preflight` calls the same `decide` method used for individual observations
 and reports the decision distribution and largest candidate set. Activation
@@ -113,10 +119,10 @@ not a separate simulation algorithm.
    objects and prove complete coverage before activation. An incomplete
    index must fail closed. Persist the coverage reference with each decision
    and carry it through preflight probes.
-3. Connect the prepared review persistence to durable HUMAN quarantine and
-   preserve source binding continuity on resume. Implement atomic MATCH and
-   NEW_OBJECT persistence, retaining complete comparison evidence and
-   snapshot coverage in each append-only decision.
+3. Connect the prepared atomic path to the published worker only after the
+   policy's assertions are verified and candidate coverage is certified for
+   its scope. Preserve source-binding continuity on HUMAN resume and prevent
+   a stale approval from binding an object outside the policy scope.
 4. Reconcile property conflicts under governed authority or HUMAN choice
    before serving a confirmed merge. Exercise exact historical replay,
    concurrent workers and the database-backed Gateway/THS acceptance path.
