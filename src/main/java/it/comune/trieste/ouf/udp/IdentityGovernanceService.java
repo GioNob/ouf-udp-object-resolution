@@ -91,6 +91,22 @@ public class IdentityGovernanceService {
         .param("u",target).param("tenant",tenant).param("type",canonicalClass)
         .query(Integer.class).optional().isEmpty())
       throw new IllegalStateException("UDP_GOVERNED_TARGET_STALE");
+    if(!(evidence.get("assessments") instanceof List<?> assessments))
+      throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+    Map<?,?> selected=null;
+    for(Object item:assessments)
+      if(item instanceof Map<?,?> assessment&&target.toString().equals(assessment.get("objectId")))
+        selected=assessment;
+    if(selected==null||!(selected.get("evidence") instanceof List<?> signals)||signals.isEmpty())
+      throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+    for(Object item:signals){
+      if(!(item instanceof Map<?,?> signal)||!(signal.get("signalId") instanceof String property))
+        throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+      String current=db.sql("select 'contribution://' || p.contribution_id from ouf_udp.urban_object o join ouf_udp.property_value p on p.revision_id=o.current_revision_id where o.urban_object_id=:u and p.property_iri=:p")
+          .param("u",target).param("p",property).query(String.class).optional().orElse(null);
+      if(!Objects.equals(current,signal.get("candidateProvenance")))
+        throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+    }
   }
 
   @Transactional(readOnly=true) public Map<String,Object> resolveIdentity(UUID id){Map<String,Object> source=db.sql("select urban_object_id,status,redirect_to,current_revision_id,revision from ouf_udp.urban_object where urban_object_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_OBJECT_NOT_FOUND"));Map<String,Object> row=new LinkedHashMap<>(source);if("SPLIT".equals(row.get("status")))row.put("successorIds",db.sql("select successor_ids::text from ouf_udp.object_identity_history where object_id=:i order by occurred_at desc limit 1").param("i",id).query(String.class).list().stream().findFirst().map(this::readAny).orElse(List.of()));return row;}
