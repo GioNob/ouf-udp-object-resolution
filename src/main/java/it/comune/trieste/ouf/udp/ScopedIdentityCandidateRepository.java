@@ -34,7 +34,6 @@ public class ScopedIdentityCandidateRepository {
       }catch(IllegalArgumentException unsupported){return incomplete(policy);}
     }
     if(seeds.isEmpty())return incomplete(policy);
-    String shape=hash(String.join("\u0000",new TreeSet<>(subject.values().keySet())));
     String policyShape=hash(String.join("\u0000",new TreeSet<>(signals.keySet())));
     String sql="""
         with coverage as (
@@ -56,28 +55,22 @@ public class ScopedIdentityCandidateRepository {
           join ouf_udp.urban_object active_object on active_object.urban_object_id=t.urban_object_id
             and active_object.current_revision_id=t.revision_id and active_object.status='ACTIVE'
           order by t.urban_object_id limit :candidateLimit
+        ), disjoint_shapes as materialized (
+          select c.field_set_hash from ouf_udp.identity_lookup_shape_catalog c join coverage on true
+          where c.tenant_id=:tenant and c.canonical_class=:canonicalClass
+            and c.policy_ref=:policy and c.policy_version=:version
+            and not exists (
+              select 1 from jsonb_array_elements_text(c.fields_json) field_name
+              where field_name.value in (
+                select incoming.value from jsonb_array_elements_text(cast(:incomingFields as jsonb)) incoming))
         ), shape_hits as (
-          select urban_object_id from (
-            select s.urban_object_id from ouf_udp.identity_lookup_shape s
-            join coverage on true
-            join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
-              and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
-            where s.tenant_id=:tenant and s.canonical_class=:canonicalClass
-              and s.policy_ref=:policy and s.policy_version=:version
-              and s.field_set_hash < :shape
-            order by s.field_set_hash,s.urban_object_id limit :candidateLimit
-          ) before_shapes
-          union all
-          select urban_object_id from (
-            select s.urban_object_id from ouf_udp.identity_lookup_shape s
-            join coverage on true
-            join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
-              and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
-            where s.tenant_id=:tenant and s.canonical_class=:canonicalClass
-              and s.policy_ref=:policy and s.policy_version=:version
-              and s.field_set_hash > :shape
-            order by s.field_set_hash,s.urban_object_id limit :candidateLimit
-          ) after_shapes
+          select s.urban_object_id from disjoint_shapes d
+          join ouf_udp.identity_lookup_shape s on s.tenant_id=:tenant
+            and s.canonical_class=:canonicalClass and s.policy_ref=:policy
+            and s.policy_version=:version and s.field_set_hash=d.field_set_hash
+          join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
+            and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
+          order by s.field_set_hash,s.urban_object_id limit :candidateLimit
         ), hits as (
           select distinct urban_object_id from (
             select urban_object_id from equal_hits
@@ -95,7 +88,8 @@ public class ScopedIdentityCandidateRepository {
         """;
     List<Map<String,Object>> rows=db.sql(sql).param("tenant",policy.tenantId())
         .param("canonicalClass",policy.canonicalClass()).param("policy",policy.ref())
-        .param("version",policy.version()).param("shape",shape).param("policyShape",policyShape)
+        .param("version",policy.version()).param("policyShape",policyShape)
+        .param("incomingFields",write(new TreeSet<>(subject.values().keySet())))
         .param("fingerprint",fingerprint(policy))
         .param("seeds",write(seeds))
         .param("candidateLimit",policy.maxCandidates()+1).query().listOfRows();
