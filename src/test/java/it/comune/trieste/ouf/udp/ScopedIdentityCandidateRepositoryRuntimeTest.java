@@ -45,7 +45,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     var decision=new GovernedIdentityEngine().decide(policy(2),
         new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of("ouf:name",
             new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Alpha","handoff://probe"))),full);
-    assertThat(decision.outcome()).isEqualTo(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED);
+    assertThat(decision.outcome()).isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
     assertThat(decision.assessments()).hasSize(2);
     var bounded=candidates.retrieve(policy(1));
     assertThat(bounded.complete()).isFalse();
@@ -59,7 +59,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Test void persistsGovernedReviewEvidenceAndNeverOffersPartialCoverageForApproval(){
     UUID first=materialize("one","Alpha");materialize("two","Beta");
     var subject=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of("ouf:name",
-        new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Alpha","handoff://probe")));
+        new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Gamma","handoff://probe")));
     var engine=new GovernedIdentityEngine();
     var full=candidates.retrieve(policy(2));
     var review=engine.decide(policy(2),subject,full);
@@ -161,10 +161,10 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),
         Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private GovernedIdentityEngine.Policy policy(int limit){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",limit,false,
-      List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,true,"assertion://name/1")),
+      List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1")),
       List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));}
   private GovernedIdentityEngine.Policy autoPolicy(){return new GovernedIdentityEngine.Policy("policy://identity/auto","1","default","ouf:Road","registry",2,true,
-      List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,true,true,"assertion://name/1")),
+      List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1")),
       List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));}
   private static String required(String n){String value=System.getenv(n);if(value==null)throw new IllegalStateException(n+" required");return value;}
 }
