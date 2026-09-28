@@ -18,7 +18,7 @@ public final class GovernedIdentityEngine {
       if (blank(id) || blank(semanticRef) || comparator == null || blank(assertionRef)) throw invalid();
     }
   }
-  /** The complete canonical comparison set must agree; no property is an identifier by itself. */
+  /** The comparison vocabulary covers every mapped property; each observation may expose a subset. */
   public record SufficientRule(String id, Set<String> signalIds, String assertionRef) {
     public SufficientRule {
       if (blank(id) || signalIds == null || signalIds.isEmpty() || blank(assertionRef)) throw invalid();
@@ -103,11 +103,18 @@ public final class GovernedIdentityEngine {
     if (!policy.ref().equals(retrieval.policyRef()) || !policy.version().equals(retrieval.policyVersion())
         || !policy.tenantId().equals(retrieval.tenantId())
         || !policy.canonicalClass().equals(retrieval.canonicalClass())) throw invalid();
+    Map<String, Signal> configured = new HashMap<>();
+    for (Signal signal : policy.signals()) configured.put(signal.id(), signal);
+    if (!configured.keySet().containsAll(subject.values().keySet())) throw invalid();
+    for (var entry : subject.values().entrySet())
+      if (!configured.get(entry.getKey()).semanticRef().equals(entry.getValue().semanticRef())) throw invalid();
     List<Candidate> retrieved = retrieval.rows();
     if (retrieved.size() > policy.maxCandidates())
       return result(policy, Outcome.RESOLUTION_TOO_BROAD, null, "CANDIDATE_LIMIT", List.of());
     if (!retrieval.complete())
       return result(policy, Outcome.REVIEW_REQUIRED, null, "CANDIDATE_COVERAGE_UNVERIFIED", List.of());
+    if (subject.values().isEmpty())
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "NO_EXPOSED_CANONICAL_FIELDS", List.of());
     Set<UUID> seen = new HashSet<>();
     List<Assessment> assessments = new ArrayList<>();
     for (Candidate candidate : retrieved) {
@@ -115,29 +122,38 @@ public final class GovernedIdentityEngine {
           || !policy.canonicalClass().equals(candidate.canonicalClass())) throw invalid();
       List<Evidence> evidence = new ArrayList<>();
       Set<String> agreeing = new HashSet<>();
-      boolean excluded = false;
-      for (Signal signal : policy.signals()) {
-        Value left = subject.values().get(signal.id()), right = candidate.values().get(signal.id());
+      Set<String> properties = new TreeSet<>(subject.values().keySet());
+      properties.addAll(candidate.values().keySet());
+      for (String property : properties) {
+        Signal signal = configured.get(property);
+        Value left = subject.values().get(property), right = candidate.values().get(property);
         EvidenceKind kind;
-        if (left == null || right == null || !signal.semanticRef().equals(left.semanticRef())
+        if (left == null || right == null || signal == null
             || !signal.semanticRef().equals(right.semanticRef())) kind = EvidenceKind.MISSING;
         else if (normalize(signal.comparator(), left.raw()).equals(normalize(signal.comparator(), right.raw()))) {
-          kind = EvidenceKind.AGREE; agreeing.add(signal.id());
+          kind = EvidenceKind.AGREE; agreeing.add(property);
         } else kind = EvidenceKind.DISAGREE;
-        evidence.add(new Evidence(signal.id(), kind, left == null ? null : left.provenanceRef(),
-            right == null ? null : right.provenanceRef(), signal.comparator().name(), signal.assertionRef()));
+        evidence.add(new Evidence(property, kind, left == null ? null : left.provenanceRef(),
+            right == null ? null : right.provenanceRef(), signal == null ? "UNSUPPORTED" : signal.comparator().name(),
+            signal == null ? null : signal.assertionRef()));
       }
       Set<String> satisfied = new TreeSet<>();
+      Set<String> incoming = subject.values().keySet(), existing = candidate.values().keySet();
+      boolean nested = !existing.isEmpty()
+          && (incoming.containsAll(existing) || existing.containsAll(incoming));
+      Set<String> shared = new HashSet<>(incoming);
+      shared.retainAll(existing);
       for (SufficientRule rule : policy.sufficientRules())
-        if (agreeing.containsAll(rule.signalIds())) satisfied.add(rule.id());
-      assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), excluded));
+        if (nested && !shared.isEmpty() && rule.signalIds().containsAll(shared)
+            && agreeing.containsAll(shared)) satisfied.add(rule.id());
+      assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), false));
     }
     assessments.sort(Comparator.comparing(Assessment::objectId));
     if (assessments.isEmpty()) {
       if (policy.allowAutoNew()) return result(policy, Outcome.NEW_OBJECT, null, "SOURCE_SCOPED_CREATION", assessments);
       return result(policy, Outcome.REVIEW_REQUIRED, null, "CREATION_NOT_AUTHORIZED", assessments);
     }
-    // A complete record equality is decisive only when it identifies exactly one current object.
+    // Every field of the smaller object must correspond; either side may carry additional fields.
     List<Assessment> exact = assessments.stream().filter(a -> !a.satisfiedRules().isEmpty()).toList();
     if (exact.size() == 1)
       return result(policy, Outcome.MATCH, exact.getFirst().objectId(), "COMPLETE_CANONICAL_EQUALITY", assessments);
