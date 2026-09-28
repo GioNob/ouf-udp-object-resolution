@@ -15,9 +15,6 @@ public class ScopedIdentityCandidateRepository {
   /** One statement sees one PostgreSQL snapshot. Callers must also serialize identity writes in the scope. */
   public GovernedIdentityEngine.Candidates retrieve(GovernedIdentityEngine.Policy policy) {
     Objects.requireNonNull(policy);
-    List<String> ids=policy.signals().stream().map(GovernedIdentityEngine.Signal::id).toList();
-    StringJoiner placeholders=new StringJoiner(",");
-    for(int i=0;i<ids.size();i++)placeholders.add(":signal"+i);
     String sql="""
         with scoped as (
           select urban_object_id,tenant_id,canonical_type,current_revision_id
@@ -30,13 +27,11 @@ public class ScopedIdentityCandidateRepository {
                c.provenance_json #>> '{contractRefs,semanticPublicationSetRef}' publication_ref
         from snapshot left join scoped o on true
           left join ouf_udp.property_value p on p.revision_id=o.current_revision_id
-            and p.property_iri in (%s)
           left join ouf_udp.property_contribution c on c.contribution_id=p.contribution_id
         order by o.urban_object_id,p.property_iri
-        """.formatted(placeholders);
+        """;
     var query=db.sql(sql).param("tenant",policy.tenantId()).param("canonicalClass",policy.canonicalClass())
         .param("candidateLimit",policy.maxCandidates()+1);
-    for(int i=0;i<ids.size();i++)query=query.param("signal"+i,ids.get(i));
     List<Map<String,Object>> rows=query.query().listOfRows();
     if(rows.isEmpty())throw new IllegalStateException("UDP_CANDIDATE_SNAPSHOT_MISSING");
     String snapshot=String.valueOf(rows.getFirst().get("snapshot_ref"));
@@ -45,12 +40,16 @@ public class ScopedIdentityCandidateRepository {
       UUID object=(UUID)row.get("urban_object_id");
       if(object==null)continue;
       Map<String,GovernedIdentityEngine.Value> found=values.computeIfAbsent(object,ignored->new HashMap<>());
-      if(row.get("property_iri") instanceof String property
-          && row.get("publication_ref") instanceof String publication && !publication.isBlank()
-          && row.get("contribution_id") instanceof UUID contribution) {
+      if(row.get("property_iri") instanceof String property) {
+        String publication=row.get("publication_ref") instanceof String ref && !ref.isBlank()?ref:"unverified";
+        UUID contribution=(UUID)row.get("contribution_id");
         String raw=scalar(row.get("value_json"));
-        if(raw!=null)found.put(property,new GovernedIdentityEngine.Value(property+"@"+publication,raw,
-            "contribution://"+contribution));
+        boolean supported=raw!=null;
+        var value=new GovernedIdentityEngine.Value(property+"@"+(supported?publication:"unsupported"),
+            supported?raw:String.valueOf(row.get("value_json")),
+            contribution==null?"unverified://"+object+"/"+property:"contribution://"+contribution);
+        if(found.putIfAbsent(property,value)!=null)
+          found.put(property,new GovernedIdentityEngine.Value(property+"@unsupported",value.raw(),value.provenanceRef()));
       }
     }
     List<GovernedIdentityEngine.Candidate> candidates=new ArrayList<>();
