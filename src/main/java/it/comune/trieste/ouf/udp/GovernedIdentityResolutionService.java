@@ -55,7 +55,7 @@ public class GovernedIdentityResolutionService {
       if(!healthy)throw new IllegalStateException("UDP_IDENTITY_BINDING_MISSING");
       return new Result(outcome,bound,true);
     }
-    var retrieved=candidates.retrieve(policy);
+    var retrieved=candidates.retrieve(policy,subject);
     var decision=engine.decide(policy,subject,retrieved);
     if(decision.outcome()==GovernedIdentityEngine.Outcome.REVIEW_REQUIRED
         ||decision.outcome()==GovernedIdentityEngine.Outcome.RESOLUTION_TOO_BROAD){
