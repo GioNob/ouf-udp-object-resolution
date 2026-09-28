@@ -29,6 +29,7 @@ public final class GovernedIdentitySubjectMapper {
       if(raw instanceof String || raw instanceof Number)
         values.put(signal.id(),new GovernedIdentityEngine.Value(signal.semanticRef(),String.valueOf(raw),
             "handoff://"+handoffId+"#canonicalPayload/"+field));
+      else if(canonical.containsKey(field))throw invalid(); // Never silently omit an exposed value.
     }
     return new GovernedIdentityEngine.Subject(policy.tenantId(),policy.canonicalClass(),policy.sourceId(),values);
   }
