@@ -68,8 +68,10 @@ forme dei campi e una tabella di attestazione per tenant, classe e versione
 della policy. La lettura usa una sola snapshot SQL: unisce i candidati che
 condividono un valore a quelli con una forma dei campi diversa, applica il
 limite e carica le
-proprietà complete solo per quegli ID. Le mutazioni di `urban_object`
-invalidano automaticamente l'attestazione. La precedente scansione della
+proprietà complete solo per quegli ID. Le mutazioni di `urban_object`, della
+proiezione corrente, dei valori correnti o dei token invalidano
+automaticamente l'attestazione. La materializzazione acquisisce il lock del
+perimetro prima di modificare la proiezione. La precedente scansione della
 classe è stata rimossa. **Nessun processo di produzione pubblica ancora
 attestazioni complete**: senza un'attestazione il motore produce soltanto
 `REVIEW_REQUIRED`. `GovernedIdentityIndexBackfill.rebuild` offre una scansione
