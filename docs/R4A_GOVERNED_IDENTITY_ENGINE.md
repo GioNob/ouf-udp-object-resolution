@@ -146,10 +146,14 @@ globale sulle ingestion del tenant.
 
 La THS Onboarding prepara una pagina trusted condizionata alla configurazione
 del Gateway; il percorso browser→Gateway→UDP e i claim IAM richiedono ancora
-collaudo reale. Il chatbot/MCP deve ancora esporre una proiezione autorizzata
-e minimizzata della tabella. Per i casi senza candidato,
-`DISMISS` è una decisione esplicita ma non sostituisce un futuro comando
-governato di creazione manuale: questo resta un gate funzionale.
+collaudo reale. Il chatbot/MCP espone una proiezione autorizzata e minimizzata
+della tabella. Per una issue governed con copertura completa, l'utente può
+scegliere `APPROVE` su un candidato oppure `CREATE_NEW` senza target. La seconda
+scelta viene registrata nel pacchetto atomico, ma l'oggetto viene creato solo
+nella transazione del worker, insieme alla materializzazione e all'aggiornamento
+dell'indice. La copertura deve essere ancora quella della revisione e restare
+completa sia alla conferma sia all'esecuzione; una modifica nel frattempo
+blocca l'esecuzione. `DISMISS` chiude il caso senza creare l'oggetto.
 
 Il percorso governed è collegato a `PublishedResolutionLoop`; Onboarding
 interroga la copertura attuale attraverso Gateway prima di attivarlo. Senza
