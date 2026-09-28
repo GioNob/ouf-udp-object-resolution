@@ -92,9 +92,22 @@ class GovernedIdentityEngineTest {
 
   @Test void sufficientRuleNeedsGovernedUniqueness() {
     assertThatThrownBy(() -> new Policy("policy://id", "1", "default", "Cinema", "file-source", 10,
-        true, List.of(new Signal("display", NAME, ComparatorKind.TEXT_V1, false, false)),
-        List.of(new SufficientRule("label", Set.of("display")))))
+        true, List.of(new Signal("display", NAME, ComparatorKind.TEXT_V1, false, false, null)),
+        List.of(new SufficientRule("label", Set.of("display"), "assertion://rule/1"))))
         .hasMessage("UDP_IDENTITY_POLICY_INVALID");
+  }
+
+  @Test void identityAuthorityRequiresAnExplicitAssertionReference() {
+    assertThatThrownBy(() -> new Signal("key", CODE, ComparatorKind.CONCEPT, false, true, null))
+        .hasMessage("UDP_IDENTITY_POLICY_INVALID");
+    assertThatThrownBy(() -> new Signal("key", CODE, ComparatorKind.CONCEPT, true, false, null))
+        .hasMessage("UDP_IDENTITY_POLICY_INVALID");
+    assertThatThrownBy(() -> new SufficientRule("rule", Set.of("key"), null))
+        .hasMessage("UDP_IDENTITY_POLICY_INVALID");
+    Decision match=engine.decide(policy(true, true), subject(Map.of("key", value(CODE, "007"))),
+        retrieved(policy(true, true), candidate(UUID.randomUUID(), Map.of("key", value(CODE, "007")))));
+    assertThat(match.assessments().getFirst().evidence()).anySatisfy(e ->
+        assertThat(e.assertionRef()).isEqualTo("assertion://key-unique/1"));
   }
 
   @Test void preactivationCountsActualRuntimeDecisions() {
@@ -114,9 +127,9 @@ class GovernedIdentityEngineTest {
 
   private static Policy policy(boolean create, boolean unique) {
     return new Policy("policy://cinema", "1", "default", "Cinema", "file-source", 10, create,
-        List.of(new Signal("display", NAME, ComparatorKind.TEXT_V1, false, false),
-            new Signal("key", CODE, ComparatorKind.CONCEPT, true, unique)),
-        List.of(new SufficientRule("governed-key", Set.of("key"))));
+        List.of(new Signal("display", NAME, ComparatorKind.TEXT_V1, false, false, null),
+            new Signal("key", CODE, ComparatorKind.CONCEPT, true, unique, "assertion://key-unique/1")),
+        List.of(new SufficientRule("governed-key", Set.of("key"), "assertion://sufficient-key/1")));
   }
   private static Subject subject(Map<String, Value> values) { return new Subject("default", "Cinema", "file-source", values); }
   private static Candidate candidate(UUID id, Map<String, Value> values) { return new Candidate(id, "default", "Cinema", values); }
