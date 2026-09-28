@@ -78,15 +78,19 @@ public class GovernedIdentityIndexBackfill {
       Object scalar;
       try{scalar=json.readValue((String)row.get("value_json"),Object.class);}
       catch(Exception failure){throw invalid("VALUE_INVALID");}
-      if(!(scalar instanceof String||scalar instanceof Number))throw invalid("VALUE_UNSUPPORTED");
+      boolean structured=signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1;
+      if(!structured&&!(scalar instanceof String||scalar instanceof Number))throw invalid("VALUE_UNSUPPORTED");
       String normalized;
-      try{normalized=GovernedIdentityEngine.normalize(signal.comparator(),String.valueOf(scalar));}
+      try{normalized=GovernedIdentityEngine.normalize(signal.comparator(),
+          structured?(String)row.get("value_json"):String.valueOf(scalar));}
       catch(IllegalArgumentException failure){throw invalid("COMPARATOR_UNSUPPORTED");}
       Object canonical=current.get(property);
-      if(!(canonical instanceof String||canonical instanceof Number))throw invalid("CURRENT_VALUE_UNSUPPORTED");
+      if(!current.containsKey(property)||!structured&&!(canonical instanceof String||canonical instanceof Number))
+        throw invalid("CURRENT_VALUE_UNSUPPORTED");
       String canonicalNormalized;
-      try{canonicalNormalized=GovernedIdentityEngine.normalize(signal.comparator(),String.valueOf(canonical));}
-      catch(IllegalArgumentException failure){throw invalid("CURRENT_VALUE_UNSUPPORTED");}
+      try{canonicalNormalized=GovernedIdentityEngine.normalize(signal.comparator(),
+          structured?json.writeValueAsString(canonical):String.valueOf(canonical));}
+      catch(Exception failure){throw invalid("CURRENT_VALUE_UNSUPPORTED");}
       if(!normalized.equals(canonicalNormalized))throw invalid("CURRENT_VALUE_MISMATCH");
       db.sql("insert into ouf_udp.identity_lookup_token(tenant_id,canonical_class,policy_ref,policy_version,urban_object_id,revision_id,property_iri,semantic_ref,comparator,value_hash) values(:tenant,:type,:policy,:version,:id,:revision,:property,:semantic,:comparator,:hash)")
           .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
