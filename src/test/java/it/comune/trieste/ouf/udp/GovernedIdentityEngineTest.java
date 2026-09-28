@@ -114,6 +114,10 @@ class GovernedIdentityEngineTest {
     var partlySimilar=candidate(UUID.randomUUID(),"Aurora","Via Milano 9","shop","other-place");
     assertThat(engine.decide(POLICY,incoming,rows(other,partlySimilar)).outcome())
         .isEqualTo(Outcome.REVIEW_REQUIRED);
+    var withExtra=new HashMap<>(other.values());
+    withExtra.put("unmapped",new Value("urn:unmapped@set-1","unknown","fixture://candidate"));
+    assertThat(engine.decide(POLICY,incoming,rows(new Candidate(UUID.randomUUID(),"tenant","Place",withExtra))).outcome())
+        .isEqualTo(Outcome.REVIEW_REQUIRED);
     var exact=candidate(UUID.randomUUID(),"Aurora","Via Roma 1","cinema","entrance");
     assertThat(engine.decide(POLICY,incoming,rows(exact,partlySimilar)).outcome())
         .isEqualTo(Outcome.REVIEW_REQUIRED);
