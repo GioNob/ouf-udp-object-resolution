@@ -144,8 +144,13 @@ public class ScopedIdentityCandidateRepository {
     catch(Exception failure){throw new IllegalStateException("UDP_IDENTITY_HASH_FAILED",failure);}}
   static String fingerprint(GovernedIdentityEngine.Policy policy){
     List<String> parts=policy.signals().stream()
-        .map(signal->signal.id()+"\u0000"+signal.semanticRef()+"\u0000"+signal.comparator().name())
+        .map(signal->signal.id()+"\u0000"+signal.semanticRef()+"\u0000"+signal.comparator().name()
+            +"\u0000"+signal.assertionRef())
         .sorted().toList();
-    return hash(String.join("\u0001",parts));
+    List<String> rules=policy.sufficientRules().stream()
+        .map(rule->rule.id()+"\u0000"+rule.assertionRef()+"\u0000"
+            +String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();
+    return hash(policy.allowAutoNew()+"\u0002"+String.join("\u0001",parts)
+        +"\u0002"+String.join("\u0001",rules));
   }
 }
