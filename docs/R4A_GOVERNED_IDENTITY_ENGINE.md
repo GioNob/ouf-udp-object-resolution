@@ -12,9 +12,10 @@ shape under `resolution` strictly and constructs the same policy record used
 by the decision core. It checks exact fields, tenant/source/class scope,
 mapped signal IDs, pinned semantic reference syntax and required assertion
 references. It is not invoked by the active publication resolver. A syntactic
-assertion reference does not verify that the approved publication grants the
+assertion reference does not verify that an approved identity policy grants the
 claimed uniqueness, exclusion or sufficient rule; that verification is still
-a prerequisite for activation.
+a prerequisite for activation. The Semantic Registry pins the meaning and
+version of the mapped property, not object-resolution authority.
 The identical `identity-governed-proposal-v1.json` fixture is exercised by
 Onboarding proposal validation and this UDP decoder; it is a contract example,
 not a deployed policy or a proof of semantic authority.
@@ -44,7 +45,8 @@ and every sufficient rule, must now carry an explicit governance assertion
 reference. Comparison evidence retains the signal assertion reference.
 These references are traceability fields, not self-authenticating grants:
 Onboarding and UDP still need to resolve them against an approved, immutable
-publication and verify scope, cardinality and validity before activation.
+identity-policy publication and verify scope, cardinality and validity before
+activation. Semantic publication compatibility is checked separately.
 A sufficient rule requires an explicit uniqueness assertion within that
 policy scope. Text normalization is NFKC, whitespace collapse and
 locale-independent lowercase; concept IDs are exact; decimals are canonical
@@ -114,10 +116,11 @@ not a separate simulation algorithm.
 
 ## Integration gates still open
 
-1. Agree the published, immutable policy schema and compatibility checks
-   with Onboarding and Semantic Registry. Resolve each governance assertion
-   ref against an approved publication, verifying scope, cardinality and
-   temporal applicability; a semantic mapping must never imply uniqueness.
+1. Agree the published, immutable identity-policy schema with Onboarding,
+   and check semantic property/version compatibility with the Semantic
+   Registry. Resolve each governance assertion ref against an approved
+   identity-policy publication, verifying scope, cardinality and temporal
+   applicability; a semantic mapping must never imply uniqueness.
    Add relation, temporal and spatial comparators with explicit applicability.
 2. Extend the current whole-class indexed snapshot to temporal scope and
    production scale, and hold the new scope lock across retrieval, decision,
