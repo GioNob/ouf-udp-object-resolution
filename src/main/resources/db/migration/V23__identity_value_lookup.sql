@@ -103,3 +103,21 @@ begin
 end$$;
 create trigger identity_lookup_current_property after insert on ouf_udp.property_value
   for each row execute function ouf_udp.invalidate_identity_lookup_property();
+
+create function ouf_udp.invalidate_identity_lookup_projection() returns trigger language plpgsql as $$
+declare object_id uuid; scope_tenant text; scope_class text;
+begin
+  if tg_op = 'DELETE' then object_id := old.urban_object_id;
+  else object_id := new.urban_object_id; end if;
+  select tenant_id,canonical_type into scope_tenant,scope_class
+    from ouf_udp.urban_object where urban_object_id=object_id;
+  if found then
+    perform pg_advisory_xact_lock(hashtextextended('identity:' || scope_tenant || ':' || scope_class,0));
+    update ouf_udp.identity_lookup_coverage set complete=false,updated_at=transaction_timestamp()
+      where tenant_id=scope_tenant and canonical_class=scope_class and complete;
+  end if;
+  return null;
+end$$;
+create trigger identity_lookup_projection_change after insert or update or delete
+  on ouf_udp.urban_object_current_state for each row
+  execute function ouf_udp.invalidate_identity_lookup_projection();
