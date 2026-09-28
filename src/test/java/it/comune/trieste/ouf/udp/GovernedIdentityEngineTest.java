@@ -40,15 +40,54 @@ class GovernedIdentityEngineTest {
     });
   }
 
-  @Test void missingFieldOrSemanticVersionCannotCompleteEquality() {
+  @Test void allExposedFieldsMatchEvenWhenStoredObjectHasAdditionalFields() {
     var values=new HashMap<>(subject("Aurora","Via Roma 1","cinema","entrance").values());
     values.remove("geo");
-    var candidate=candidate(UUID.randomUUID(),"Aurora","Via Roma 1","cinema","entrance");
-    assertThat(engine.decide(POLICY,new Subject("tenant","Place","source",values),rows(candidate)).outcome())
+    values.remove("category");
+    var candidateValues=new HashMap<>(candidate(UUID.randomUUID(),"Aurora","Via Roma 1","cinema","building-centre").values());
+    candidateValues.put("unmapped",new Value("urn:unmapped@set-1","additional","fixture://candidate"));
+    var candidate=new Candidate(UUID.randomUUID(),"tenant","Place",candidateValues);
+    var incoming=new Subject("tenant","Place","source",values);
+    var matched=engine.decide(POLICY,incoming,rows(candidate));
+    assertThat(matched.outcome()).isEqualTo(Outcome.MATCH);
+    assertThat(matched.objectId()).isEqualTo(candidate.objectId());
+    assertThat(matched.assessments()).singleElement().satisfies(a -> {
+      assertThat(a.evidence()).extracting(Evidence::signalId).containsExactly("address","category","geo","name","unmapped");
+      assertThat(a.evidence()).filteredOn(e->e.kind()==EvidenceKind.AGREE).hasSize(2);
+    });
+    var incomplete=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of("name",values.get("name")));
+    assertThat(engine.decide(POLICY,incoming,rows(incomplete)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(engine.decide(POLICY,incoming,rows(candidate,
+        candidate(UUID.randomUUID(),"Aurora","Via Roma 1","shop","elsewhere"))).outcome())
         .isEqualTo(Outcome.REVIEW_REQUIRED);
+  }
+
+  @Test void incomingObjectMayHaveMoreFieldsThanTheExistingObject() {
+    var incoming=subject("Aurora","Via Roma 1","cinema","entrance");
+    UUID id=UUID.randomUUID();
+    var existing=new Candidate(id,"tenant","Place",Map.of(
+        "name",new Value(NAME," aurora ","fixture://candidate"),
+        "address",new Value(ADDRESS,"Via Roma 1","fixture://candidate")));
+    assertThat(engine.decide(POLICY,incoming,rows(existing)).objectId()).isEqualTo(id);
+    var conflicting=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
+        "name",new Value(NAME,"Aurora","fixture://candidate"),
+        "address",new Value(ADDRESS,"Via Milano 9","fixture://candidate")));
+    assertThat(engine.decide(POLICY,incoming,rows(conflicting)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    var crossed=new Candidate(UUID.randomUUID(),"tenant","Place",Map.of(
+        "name",new Value(NAME,"Aurora","fixture://candidate"),
+        "category",new Value(CATEGORY,"cinema","fixture://candidate"),
+        "unmapped",new Value("urn:unmapped@set-1","something","fixture://candidate")));
+    assertThat(engine.decide(POLICY,incoming,rows(crossed)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+  }
+
+  @Test void wrongSemanticPublicationAndEmptyObservationCannotMatchOrCreate() {
+    var values=new HashMap<>(subject("Aurora","Via Roma 1","cinema","entrance").values());
     values.put("geo",new Value("urn:geo@set-2","entrance","fixture://subject"));
-    assertThat(engine.decide(POLICY,new Subject("tenant","Place","source",values),rows(candidate)).outcome())
-        .isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThatThrownBy(()->engine.decide(POLICY,new Subject("tenant","Place","source",values),rows()))
+        .hasMessage("UDP_IDENTITY_POLICY_INVALID");
+    var empty=new Subject("tenant","Place","source",Map.of());
+    assertThat(engine.decide(POLICY,empty,rows()).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(engine.decide(POLICY,empty,rows()).reason()).isEqualTo("NO_EXPOSED_CANONICAL_FIELDS");
   }
 
   @Test void duplicateExactRecordsRequireHumanAndEmptyScopeCanCreate() {
