@@ -35,6 +35,17 @@ class GovernedIdentitySubjectMapperTest {
         .hasMessage("UDP_IDENTITY_SUBJECT_MAPPING_INVALID");
   }
 
+  @Test void preservesStructuredCanonicalFieldForGovernedJsonComparator(){
+    var signal=new GovernedIdentityEngine.Signal("urn:key","urn:key@set-1",
+        GovernedIdentityEngine.ComparatorKind.JSON_V1,false,false,"policy://json");
+    var policy=new GovernedIdentityEngine.Policy("policy://json","1","tenant-a","urn:T","s",10,true,
+        List.of(signal),List.of(new GovernedIdentityEngine.SufficientRule("whole",Set.of("urn:key"),"policy://whole")));
+    var handoff=new HashMap<String,Object>(handoff("set-1",null));
+    handoff.put("canonicalPayload",Map.of("identity",Map.of("a",List.of(1,true))));
+    assertThat(mapper.map("h-3",handoff,mapping,policy).values().get("urn:key").raw())
+        .isEqualTo("{\"a\":[1,true]}");
+  }
+
   @SuppressWarnings("unchecked") private GovernedIdentityEngine.Policy policy()throws Exception{
     var json=new ObjectMapper();
     try(var input=getClass().getResourceAsStream("/identity-governed-proposal-v1.json")){
