@@ -87,6 +87,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Test void humanApprovedReviewResumesAndMaterializesTheObservation(){
     clearObjects();
     UUID existing=materializeWithAddress("review-target","Alpha","Via Roma");
+    db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-review-target'")
+        .update();
     var policy=new GovernedIdentityEngine.Policy("policy://identity/review-resume","1","default",
         "ouf:Road","registry",5,true,List.of(
         new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
