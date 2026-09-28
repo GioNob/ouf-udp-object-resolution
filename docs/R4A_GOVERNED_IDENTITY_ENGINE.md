@@ -22,15 +22,52 @@ più ricco. Se entrambi espongono campi propri che mancano nell'altro, o se un
 campo condiviso differisce, il caso resta incerto. L'insieme confrontato non
 può essere vuoto e un MATCH richiede un unico candidato che soddisfi la
 regola. Nessuna proprietà è assunta come identificatore stabile.
+Un candidato è invece certamente distinto se **tutti** i campi corrispondenti
+confrontabili sono diversi: non resta selezionabile come lo stesso oggetto.
+Se tutti i candidati sono distinti, `allowAutoNew` può autorizzare la
+creazione. Campi senza corrispondenza, versioni semantiche incompatibili o
+valori non confrontabili non bastano per concludere che due oggetti siano
+distinti; rimangono incerti. Una differenza isolata tra campi per il resto
+uguali, come una diversa georeferenziazione, rimane incerta.
 
-Senza candidati nel perimetro completo e verificato si può creare un oggetto
-solo quando la policy della fonte abilita `allowAutoNew`. Con almeno un
-candidato ma senza un'unica uguaglianza completa, il risultato è
-`REVIEW_REQUIRED`. Un insieme troppo grande o una copertura non attestata
+Senza candidati, oppure con soli candidati certamente distinti, nel perimetro
+completo e verificato si può creare un oggetto solo quando la policy della
+fonte abilita `allowAutoNew`. Candidati plausibili senza un'unica uguaglianza
+completa richiedono `REVIEW_REQUIRED`. Un insieme troppo grande o una copertura non attestata
 blocca la decisione automatica. La normalizzazione `TEXT_V1` applica NFKC,
 spazi normalizzati e minuscole indipendenti dalla locale; `CONCEPT` confronta
 l'identificatore esatto e `DECIMAL_V1` il valore numerico canonico. Cambiare
 comparatore richiede una nuova versione.
+
+## Ricerca dei candidati e costo
+
+La ricerca deve partire da **ogni** proprietà canonica esposta dall'oggetto
+in ingresso, con valore normalizzato, comparatore e versione semantica. Un
+indice inverso per `(tenant, classe, proprietà, versione semantica,
+comparatore, valore)` restituisce gli ID degli oggetti attivi che condividono
+almeno un valore. Si prende l'unione deduplicata di questi ID e si caricano
+solo i relativi oggetti completi per il confronto. Una sola proprietà come
+seme non basta: può cambiare posizione o indirizzo mentre un'altra proprietà
+resta uguale. Il grafo UDP fornisce gli oggetti e le relazioni, ma esplorare
+archi senza un indice dei valori non rende questa ricerca selettiva.
+
+Una corrispondenza completa su uno dei due insiemi di campi implica almeno
+un valore comune, quindi quel candidato appartiene necessariamente all'unione.
+Se non si trovano ID e la copertura è attestata, gli oggetti confrontabili
+sono distinti per la regola corrente. I valori mancanti, non confrontabili,
+con versione semantica diversa o non indicizzati richiedono una verifica di
+copertura e, se possono incidere sull'identità, revisione umana. Quando
+l'unione supera `maxCandidates`, non si tronca per dichiarare un nuovo oggetto:
+si apre un caso troppo ampio. Il costo della ricerca ordinaria dipende dalle
+ricerche indicizzate e dai candidati trovati, non da `m × n` oggetti.
+
+L'indice va mantenuto atomicamente con le revisioni correnti, anche per
+merge/split e rimozioni; prima dell'attivazione occorre ricostruirlo per gli
+oggetti preesistenti e attestare la copertura per tenant, classe, policy e
+versione del comparatore. La precedente scansione della classe è stata
+rimossa dal repository. Fino a quando indice, backfill e attestazione non
+sono implementati e verificati, il repository restituisce copertura non
+attestata e il motore produce soltanto `REVIEW_REQUIRED`.
 
 La forma attuale del contratto mantiene per compatibilità i nomi `signals` e
 `sufficientRules`, ma rifiuta `uniqueWithinScope: true`,
