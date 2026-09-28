@@ -57,14 +57,27 @@ public class ScopedIdentityCandidateRepository {
             and active_object.current_revision_id=t.revision_id and active_object.status='ACTIVE'
           order by t.urban_object_id limit :candidateLimit
         ), shape_hits as (
-          select s.urban_object_id from ouf_udp.identity_lookup_shape s
-          join coverage on true
-          join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
-            and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
-          where s.tenant_id=:tenant and s.canonical_class=:canonicalClass
-            and s.policy_ref=:policy and s.policy_version=:version
-            and s.field_set_hash<>:shape
-          order by s.field_set_hash,s.urban_object_id limit :candidateLimit
+          select urban_object_id from (
+            select s.urban_object_id from ouf_udp.identity_lookup_shape s
+            join coverage on true
+            join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
+              and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
+            where s.tenant_id=:tenant and s.canonical_class=:canonicalClass
+              and s.policy_ref=:policy and s.policy_version=:version
+              and s.field_set_hash < :shape
+            order by s.field_set_hash,s.urban_object_id limit :candidateLimit
+          ) before_shapes
+          union all
+          select urban_object_id from (
+            select s.urban_object_id from ouf_udp.identity_lookup_shape s
+            join coverage on true
+            join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
+              and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
+            where s.tenant_id=:tenant and s.canonical_class=:canonicalClass
+              and s.policy_ref=:policy and s.policy_version=:version
+              and s.field_set_hash > :shape
+            order by s.field_set_hash,s.urban_object_id limit :candidateLimit
+          ) after_shapes
         ), hits as (
           select distinct urban_object_id from (
             select urban_object_id from equal_hits
