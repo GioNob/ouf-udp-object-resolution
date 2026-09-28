@@ -17,16 +17,16 @@ class GovernedIdentityEngineTest {
   private static final Policy POLICY=new Policy("policy://objects","1","tenant","Place","source",10,true,
       SIGNALS,List.of(new SufficientRule("whole-record",Set.of("name","address","category","geo"),"policy://whole-record/1")));
 
-  @Test void completeFourFieldEqualityMatchesWithoutStableIdentifier() {
+  @Test void exactCandidateWithAnotherPlausibleObjectRequiresReview() {
     UUID id=UUID.randomUUID();
     var subject=subject("Aurora","Via Roma 1","cinema","45.1,13.1");
     var exact=candidate(id," aurora ","Via Roma 1","cinema","45.1,13.1");
     var partial=candidate(UUID.randomUUID(),"Aurora","Via Roma 1","cinema","45.1,13.2");
     var result=engine.decide(POLICY,subject,rows(exact,partial));
-    assertThat(result.outcome()).isEqualTo(Outcome.MATCH);
-    assertThat(result.objectId()).isEqualTo(id);
-    assertThat(result.reason()).isEqualTo("COMPLETE_CANONICAL_EQUALITY");
-    assertThat(engine.decide(POLICY,subject,rows(partial,exact)).objectId()).isEqualTo(id);
+    assertThat(result.outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(result.assessments()).extracting(Assessment::objectId).containsExactlyInAnyOrder(id,partial.objectId());
+    assertThat(engine.decide(POLICY,subject,rows(partial,exact)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(engine.decide(POLICY,subject,rows(exact)).objectId()).isEqualTo(id);
   }
 
   @Test void changedGeoreferenceOrAddressRemainsAnUncertainCase() {
