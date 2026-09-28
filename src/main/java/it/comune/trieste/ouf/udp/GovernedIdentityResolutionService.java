@@ -55,6 +55,29 @@ public class GovernedIdentityResolutionService {
       if(!healthy)throw new IllegalStateException("UDP_IDENTITY_BINDING_MISSING");
       return new Result(outcome,bound,true);
     }
+    // An ACTIVE source binding is continuity evidence in its own right. A changed
+    // observation may change properties without changing the canonical identity.
+    if(healthy){
+      String bindingRef="source-binding://"+policy.sourceId()+"/"+type+"/"+sourceObject;
+      Map<String,Object> evidence=new LinkedHashMap<>();
+      evidence.put("bindingRef",bindingRef);
+      evidence.put("targetUrbanObjectId",bound);
+      evidence.put("policyRef",policy.ref());
+      evidence.put("policyVersion",policy.version());
+      evidence.put("reason","ACTIVE_SOURCE_BINDING");
+      db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,target_urban_object_id,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref) values(gen_random_uuid(),:h,:c,'MATCH',:u,'GOVERNED_IDENTITY',:v,cast(:e as jsonb),'SERVICE_IDENTITY',:p)")
+          .param("h",handoffId).param("c",bindingRef).param("u",bound)
+          .param("v",policy.version()).param("e",write(List.of(evidence))).param("p",policy.ref()).update();
+      return new Result("MATCH",bound,false);
+    }
+    if(!binding.isEmpty()){
+      var conflict=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,
+          null,"SOURCE_BINDING_CONFLICT",policy.ref(),policy.version(),List.of());
+      var unavailable=new GovernedIdentityEngine.Candidates(policy.ref(),policy.version(),
+          policy.tenantId(),policy.canonicalClass(),null,false,List.of());
+      reviews.record(handoffId,conflict,unavailable,false);
+      return new Result("REVIEW_REQUIRED",null,false);
+    }
     var retrieved=candidates.retrieve(policy,subject);
     var decision=engine.decide(policy,subject,retrieved);
     if(decision.outcome()==GovernedIdentityEngine.Outcome.REVIEW_REQUIRED
