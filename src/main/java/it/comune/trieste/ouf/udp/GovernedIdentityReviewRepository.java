@@ -59,8 +59,9 @@ public class GovernedIdentityReviewRepository {
     db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,target_urban_object_id,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref) values(:id,:h,:c,'REVIEW_REQUIRED',null,'GOVERNED_IDENTITY',:v,cast(:e as jsonb),'SERVICE_IDENTITY',:p)")
         .param("id",id).param("h",handoffId).param("c",coverage).param("v",decision.policyVersion())
         .param("e",details).param("p",decision.policyRef()).update();
-    db.sql("insert into ouf_udp.resolution_issue(issue_id,resolution_decision_id,handoff_id,reason_code,candidate_refs,evidence_refs) values(gen_random_uuid(),:id,:h,:r,cast(:c as jsonb),cast(:e as jsonb))")
+    db.sql("insert into ouf_udp.resolution_issue(issue_id,resolution_decision_id,handoff_id,reason_code,candidate_refs,evidence_refs,tenant_id) values(gen_random_uuid(),:id,:h,:r,cast(:c as jsonb),cast(:e as jsonb),:tenant)")
         .param("id",id).param("h",handoffId)
+        .param("tenant",retrieved.tenantId())
         .param("r",decision.outcome()==GovernedIdentityEngine.Outcome.RESOLUTION_TOO_BROAD
             ?"UDP_RESOLUTION_TOO_BROAD":decision.reason())
         .param("c",write(selectable)).param("e",details).update();
