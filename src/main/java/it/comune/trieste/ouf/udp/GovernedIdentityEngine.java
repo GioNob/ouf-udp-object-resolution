@@ -130,9 +130,15 @@ public final class GovernedIdentityEngine {
         EvidenceKind kind;
         if (left == null || right == null || signal == null
             || !signal.semanticRef().equals(right.semanticRef())) kind = EvidenceKind.MISSING;
-        else if (normalize(signal.comparator(), left.raw()).equals(normalize(signal.comparator(), right.raw()))) {
-          kind = EvidenceKind.AGREE; agreeing.add(property);
-        } else kind = EvidenceKind.DISAGREE;
+        else {
+          try {
+            if (normalize(signal.comparator(), left.raw()).equals(normalize(signal.comparator(), right.raw()))) {
+              kind = EvidenceKind.AGREE; agreeing.add(property);
+            } else kind = EvidenceKind.DISAGREE;
+          } catch (IllegalArgumentException unsupported) {
+            kind = EvidenceKind.MISSING;
+          }
+        }
         evidence.add(new Evidence(property, kind, left == null ? null : left.provenanceRef(),
             right == null ? null : right.provenanceRef(), signal == null ? "UNSUPPORTED" : signal.comparator().name(),
             signal == null ? null : signal.assertionRef()));
