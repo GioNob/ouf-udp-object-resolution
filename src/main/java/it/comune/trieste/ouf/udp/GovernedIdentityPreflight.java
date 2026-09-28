@@ -21,7 +21,7 @@ public class GovernedIdentityPreflight {
 
   @Transactional public Attestation prepare(String sourceId,String configurationHash,
       Map<String,Object> configuration,TrustedHumanContext actor){
-    actor.require("authorization.policy.admin");
+    actor.require("urban.identity.preflight");
     if(sourceId==null||sourceId.isBlank()||configuration==null
         ||!hash(configuration).equals(configurationHash))throw invalid("CONFIGURATION_HASH");
     var semantic=object(configuration,"semanticMapping");
@@ -59,9 +59,21 @@ public class GovernedIdentityPreflight {
   }
 
   public Attestation status(UUID id,TrustedHumanContext actor){
-    actor.require("authorization.policy.admin");
+    actor.require("urban.identity.preflight");
+    return read(id,actor.tenantId());
+  }
+  public Attestation latest(String configurationHash,String sourceId,String tenantId){
+    if(configurationHash==null||!configurationHash.matches("sha256:[0-9a-f]{64}")
+        ||sourceId==null||sourceId.isBlank()||tenantId==null||tenantId.isBlank())
+      throw invalid("QUERY");
+    UUID id=db.sql("select attestation_id from ouf_udp.identity_preactivation_attestation where configuration_hash=:hash and source_id=:source and tenant_id=:tenant order by created_at desc,attestation_id desc limit 1")
+        .param("hash",configurationHash).param("source",sourceId).param("tenant",tenantId)
+        .query(UUID.class).list().stream().findFirst().orElseThrow(()->invalid("NOT_FOUND"));
+    return read(id,tenantId);
+  }
+  private Attestation read(UUID id,String tenantId){
     var row=db.sql("select a.attestation_id,a.configuration_hash,a.tenant_id,a.source_id,a.canonical_class,a.policy_ref,a.policy_version,a.policy_fingerprint,a.coverage_ref,a.indexed_objects, c.complete and c.coverage_ref=a.coverage_ref and c.policy_fingerprint=a.policy_fingerprint and c.field_set_hash is not null valid from ouf_udp.identity_preactivation_attestation a left join ouf_udp.identity_lookup_coverage c on c.tenant_id=a.tenant_id and c.canonical_class=a.canonical_class and c.policy_ref=a.policy_ref and c.policy_version=a.policy_version where a.attestation_id=:id and a.tenant_id=:tenant")
-        .param("id",id).param("tenant",actor.tenantId()).query().listOfRows().stream()
+        .param("id",id).param("tenant",tenantId).query().listOfRows().stream()
         .findFirst().orElseThrow(()->invalid("NOT_FOUND"));
     return new Attestation((UUID)row.get("attestation_id"),String.valueOf(row.get("configuration_hash")),
         String.valueOf(row.get("tenant_id")),String.valueOf(row.get("source_id")),
