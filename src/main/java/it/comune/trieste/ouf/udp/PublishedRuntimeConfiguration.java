@@ -39,8 +39,9 @@ public class PublishedRuntimeConfiguration {
     UdpPorts.ResolutionProfile resolution=governed?null:json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
     UdpPorts.MaterializationProfile materialization=json.convertValue(object(profile,"materialization"),UdpPorts.MaterializationProfile.class);
     if(!governed&&java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
-        resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank())
-        ||materialization.properties().isEmpty())throw invalid();
+        resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank()))
+      throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
+    if(materialization.properties().isEmpty())throw invalid();
     String canonicalClass=governed?text(object(resolutionDefinition,"governedIdentity"),"canonicalClass"):resolution.canonicalType();
     if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&canonicalClass.equals(target.get("classIri"))))throw invalid();
     var labels=new HashMap<String,String>();
