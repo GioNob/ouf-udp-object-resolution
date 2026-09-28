@@ -129,6 +129,56 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         "registry",Map.of("ouf:name",new GovernedIdentityEngine.Value(policy.signals().getFirst().semanticRef(),
             "Alpha","handoff://reviewed")))).complete()).isTrue();
   }
+  @Test void humanCanConfirmDistinctIdentityAndWorkerMaterializesItAtomically(){
+    clearObjects();
+    UUID existing=materializeWithAddress("distinct-target","Alpha","Via Roma");
+    db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-distinct-target'").update();
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/distinct-review","1","default",
+        "ouf:Road","registry",5,true,List.of(
+        new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1"),
+        new GovernedIdentityEngine.Signal("ouf:address","ouf:address@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://address/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("both",Set.of("ouf:name","ouf:address"),
+            "assertion://both/1")));
+    backfill.rebuild(policy);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(
+        new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry")),
+        new UdpPorts.PropertyRule("address","ouf:address","string","OPEN",List.of("registry"))));
+    Map<String,Object> incoming=envelope("distinct-reviewed","Alpha");
+    intake.accept(incoming);
+    assertThat(governed.resolve("candidate-distinct-reviewed",incoming,mapping,policy).outcome())
+        .isEqualTo("REVIEW_REQUIRED");
+    var configuration=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    org.mockito.Mockito.when(configuration.resolve("bundle://road/1","ROAD"))
+        .thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),null,mapping,null,null,policy));
+    var loop=new PublishedResolutionLoop(jobs,configuration,gate,resolver,materializer,null,db,
+        new org.springframework.transaction.support.TransactionTemplate(transactions),null,governed,backfill);
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-distinct-reviewed'")
+        .query(String.class).single()).isEqualTo("QUARANTINED");
+    UUID issue=db.sql("select issue_id from ouf_udp.resolution_issue where handoff_id='candidate-distinct-reviewed'")
+        .query(UUID.class).single();
+    var human=new TrustedHumanContext("HUMAN_USER","reviewer","default",
+        Set.of("resolution.match.approve"),"authz://review","corr-distinct");
+    governance.decideResolutionIssue(issue,0,"CREATE_NEW","verified distinct physical object",null,human);
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-distinct-reviewed'")
+        .query(String.class).single()).isEqualTo("SUCCEEDED");
+    UUID created=db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='distinct-reviewed'")
+        .query(UUID.class).single();
+    assertThat(created).isNotEqualTo(existing);
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id='candidate-distinct-reviewed'")
+        .query(Long.class).single()).isOne();
+    assertThat(db.sql("select action from ouf_udp.human_resolution_decision where issue_id=:i")
+        .param("i",issue).query(String.class).single()).isEqualTo("CREATE_NEW");
+    assertThat(db.sql("select complete from ouf_udp.identity_lookup_coverage where policy_ref=:p")
+        .param("p",policy.ref()).query(Boolean.class).single()).isTrue();
+  }
+
   @Test void structuredCanonicalValuesAreIndexedAndComparedAcrossJsonKeyOrder(){
     clearObjects();
     Map<String,Object> envelope=envelope("json","ignored");
