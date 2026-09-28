@@ -35,6 +35,8 @@ public class PublishedRuntimeConfiguration {
     // Silently falling back to matchProperty could merge unrelated same-named objects.
     if(resolutionDefinition.containsKey("weighted"))throw new IllegalArgumentException("UDP_WEIGHTED_RUNTIME_UNAVAILABLE");
     boolean governed=resolutionDefinition.containsKey("governedIdentity");
+    if(governed&&!Set.of("strategyId","strategyVersion","policyRef","governedIdentity")
+        .equals(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
     if(!governed&&!Set.of("strategyId","strategyVersion","policyRef","canonicalType","canonicalKeyProperty","matchProperty")
         .equals(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
     UdpPorts.ResolutionProfile resolution=governed?null:json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
