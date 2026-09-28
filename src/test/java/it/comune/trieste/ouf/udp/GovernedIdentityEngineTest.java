@@ -56,6 +56,28 @@ class GovernedIdentityEngineTest {
     assertThat(decision.outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
   }
 
+  @Test void anExcludedSufficientMatchCannotBecomeANewObject() {
+    Policy policy=new Policy("policy://conflict", "1", "default", "Cinema", "file-source", 10, true,
+        List.of(new Signal("key", CODE, ComparatorKind.CONCEPT, false, true, "assertion://key/1"),
+            new Signal("display", NAME, ComparatorKind.TEXT_V1, true, false, "assertion://display-exclusion/1")),
+        List.of(new SufficientRule("key-rule", Set.of("key"), "assertion://key-rule/1")));
+    Candidate prior=candidate(UUID.randomUUID(), Map.of("key", value(CODE, "007"),
+        "display", value(NAME, "Existing label")));
+    Decision decision=engine.decide(policy, subject(Map.of("key", value(CODE, "007"),
+        "display", value(NAME, "Conflicting label"))), retrieved(policy, prior));
+    assertThat(decision.outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(decision.reason()).isEqualTo("CONFLICTING_IDENTITY_EVIDENCE");
+    assertThat(decision.assessments()).singleElement().satisfies(a -> {
+      assertThat(a.excluded()).isTrue();
+      assertThat(a.satisfiedRules()).contains("key-rule");
+    });
+    Candidate apparentlyClean=candidate(UUID.randomUUID(), Map.of("key", value(CODE, "007"),
+        "display", value(NAME, "Conflicting label")));
+    assertThat(engine.decide(policy, subject(Map.of("key", value(CODE, "007"),
+        "display", value(NAME, "Conflicting label"))), retrieved(policy, prior, apparentlyClean)).outcome())
+        .isEqualTo(Outcome.REVIEW_REQUIRED);
+  }
+
   @Test void boundedCandidatesAndSourceScopedCreationAreExplicit() {
     Subject observation = subject(Map.of("key", value(CODE, "007")));
     Policy noCreate = policy(false, true), create = policy(true, true);
