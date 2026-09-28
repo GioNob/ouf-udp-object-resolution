@@ -76,6 +76,7 @@ public class GovernedIdentityResolutionService {
     }
     Map<String,Object> evidence=new LinkedHashMap<>();
     evidence.put("policyRef",policy.ref());evidence.put("policyVersion",policy.version());
+    evidence.put("tenantId",policy.tenantId());evidence.put("canonicalClass",policy.canonicalClass());
     evidence.put("coverageRef",retrieved.coverageRef());evidence.put("complete",retrieved.complete());
     evidence.put("outcome",decision.outcome().name());evidence.put("reason",decision.reason());
     evidence.put("assessments",decision.assessments());
