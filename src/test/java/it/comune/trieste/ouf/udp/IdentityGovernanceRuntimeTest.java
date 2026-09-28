@@ -86,6 +86,27 @@ class IdentityGovernanceRuntimeTest {
         .hasMessage("UDP_GOVERNED_EVIDENCE_STALE");
   }
 
+  @Test void existingActiveSourceBindingPreservesIdentityWhenItsPropertiesChange(){
+    UUID existing=object("bound-road");
+    binding("original-binding","roads","ROAD","stable-source-record",existing);
+    Map<String,Object> changed=handoff("bound-change","stable-source-record","Renamed road");
+    intake.accept(changed);
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/binding","1","default","ouf:Road",
+        "roads",2,true,List.of(new GovernedIdentityEngine.Signal("ouf:name",
+            "ouf:name@semantic://1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,
+            "assertion://name/1")),List.of(new GovernedIdentityEngine.SufficientRule("name",
+            Set.of("ouf:name"),"assertion://name-sufficient/1")));
+    var mapping=new UdpPorts.MaterializationProfile("authority://1",List.of(
+        new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    var result=governed.resolve("bound-change",changed,mapping,policy);
+    assertThat(result.outcome()).isEqualTo("MATCH");
+    assertThat(result.targetUrbanObjectId()).isEqualTo(existing);
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_issue where handoff_id='bound-change'")
+        .query(Long.class).single()).isZero();
+    assertThat(db.sql("select candidate_ref from ouf_udp.resolution_decision where handoff_id='bound-change'")
+        .query(String.class).single()).startsWith("source-binding://");
+  }
+
   @Test void ambiguousHandoffWaitsForHumanThenResumesWithoutChangingDurableAck(){
     UUID selected=seedCandidate("A","same");seedCandidate("B","same");
     Map<String,Object> payload=handoff("review-resume","incoming","same");
