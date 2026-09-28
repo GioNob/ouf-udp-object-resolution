@@ -66,8 +66,9 @@ ricerche indicizzate e dai candidati trovati, non da `m × n` oggetti.
 La migrazione `V23` prepara l'indice inverso dei valori, un indice delle
 forme dei campi e una tabella di attestazione per tenant, classe e versione
 della policy. La lettura usa una sola snapshot SQL: unisce i candidati che
-condividono un valore a quelli con una forma dei campi diversa, applica il
-limite e carica le
+condividono un valore a quelli con una forma dei campi diversa, cercati nei
+due intervalli indicizzati prima e dopo l'impronta della forma in ingresso.
+Applica il limite e carica le
 proprietà complete solo per quegli ID. Le mutazioni di `urban_object`, della
 proiezione corrente, dei valori correnti o dei token invalidano
 automaticamente l'attestazione. La materializzazione acquisisce il lock del
