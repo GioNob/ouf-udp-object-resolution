@@ -35,16 +35,17 @@ public class ScopedIdentityCandidateRepository {
     }
     if(seeds.isEmpty())return incomplete(policy);
     String shape=hash(String.join("\u0000",new TreeSet<>(subject.values().keySet())));
+    String policyShape=hash(String.join("\u0000",new TreeSet<>(signals.keySet())));
     String sql="""
         with coverage as (
           select coverage_ref from ouf_udp.identity_lookup_coverage
           where tenant_id=:tenant and canonical_class=:canonicalClass
             and policy_ref=:policy and policy_version=:version
-            and (field_set_hash=:shape or indexed_objects=0) and complete
+            and field_set_hash=:policyShape and complete
         ), seeds as (
           select * from jsonb_to_recordset(cast(:seeds as jsonb))
             as s(property_iri text,semantic_ref text,comparator text,value_hash text)
-        ), hits as (
+        ), equal_hits as (
           select distinct t.urban_object_id
           from seeds s join ouf_udp.identity_lookup_token t
             on t.tenant_id=:tenant and t.canonical_class=:canonicalClass
@@ -55,6 +56,20 @@ public class ScopedIdentityCandidateRepository {
           join ouf_udp.urban_object active_object on active_object.urban_object_id=t.urban_object_id
             and active_object.current_revision_id=t.revision_id and active_object.status='ACTIVE'
           order by t.urban_object_id limit :candidateLimit
+        ), shape_hits as (
+          select s.urban_object_id from ouf_udp.identity_lookup_shape s
+          join coverage on true
+          join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
+            and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
+          where s.tenant_id=:tenant and s.canonical_class=:canonicalClass
+            and s.policy_ref=:policy and s.policy_version=:version
+            and s.field_set_hash<>:shape
+          order by s.field_set_hash,s.urban_object_id limit :candidateLimit
+        ), hits as (
+          select distinct urban_object_id from (
+            select urban_object_id from equal_hits
+            union all select urban_object_id from shape_hits
+          ) selected order by urban_object_id limit :candidateLimit
         ), snapshot as (select pg_current_snapshot()::text snapshot_ref)
         select coverage.coverage_ref,snapshot.snapshot_ref,o.urban_object_id,
                p.property_iri,p.value_json::text value_json,p.contribution_id,
@@ -67,7 +82,8 @@ public class ScopedIdentityCandidateRepository {
         """;
     List<Map<String,Object>> rows=db.sql(sql).param("tenant",policy.tenantId())
         .param("canonicalClass",policy.canonicalClass()).param("policy",policy.ref())
-        .param("version",policy.version()).param("shape",shape).param("seeds",write(seeds))
+        .param("version",policy.version()).param("shape",shape).param("policyShape",policyShape)
+        .param("seeds",write(seeds))
         .param("candidateLimit",policy.maxCandidates()+1).query().listOfRows();
     if(rows.isEmpty())throw new IllegalStateException("UDP_CANDIDATE_SNAPSHOT_MISSING");
     String coverage=(String)rows.getFirst().get("coverage_ref");
