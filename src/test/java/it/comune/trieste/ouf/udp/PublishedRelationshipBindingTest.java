@@ -31,7 +31,7 @@ class PublishedRelationshipBindingTest {
   @Test void weightedProposalBindsItsPolicyAndRejectsUnmappedBlockingFields()throws Exception{
     var b=bundle();var runtime=map(map(b,"extractionProfile"),"runtime");
     var udp=map(runtime,"udp");var resolution=map(udp,"resolution");
-    resolution.put("weighted",Map.of("signals",List.of(Map.of("property","ref","comparator","TEXT","weight",1)),"blockingProperties",List.of("ref"),"maxCandidates",10,"highThreshold",.85,"reviewThreshold",.5,"minimumMargin",.1,"allowSpatialIdentity",false));
+    resolution.put("weighted",new LinkedHashMap<>(Map.of("signals",List.of(Map.of("property","ref","comparator","TEXT","weight",1)),"blockingProperties",List.of("ref"),"maxCandidates",10,"highThreshold",.85,"reviewThreshold",.5,"minimumMargin",.1,"allowSpatialIdentity",false)));
     assertThat(resolve(b).resolution().weighted().blockingProperties()).containsExactly("ref");
     map(resolution,"weighted").put("blockingProperties",List.of("controller"));
     assertThatThrownBy(()->resolve(b)).hasMessage("UDP_PINNED_PROFILE_INVALID");
