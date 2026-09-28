@@ -1,6 +1,7 @@
 package it.comune.trieste.ouf.udp;
 
 import java.util.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Projects an Ingestion canonical record through the published materialization mapping. */
 public final class GovernedIdentitySubjectMapper {
@@ -26,10 +27,16 @@ public final class GovernedIdentitySubjectMapper {
       String field=fields.get(signal.id());
       if(field==null||!signal.semanticRef().equals(signal.id()+"@"+publication))throw invalid();
       Object raw=canonical.get(field);
-      if(raw instanceof String || raw instanceof Number)
-        values.put(signal.id(),new GovernedIdentityEngine.Value(signal.semanticRef(),String.valueOf(raw),
+      if(canonical.containsKey(field)){
+        String encoded;
+        if(signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1){
+          try{encoded=new ObjectMapper().writeValueAsString(raw);}
+          catch(Exception invalid){throw invalid();}
+        }else if(raw instanceof String || raw instanceof Number)encoded=String.valueOf(raw);
+        else throw invalid();
+        values.put(signal.id(),new GovernedIdentityEngine.Value(signal.semanticRef(),encoded,
             "handoff://"+handoffId+"#canonicalPayload/"+field));
-      else if(canonical.containsKey(field))throw invalid(); // Never silently omit an exposed value.
+      }
     }
     return new GovernedIdentityEngine.Subject(policy.tenantId(),policy.canonicalClass(),policy.sourceId(),values);
   }
