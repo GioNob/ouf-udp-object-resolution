@@ -72,8 +72,9 @@ published policy:
    provenance and coverage.
 4. **Decide under an explicit policy.** Automatic MATCH requires an
    approved sufficient identity rule whose premises are satisfied and whose
-   competing candidates are excluded under that rule. A weighted score can
-   rank and explain candidates but is not by itself an identity proof.
+   competing candidates are excluded under that rule. The UDP PET permits
+   an approved weighted strategy above its versioned HIGH threshold; its
+   score is not authority outside that strategy and its constraints.
    Automatic NEW requires an explicit source-scoped creation policy and
    traceable provenance, with governed merge available later. Genuine
    unresolved competing identities or conflicting evidence yield
