@@ -23,6 +23,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired ScopedIdentityCandidateRepository candidates;
   @Autowired GovernedIdentityReviewRepository reviews;
   @Autowired GovernedIdentityScopeLock scopeLock;
+  @Autowired GovernedIdentityResolutionService governed;
   @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
   @Autowired JdbcClient db;
 
@@ -101,6 +102,43 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
           .isTrue();
     }finally{worker.shutdownNow();}
   }
+  @Test void atomicMatchAndNewObjectRetainSourceBindingAcrossRetries(){
+    UUID existing=materialize("one","Alpha");
+    Map<String,Object> match=envelope("match","Alpha");intake.accept(match);
+    var matched=governed.resolve("candidate-match",match,authority,policy(2));
+    assertThat(matched.outcome()).isEqualTo("MATCH");
+    assertThat(matched.targetUrbanObjectId()).isEqualTo(existing);
+    assertThat(governed.resolve("candidate-match",match,authority,policy(2)).duplicate()).isTrue();
+
+    Map<String,Object> fresh=envelope("fresh","Gamma");intake.accept(fresh);
+    var created=governed.resolve("candidate-fresh",fresh,authority,autoPolicy());
+    assertThat(created.outcome()).isEqualTo("NEW_OBJECT");
+    assertThat(created.targetUrbanObjectId()).isNotEqualTo(existing);
+    assertThat(governed.resolve("candidate-fresh",fresh,authority,autoPolicy()).targetUrbanObjectId())
+        .isEqualTo(created.targetUrbanObjectId());
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object where canonical_type='ouf:Road'")
+        .query(Long.class).single()).isEqualTo(2);
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='fresh'")
+        .query(UUID.class).single()).isEqualTo(created.targetUrbanObjectId());
+    String evidence=db.sql("select evidence_refs::text from ouf_udp.resolution_decision where handoff_id='candidate-fresh'")
+        .query(String.class).single();
+    assertThat(evidence).contains("postgres-snapshot://","SOURCE_SCOPED_CREATION").doesNotContain("Gamma");
+  }
+
+  @Test void conflictingExistingSourceBindingQuarantinesWithoutReassignment(){
+    UUID existing=materialize("one","Alpha");
+    Map<String,Object> conflicting=envelope("one","Different");
+    conflicting.put("handoffId","candidate-conflict");
+    intake.accept(conflicting);
+    var result=governed.resolve("candidate-conflict",conflicting,authority,autoPolicy());
+    assertThat(result.outcome()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='one'")
+        .query(UUID.class).single()).isEqualTo(existing);
+    var issue=db.sql("select reason_code,candidate_refs::text candidate_refs from ouf_udp.resolution_issue where handoff_id='candidate-conflict'")
+        .query().singleRow();
+    assertThat(issue.get("reason_code")).isEqualTo("SOURCE_BINDING_CONFLICT");
+    assertThat(issue.get("candidate_refs")).isEqualTo("[]");
+  }
   private void assertOtherConnectionCannotLock(ExecutorService worker){
     Future<Boolean> other=worker.submit(()->db.sql("select pg_try_advisory_xact_lock(hashtextextended(:key,0))")
         .param("key","identity:default:ouf:Road").query(Boolean.class).single());
@@ -124,6 +162,9 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private GovernedIdentityEngine.Policy policy(int limit){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",limit,false,
       List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,true,"assertion://name/1")),
+      List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));}
+  private GovernedIdentityEngine.Policy autoPolicy(){return new GovernedIdentityEngine.Policy("policy://identity/auto","1","default","ouf:Road","registry",2,true,
+      List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,true,true,"assertion://name/1")),
       List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));}
   private static String required(String n){String value=System.getenv(n);if(value==null)throw new IllegalStateException(n+" required");return value;}
 }
