@@ -97,7 +97,7 @@ backfill come fixture; nessun flusso di produzione lo invoca ancora.
 Restano da collegare il backfill al preflight governato e da validare le
 policy pubblicate. `refreshOne` mantiene atomicamente token e forme di un
 oggetto materializzato dopo una ricerca completa nella stessa transazione;
-non è ancora collegato al worker. Merge/split, rimozioni e altre mutazioni
+il worker lo invoca nel percorso governed dopo la materializzazione. Merge/split, rimozioni e altre mutazioni
 fuori da quel percorso richiedono riconciliazione. Una mutazione non coperta
 deve lasciare la classe non attestata. Solo allora la verifica di copertura
 può essere pubblicata senza ripetere una scansione completa a ogni handoff.
@@ -149,8 +149,8 @@ e minimizzata della tabella. Per i casi senza candidato,
 `DISMISS` è una decisione esplicita ma non sostituisce un futuro comando
 governato di creazione manuale: questo resta un gate funzionale.
 
-Il percorso governed è preparato ma non collegato a `PublishedResolutionLoop`:
-la gate di attivazione resta chiusa. Occorre attestare la completezza dei
+Il percorso governed è collegato a `PublishedResolutionLoop`, ma la gate di
+attivazione Onboarding resta chiusa. Occorre attestare la completezza dei
 candidati anche su classi grandi, verificare il confronto di tutti i valori
 canonici esposti (comprese proprietà multivalore e geometrie), versionare la policy,
 validare la copertura nel preflight e riconciliare le issue storiche che
