@@ -53,7 +53,7 @@ class IdentityGovernanceRuntimeTest {
         .query(UUID.class).single()).isEqualTo(selected);
     var policy=new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","roads",2,false,
         List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://1",
-            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,true,"assertion://name/1")),
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1")),
         List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));
     var mapping=new UdpPorts.MaterializationProfile("authority://1",List.of(
         new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
