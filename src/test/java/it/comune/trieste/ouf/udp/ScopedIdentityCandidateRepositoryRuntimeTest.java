@@ -81,6 +81,31 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Long.class).single()).isOne();
   }
+  @Test void structuredCanonicalValuesAreIndexedAndComparedAcrossJsonKeyOrder(){
+    clearObjects();
+    Map<String,Object> envelope=envelope("json","ignored");
+    envelope.put("canonicalPayload",Map.of("code","json","details",
+        Map.of("b",List.of(2,Map.of("z",true,"a",1)),"a","value")));
+    intake.accept(envelope);
+    UUID object=resolver.resolve("candidate-json",envelope,new UdpPorts.ResolutionProfile(
+        "CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code")).targetUrbanObjectId();
+    materializer.materialize("candidate-json",object,envelope,new UdpPorts.MaterializationProfile(
+        "policy://authority/1",List.of(new UdpPorts.PropertyRule("details","ouf:details","json","OPEN",List.of("registry")))));
+    var signal=new GovernedIdentityEngine.Signal("ouf:details","ouf:details@semantic://publication/1",
+        GovernedIdentityEngine.ComparatorKind.JSON_V1,false,false,"assertion://details/1");
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/json","1","default","ouf:Road",
+        "registry",2,true,List.of(signal),List.of(new GovernedIdentityEngine.SufficientRule(
+            "all",Set.of("ouf:details"),"assertion://all/1")));
+    assertThat(backfill.rebuild(policy).indexedObjects()).isOne();
+    var incoming=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of(
+        "ouf:details",new GovernedIdentityEngine.Value(signal.semanticRef(),
+            "{\"a\":\"value\",\"b\":[2.0,{\"a\":1.0,\"z\":true}]}","handoff://json")));
+    var retrieved=candidates.retrieve(policy,incoming);
+    assertThat(retrieved.complete()).isTrue();
+    assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(object);
+    assertThat(new GovernedIdentityEngine().decide(policy,incoming,retrieved).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+  }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     clearObjects();
     UUID matching=materialize("one","Alpha");materialize("two","Beta");
