@@ -26,6 +26,9 @@ public class GovernedIdentityIndexBackfill {
     db.sql("delete from ouf_udp.identity_lookup_token where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
         .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version()).update();
+    db.sql("delete from ouf_udp.identity_lookup_shape where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
+        .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version()).update();
     UUID after=null;long indexed=0;
     while(true){
       String sql="select urban_object_id,current_revision_id from ouf_udp.urban_object where tenant_id=:tenant and canonical_type=:type and status='ACTIVE' "
@@ -57,15 +60,16 @@ public class GovernedIdentityIndexBackfill {
     Map<String,Object> current;
     try{current=json.readValue(payload,new TypeReference<>(){});}
     catch(Exception failure){throw invalid("CURRENT_STATE_INVALID");}
-    if(!current.keySet().equals(signals.keySet()))throw invalid("FIELD_SHAPE_UNVERIFIED");
+    String shape=ScopedIdentityCandidateRepository.hash(String.join("\u0000",new TreeSet<>(current.keySet())));
     List<Map<String,Object>> properties=db.sql("select p.property_iri,p.value_json::text value_json,c.provenance_json #>> '{contractRefs,semanticPublicationSetRef}' publication_ref from ouf_udp.property_value p join ouf_udp.property_contribution c on c.contribution_id=p.contribution_id where p.revision_id=:revision")
         .param("revision",revision).query().listOfRows();
     Set<String> found=new HashSet<>();
     for(var row:properties){
       String property=(String)row.get("property_iri");
       var signal=signals.get(property);
-      if(signal==null||!found.add(property)
-          || !signal.semanticRef().equals(property+"@"+row.get("publication_ref")))
+      if(!found.add(property))throw invalid("PROPERTY_DUPLICATE");
+      if(signal==null)continue; // Its shape makes it a bounded uncertain candidate.
+      if(!signal.semanticRef().equals(property+"@"+row.get("publication_ref")))
         throw invalid("SEMANTIC_COVERAGE_UNVERIFIED");
       Object scalar;
       try{scalar=json.readValue((String)row.get("value_json"),Object.class);}
@@ -87,7 +91,11 @@ public class GovernedIdentityIndexBackfill {
           .param("semantic",signal.semanticRef()).param("comparator",signal.comparator().name())
           .param("hash",ScopedIdentityCandidateRepository.hash(normalized)).update();
     }
-    if(!found.equals(signals.keySet()))throw invalid("PROPERTY_COVERAGE_UNVERIFIED");
+    if(!found.equals(current.keySet()))throw invalid("PROPERTY_COVERAGE_UNVERIFIED");
+    db.sql("insert into ouf_udp.identity_lookup_shape(tenant_id,canonical_class,policy_ref,policy_version,urban_object_id,revision_id,field_set_hash) values(:tenant,:type,:policy,:version,:id,:revision,:shape)")
+        .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+        .param("policy",policy.ref()).param("version",policy.version())
+        .param("id",id).param("revision",revision).param("shape",shape).update();
   }
   private static IllegalStateException invalid(String reason){return new IllegalStateException("UDP_IDENTITY_BACKFILL_"+reason);}
   public record Result(String coverageRef,long indexedObjects){}
