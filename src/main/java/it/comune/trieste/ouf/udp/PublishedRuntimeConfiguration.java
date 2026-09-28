@@ -30,10 +30,19 @@ public class PublishedRuntimeConfiguration {
     var semantic=object(bundle,"semanticMapping");var source=object(semantic,"sourceType");
     if(!type.equals(source.get("typeCode"))||!envelope.get("sourceId").equals(source.get("sourceId")))throw invalid();
     var profile=object(object(object(bundle,"extractionProfile"),"runtime"),"udp");
-    UdpPorts.ResolutionProfile resolution=json.convertValue(object(profile,"resolution"),UdpPorts.ResolutionProfile.class);
+    var resolutionDefinition=object(profile,"resolution");
+    boolean governed=resolutionDefinition.containsKey("governedIdentity");
+    if(governed&&!Set.of("strategyId","strategyVersion","policyRef","governedIdentity")
+        .equals(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+    if(!governed&&!Set.of("strategyId","strategyVersion","policyRef","canonicalType","canonicalKeyProperty","matchProperty","weighted")
+        .containsAll(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
+    UdpPorts.ResolutionProfile resolution=governed?null:json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
     UdpPorts.MaterializationProfile materialization=json.convertValue(object(profile,"materialization"),UdpPorts.MaterializationProfile.class);
-    if(resolution.canonicalType()==null||resolution.policyRef()==null||materialization.properties().isEmpty())throw invalid();
-    if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&resolution.canonicalType().equals(target.get("classIri"))))throw invalid();
+    if(!governed&&java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
+        resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank())
+        ||materialization.properties().isEmpty())throw invalid();
+    String canonicalClass=governed?text(object(resolutionDefinition,"governedIdentity"),"canonicalClass"):resolution.canonicalType();
+    if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&canonicalClass.equals(target.get("classIri"))))throw invalid();
     var labels=new HashMap<String,String>();
     if(!(bundle.get("dataAccessPolicies") instanceof List<?> policies)||policies.isEmpty())throw invalid();
     for(Object p:policies){if(!(p instanceof Map<?,?> policy)||!Set.of("PROPERTY","RELATIONSHIP").contains(policy.get("scope")))throw invalid();labels.put(String.valueOf(policy.get("scope"))+":"+policy.get("target"),String.valueOf(policy.get("label")));}
@@ -41,6 +50,9 @@ public class PublishedRuntimeConfiguration {
     var targets=new HashSet<String>();for(Object m:mappings){if(!(m instanceof Map<?,?> mapping))throw invalid();targets.add(String.valueOf(mapping.get("targetPropertyIri")));}
     for(var property:materialization.properties())if(!targets.remove(property.propertyIri())||!property.sourceField().equals(property.propertyIri())||!property.accessLabel().equals(labels.get("PROPERTY:"+property.propertyIri())))throw invalid();
     if(!targets.isEmpty())throw invalid();
+    GovernedIdentityEngine.Policy identity=governed?PublishedIdentityPolicy.decode(json,resolutionDefinition,
+        tenant,text(source,"sourceId"),canonicalClass,Set.copyOf(materialization.properties().stream()
+            .map(UdpPorts.PropertyRule::propertyIri).toList())):null;
     UdpPorts.SpatialProfile spatial=null;
     if(profile.containsKey("spatial")){
       spatial=json.convertValue(object(profile,"spatial"),UdpPorts.SpatialProfile.class);
@@ -48,7 +60,7 @@ public class PublishedRuntimeConfiguration {
       // Spatial relationship policy binding is deferred to R2e; do not accept unbound edge labels.
       if(!spatial.relationships().isEmpty())throw invalid();
     }
-    if(resolution.weighted()!=null){
+    if(resolution!=null&&resolution.weighted()!=null){
       Set<String> mapped=materialization.properties().stream().map(UdpPorts.PropertyRule::propertyIri).collect(java.util.stream.Collectors.toSet());
       if(!mapped.containsAll(resolution.weighted().blockingProperties()))throw invalid();
       for(var signal:resolution.weighted().signals()){
@@ -75,7 +87,7 @@ public class PublishedRuntimeConfiguration {
         if(!bound)throw invalid();
       }
     }
-    return new Profiles(bundle,resolution,materialization,spatial,relationships);
+    return new Profiles(bundle,resolution,materialization,spatial,relationships,identity);
   }
   public HistoricalContractCatalog.Resolution resolveContracts(Map<String,Object> refs){
     String ref=text(refs,"bundleRef");
@@ -112,7 +124,11 @@ public class PublishedRuntimeConfiguration {
   static String text(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof String value)||value.isBlank())throw invalid();return value;}
   private static String escape(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_PINNED_PROFILE_INVALID");}
-  public record Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial,UdpPorts.RelationshipProfile relationships){public Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial){this(bundle,resolution,materialization,spatial,null);}}
+  public record Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial,UdpPorts.RelationshipProfile relationships,GovernedIdentityEngine.Policy identity){
+    public Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial){this(bundle,resolution,materialization,spatial,null,null);}
+    public Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial,UdpPorts.RelationshipProfile relationships){this(bundle,resolution,materialization,spatial,relationships,null);}
+    public String canonicalType(){return identity==null?resolution.canonicalType():identity.canonicalClass();}
+  }
   private static final class LimitedResponse implements HttpResponse.BodySubscriber<byte[]>{
     private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();private java.util.concurrent.Flow.Subscription subscription;
     public CompletionStage<byte[]> getBody(){return result;}public void onSubscribe(java.util.concurrent.Flow.Subscription s){subscription=s;s.request(1);}
