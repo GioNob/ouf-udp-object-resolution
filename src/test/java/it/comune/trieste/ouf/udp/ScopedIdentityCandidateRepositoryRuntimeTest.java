@@ -21,6 +21,9 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired ObjectResolutionService resolver;
   @Autowired CanonicalMaterializer materializer;
   @Autowired GovernedIdentityIndexBackfill backfill;
+  @Autowired GovernedIdentityResolutionService governed;
+  @Autowired ResolutionRepository jobs;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired JdbcClient db;
   @Autowired org.springframework.transaction.support.TransactionTemplate tx;
   @org.junit.jupiter.api.BeforeEach void clean(){
@@ -56,6 +59,27 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Long.class).single()).isEqualTo(2);
     assertThat(candidates.retrieve(policy,subject("Alpha")).complete()).isTrue();
+  }
+  @Test void publishedWorkerUsesGovernedDecisionAndKeepsCoverageComplete(){
+    clearObjects();
+    var policy=policy();
+    assertThat(backfill.rebuild(policy).indexedObjects()).isZero();
+    var configuration=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",
+        List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    org.mockito.Mockito.when(configuration.resolve("bundle://road/1","ROAD"))
+        .thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),null,mapping,null,null,policy));
+    var loop=new PublishedResolutionLoop(jobs,configuration,gate,resolver,materializer,null,db,
+        new org.springframework.transaction.support.TransactionTemplate(transactions),null,governed,backfill);
+    intake.accept(envelope("worker-governed","Alpha"));
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-worker-governed'")
+        .query(String.class).single()).isEqualTo("SUCCEEDED");
+    assertThat(candidates.retrieve(policy,subject("Alpha")).complete()).isTrue();
+    assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
+        .param("p",policy.ref()).query(Long.class).single()).isOne();
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     clearObjects();
