@@ -103,19 +103,18 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     }finally{worker.shutdownNow();}
   }
   @Test void atomicMatchAndNewObjectRetainSourceBindingAcrossRetries(){
+    Map<String,Object> fresh=envelope("fresh","Gamma");intake.accept(fresh);
+    var created=governed.resolve("candidate-fresh",fresh,authority,autoPolicy());
+    assertThat(created.outcome()).isEqualTo("NEW_OBJECT");
     UUID existing=materialize("one","Alpha");
+    assertThat(created.targetUrbanObjectId()).isNotEqualTo(existing);
+    assertThat(governed.resolve("candidate-fresh",fresh,authority,autoPolicy()).targetUrbanObjectId())
+        .isEqualTo(created.targetUrbanObjectId());
     Map<String,Object> match=envelope("match","Alpha");intake.accept(match);
     var matched=governed.resolve("candidate-match",match,authority,policy(2));
     assertThat(matched.outcome()).isEqualTo("MATCH");
     assertThat(matched.targetUrbanObjectId()).isEqualTo(existing);
     assertThat(governed.resolve("candidate-match",match,authority,policy(2)).duplicate()).isTrue();
-
-    Map<String,Object> fresh=envelope("fresh","Gamma");intake.accept(fresh);
-    var created=governed.resolve("candidate-fresh",fresh,authority,autoPolicy());
-    assertThat(created.outcome()).isEqualTo("NEW_OBJECT");
-    assertThat(created.targetUrbanObjectId()).isNotEqualTo(existing);
-    assertThat(governed.resolve("candidate-fresh",fresh,authority,autoPolicy()).targetUrbanObjectId())
-        .isEqualTo(created.targetUrbanObjectId());
     assertThat(db.sql("select count(*) from ouf_udp.urban_object where canonical_type='ouf:Road'")
         .query(Long.class).single()).isEqualTo(2);
     assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='fresh'")
@@ -136,8 +135,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .query(UUID.class).single()).isEqualTo(existing);
     var issue=db.sql("select reason_code,candidate_refs::text candidate_refs from ouf_udp.resolution_issue where handoff_id='candidate-conflict'")
         .query().singleRow();
-    assertThat(issue.get("reason_code")).isEqualTo("SOURCE_BINDING_CONFLICT");
-    assertThat(issue.get("candidate_refs")).isEqualTo("[]");
+    assertThat(issue.get("reason_code")).isEqualTo("UNRESOLVED_IDENTITY");
+    assertThat(issue.get("candidate_refs")).contains(existing.toString());
   }
   private void assertOtherConnectionCannotLock(ExecutorService worker){
     Future<Boolean> other=worker.submit(()->db.sql("select pg_try_advisory_xact_lock(hashtextextended(:key,0))")
