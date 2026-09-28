@@ -12,15 +12,16 @@ soltanto una fixture, non uno schema di identità di produzione.
 
 Non si presume che esista un identificatore stabile. Coordinate e indirizzo
 possono descrivere punti diversi dello stesso oggetto e costituiscono indizi.
-Una policy di una classe e una fonte dichiara la proiezione completa delle
-proprietà canoniche mappate, con versione semantica e comparatore per ciascuna.
-La sola regola sufficiente comprende **tutte** queste proprietà: una coincidenza
-parziale non è una corrispondenza automatica. Con quattro campi, tutti e quattro
-devono essere presenti, semanticamente compatibili e uguali ai corrispondenti
-campi di un oggetto attivo. Una sola corrispondenza completa identifica lo stesso
-oggetto; due corrispondenze complete richiedono revisione. Campi mancanti,
-versioni semantiche diverse o valori discordanti restano evidenza per l'umano;
-nessuna differenza esclude da sola un candidato.
+Una policy di una classe e una fonte dichiara i possibili campi canonici
+mappati, con versione semantica e comparatore per ciascuno. Ogni singolo
+oggetto può esporne un sottoinsieme diverso. Per decidere MATCH, tutti i
+campi dell'oggetto con meno proprietà devono esistere anche nell'altro e
+avere valori semanticamente compatibili e uguali. Questo vale in entrambe le
+direzioni: sia l'oggetto in ingresso sia quello già in UDP possono essere il
+più ricco. Se entrambi espongono campi propri che mancano nell'altro, o se un
+campo condiviso differisce, il caso resta incerto. L'insieme confrontato non
+può essere vuoto e un MATCH richiede un unico candidato che soddisfi la
+regola. Nessuna proprietà è assunta come identificatore stabile.
 
 Senza candidati nel perimetro completo e verificato si può creare un oggetto
 solo quando la policy della fonte abilita `allowAutoNew`. Con almeno un
@@ -54,7 +55,7 @@ modificabile e conferma atomica sono ancora da implementare.
 Il percorso governed è preparato ma non collegato a `PublishedResolutionLoop`:
 la gate di attivazione resta chiusa. Occorre attestare la completezza dei
 candidati anche su classi grandi, verificare il confronto di tutti i valori
-canonici (comprese proprietà multivalore e geometrie), versionare la policy,
+canonici esposti (comprese proprietà multivalore e geometrie), versionare la policy,
 validare la copertura nel preflight e definire la provenienza del tenant per
 *ogni* issue prima di esporre una lista multi-tenant. Il controllo attuale
 confronta i valori scalari mappati; non equivale ancora a un confronto completo
