@@ -15,11 +15,10 @@ public final class GovernedIdentityEngine {
                        boolean excludesOnDisagreement, boolean uniqueWithinScope,
                        String assertionRef) {
     public Signal {
-      if (blank(id) || blank(semanticRef) || comparator == null
-          || ((excludesOnDisagreement || uniqueWithinScope) && blank(assertionRef))) throw invalid();
+      if (blank(id) || blank(semanticRef) || comparator == null || blank(assertionRef)) throw invalid();
     }
   }
-  /** All named signals must agree. Uniqueness is asserted by governance, never inferred from frequency. */
+  /** The complete canonical comparison set must agree; no property is an identifier by itself. */
   public record SufficientRule(String id, Set<String> signalIds, String assertionRef) {
     public SufficientRule {
       if (blank(id) || signalIds == null || signalIds.isEmpty() || blank(assertionRef)) throw invalid();
@@ -32,17 +31,16 @@ public final class GovernedIdentityEngine {
     public Policy {
       if (blank(ref) || blank(version) || blank(tenantId) || blank(canonicalClass)
           || blank(sourceId) || maxCandidates < 1 || maxCandidates > 1000
-          || signals == null || signals.isEmpty() || sufficientRules == null) throw invalid();
+          || signals == null || signals.isEmpty() || sufficientRules == null || sufficientRules.size() != 1) throw invalid();
       signals = List.copyOf(signals);
       sufficientRules = List.copyOf(sufficientRules);
       Set<String> ids = new HashSet<>();
-      for (Signal signal : signals) if (!ids.add(signal.id())) throw invalid();
+      for (Signal signal : signals) {
+        if (!ids.add(signal.id()) || signal.uniqueWithinScope() || signal.excludesOnDisagreement()) throw invalid();
+      }
       Set<String> rules = new HashSet<>();
       for (SufficientRule rule : sufficientRules) {
-        if (!rules.add(rule.id()) || !ids.containsAll(rule.signalIds())) throw invalid();
-        // A sufficient rule needs at least one governed uniqueness assertion.
-        if (signals.stream().noneMatch(s -> rule.signalIds().contains(s.id()) && s.uniqueWithinScope()))
-          throw invalid();
+        if (!rules.add(rule.id()) || !ids.equals(rule.signalIds())) throw invalid();
       }
     }
   }
@@ -125,9 +123,7 @@ public final class GovernedIdentityEngine {
             || !signal.semanticRef().equals(right.semanticRef())) kind = EvidenceKind.MISSING;
         else if (normalize(signal.comparator(), left.raw()).equals(normalize(signal.comparator(), right.raw()))) {
           kind = EvidenceKind.AGREE; agreeing.add(signal.id());
-        } else {
-          kind = EvidenceKind.DISAGREE; excluded |= signal.excludesOnDisagreement();
-        }
+        } else kind = EvidenceKind.DISAGREE;
         evidence.add(new Evidence(signal.id(), kind, left == null ? null : left.provenanceRef(),
             right == null ? null : right.provenanceRef(), signal.comparator().name(), signal.assertionRef()));
       }
@@ -137,17 +133,14 @@ public final class GovernedIdentityEngine {
       assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), excluded));
     }
     assessments.sort(Comparator.comparing(Assessment::objectId));
-    List<Assessment> eligible = assessments.stream().filter(a -> !a.excluded()).toList();
-    if (assessments.stream().anyMatch(a -> a.excluded() && !a.satisfiedRules().isEmpty()))
-      return result(policy, Outcome.REVIEW_REQUIRED, null, "CONFLICTING_IDENTITY_EVIDENCE", assessments);
-    if (eligible.isEmpty()) {
+    if (assessments.isEmpty()) {
       if (policy.allowAutoNew()) return result(policy, Outcome.NEW_OBJECT, null, "SOURCE_SCOPED_CREATION", assessments);
       return result(policy, Outcome.REVIEW_REQUIRED, null, "CREATION_NOT_AUTHORIZED", assessments);
     }
-    // Without a published property-authority decision, any conflicting shared value needs HUMAN review.
-    if (eligible.size() == 1 && !eligible.get(0).satisfiedRules().isEmpty()
-        && eligible.get(0).evidence().stream().noneMatch(e -> e.kind() == EvidenceKind.DISAGREE))
-      return result(policy, Outcome.MATCH, eligible.get(0).objectId(), "SUFFICIENT_RULE", assessments);
+    // A complete record equality is decisive only when it identifies exactly one current object.
+    List<Assessment> exact = assessments.stream().filter(a -> !a.satisfiedRules().isEmpty()).toList();
+    if (exact.size() == 1)
+      return result(policy, Outcome.MATCH, exact.getFirst().objectId(), "COMPLETE_CANONICAL_EQUALITY", assessments);
     return result(policy, Outcome.REVIEW_REQUIRED, null, "UNRESOLVED_IDENTITY", assessments);
   }
 
