@@ -104,7 +104,9 @@ public class ScopedIdentityCandidateRepository {
       if(row.get("property_iri") instanceof String property){
         String publication=row.get("publication_ref") instanceof String ref && !ref.isBlank()?ref:"unverified";
         UUID contribution=(UUID)row.get("contribution_id");
-        String raw=scalar(row.get("value_json"));
+        var signal=signals.get(property);
+        String raw=signal!=null&&signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1
+            ?String.valueOf(row.get("value_json")):scalar(row.get("value_json"));
         boolean supported=raw!=null;
         var value=new GovernedIdentityEngine.Value(property+"@"+(supported?publication:"unsupported"),
             supported?raw:String.valueOf(row.get("value_json")),
