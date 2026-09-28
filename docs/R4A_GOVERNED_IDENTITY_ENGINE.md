@@ -22,8 +22,9 @@ più ricco. Se entrambi espongono campi propri che mancano nell'altro, o se un
 campo condiviso differisce, il caso resta incerto. L'insieme confrontato non
 può essere vuoto e un MATCH richiede un unico candidato che soddisfi la
 regola. Nessuna proprietà è assunta come identificatore stabile.
-Un candidato è invece certamente distinto se **tutti** i campi corrispondenti
-confrontabili sono diversi: non resta selezionabile come lo stesso oggetto.
+Un candidato è invece certamente distinto se i due oggetti espongono gli
+stessi campi e **tutti** i relativi valori confrontabili sono diversi: non
+resta selezionabile come lo stesso oggetto.
 Se tutti i candidati sono distinti, `allowAutoNew` può autorizzare la
 creazione. Campi senza corrispondenza, versioni semantiche incompatibili o
 valori non confrontabili non bastano per concludere che due oggetti siano
