@@ -176,7 +176,7 @@ public final class GovernedIdentityEngine {
   private static Decision result(Policy p, Outcome o, UUID target, String reason, List<Assessment> evidence) {
     return new Decision(o, target, reason, p.ref(), p.version(), List.copyOf(evidence));
   }
-  private static String normalize(ComparatorKind kind, String raw) {
+  static String normalize(ComparatorKind kind, String raw) {
     return switch (kind) {
       case CONCEPT -> raw; // Published concept ID, exact and case sensitive.
       case TEXT_V1 -> Normalizer.normalize(raw, Normalizer.Form.NFKC).strip()
