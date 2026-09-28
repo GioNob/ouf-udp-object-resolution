@@ -156,7 +156,9 @@ class GovernedIdentityEngineTest {
     assertThat(engine.decide(POLICY,nameOnly,rows(existing)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
     var explicitlyApproved=new Policy("p","1","tenant","Place","source",10,true,SIGNALS,
         List.of(new SufficientRule("name",Set.of("name"),"assertion://name-sufficient")));
-    assertThat(engine.decide(explicitlyApproved,nameOnly,rows(existing)).outcome()).isEqualTo(Outcome.MATCH);
+    var approvedRows=new Candidates(explicitlyApproved.ref(),explicitlyApproved.version(),"tenant",
+        "Place","index://snapshot",true,List.of(existing));
+    assertThat(engine.decide(explicitlyApproved,nameOnly,approvedRows).outcome()).isEqualTo(Outcome.MATCH);
     assertThatThrownBy(()->new Policy("p","1","tenant","Place","source",10,true,SIGNALS,
         List.of(new SufficientRule("other",Set.of("not-mapped"),"assertion://invalid"))))
         .hasMessage("UDP_IDENTITY_POLICY_INVALID");
