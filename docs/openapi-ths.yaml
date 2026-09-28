@@ -87,3 +87,16 @@ paths:
       x-ouf-mcp-eligible: false
       x-ouf-trusted-human-only: true
       responses: {'200': {description: Human decision recorded}}
+  /api/udp/v1/governance/resolution/issues/package:
+    get:
+      operationId: readResolutionReviewPackage
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Complete tenant-scoped OPEN issue snapshot with evidence, candidate references and version hash; read only}}
+  /api/udp/v1/governance/resolution/issues/package/confirm:
+    post:
+      operationId: confirmResolutionReviewPackage
+      x-ouf-capability: resolution.match.approve
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Atomic human confirmation of the entire unchanged issue snapshot}}
