@@ -24,6 +24,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired GovernedIdentityPreflight preflight;
   @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   @Autowired GovernedIdentityResolutionService governed;
+  @Autowired IdentityGovernanceService governance;
   @Autowired ResolutionRepository jobs;
   @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired JdbcClient db;
@@ -82,6 +83,49 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(candidates.retrieve(policy,subject("Alpha")).complete()).isTrue();
     assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Long.class).single()).isOne();
+  }
+  @Test void humanApprovedReviewResumesAndMaterializesTheObservation(){
+    clearObjects();
+    UUID existing=materializeWithAddress("review-target","Alpha","Via Roma");
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/review-resume","1","default",
+        "ouf:Road","registry",5,true,List.of(
+        new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1"),
+        new GovernedIdentityEngine.Signal("ouf:address","ouf:address@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://address/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("both",Set.of("ouf:name","ouf:address"),
+            "assertion://both/1")));
+    backfill.rebuild(policy);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(
+        new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry")),
+        new UdpPorts.PropertyRule("address","ouf:address","string","OPEN",List.of("registry"))));
+    Map<String,Object> incoming=envelope("reviewed","Alpha");
+    intake.accept(incoming);
+    assertThat(governed.resolve("candidate-reviewed",incoming,mapping,policy).outcome())
+        .isEqualTo("REVIEW_REQUIRED");
+    var configuration=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    org.mockito.Mockito.when(configuration.resolve("bundle://road/1","ROAD"))
+        .thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),null,mapping,null,null,policy));
+    var loop=new PublishedResolutionLoop(jobs,configuration,gate,resolver,materializer,null,db,
+        new org.springframework.transaction.support.TransactionTemplate(transactions),null,governed,backfill);
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-reviewed'")
+        .query(String.class).single()).isEqualTo("QUARANTINED");
+    UUID issue=db.sql("select issue_id from ouf_udp.resolution_issue where handoff_id='candidate-reviewed'")
+        .query(UUID.class).single();
+    var human=new TrustedHumanContext("HUMAN_USER","reviewer","default",
+        Set.of("resolution.match.approve"),"authz://review","corr-review");
+    governance.decideResolutionIssue(issue,0,"APPROVE","checked canonical object",existing,human);
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-reviewed'")
+        .query(String.class).single()).isEqualTo("SUCCEEDED");
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id='candidate-reviewed'")
+        .query(Long.class).single()).isOne();
+    assertThat(candidates.retrieve(policy,new GovernedIdentityEngine.Subject("default","ouf:Road",
+        "registry",Map.of("ouf:name",new GovernedIdentityEngine.Value(policy.signals().getFirst().semanticRef(),
+            "Alpha","handoff://reviewed")))).complete()).isTrue();
   }
   @Test void structuredCanonicalValuesAreIndexedAndComparedAcrossJsonKeyOrder(){
     clearObjects();
