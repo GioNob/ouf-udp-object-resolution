@@ -21,6 +21,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired ObjectResolutionService resolver;
   @Autowired CanonicalMaterializer materializer;
   @Autowired GovernedIdentityIndexBackfill backfill;
+  @Autowired GovernedIdentityPreflight preflight;
+  @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   @Autowired GovernedIdentityResolutionService governed;
   @Autowired ResolutionRepository jobs;
   @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
@@ -105,6 +107,44 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(object);
     assertThat(new GovernedIdentityEngine().decide(policy,incoming,retrieved).outcome())
         .isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+  }
+  @Test void frozenConfigurationPreflightAttestsOnlyCurrentCompleteCoverage()throws Exception{
+    clearObjects();
+    materialize("preflight","Alpha");
+    var policy=policy();
+    var signal=policy.signals().getFirst();
+    Map<String,Object> rawPolicy=Map.of("ref",policy.ref(),"version",policy.version(),
+        "tenantId",policy.tenantId(),"canonicalClass",policy.canonicalClass(),
+        "sourceId",policy.sourceId(),"maxCandidates",policy.maxCandidates(),
+        "allowAutoNew",policy.allowAutoNew(),"signals",List.of(Map.of("id",signal.id(),
+            "semanticRef",signal.semanticRef(),"comparator",signal.comparator().name(),
+            "excludesOnDisagreement",false,"uniqueWithinScope",false,
+            "assertionRef",signal.assertionRef())),"sufficientRules",List.of(Map.of(
+                "id","name","signalIds",List.of("ouf:name"),"assertionRef","assertion://rule/1")));
+    Map<String,Object> configuration=Map.of("semanticMapping",Map.of(
+            "sourceType",Map.of("sourceId","registry","typeCode","ROAD"),
+            "targetClasses",List.of(Map.of("classIri","ouf:Road")),
+            "propertyMappings",List.of(Map.of("targetPropertyIri","ouf:name"))),
+        "extractionProfile",Map.of("runtime",Map.of("udp",Map.of(
+            "resolution",Map.of("strategyId","GOVERNED_IDENTITY","strategyVersion","1",
+                "policyRef",policy.ref(),"governedIdentity",rawPolicy),
+            "materialization",Map.of("policyRef","policy://authority/1","checkpointInterval",1,
+                "bitemporalProperties",List.of(),"properties",List.of(Map.of(
+                "sourceField","ouf:name","propertyIri","ouf:name","datatype","string",
+                "accessLabel","OPEN","authorityOrder",List.of("registry"))))))));
+    String hash="sha256:"+java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+        .digest(json.copy().configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true)
+            .writeValueAsBytes(configuration)));
+    var admin=new TrustedHumanContext("HUMAN_USER","ouf-admin","default",
+        Set.of("authorization.policy.admin"),"authz://preflight","corr-preflight");
+    assertThatThrownBy(()->preflight.prepare("registry","sha256:wrong",configuration,admin))
+        .hasMessage("UDP_IDENTITY_PREFLIGHT_CONFIGURATION_HASH");
+    var attestation=preflight.prepare("registry",hash,configuration,admin);
+    assertThat(attestation.valid()).isTrue();
+    assertThat(attestation.indexedObjects()).isOne();
+    db.sql("update ouf_udp.urban_object_current_state set updated_at=transaction_timestamp()")
+        .update();
+    assertThat(preflight.status(attestation.attestationId(),admin).valid()).isFalse();
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     clearObjects();
