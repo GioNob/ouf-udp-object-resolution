@@ -40,7 +40,7 @@ public class ScopedIdentityCandidateRepository {
           select coverage_ref from ouf_udp.identity_lookup_coverage
           where tenant_id=:tenant and canonical_class=:canonicalClass
             and policy_ref=:policy and policy_version=:version
-            and field_set_hash=:shape and complete
+            and (field_set_hash=:shape or indexed_objects=0) and complete
         ), seeds as (
           select * from jsonb_to_recordset(cast(:seeds as jsonb))
             as s(property_iri text,semantic_ref text,comparator text,value_hash text)
