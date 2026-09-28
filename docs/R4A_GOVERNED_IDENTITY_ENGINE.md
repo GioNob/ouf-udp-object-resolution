@@ -84,18 +84,20 @@ proiezione corrente, dei valori correnti o dei token invalidano
 automaticamente l'attestazione. `V26` serializza l'invalidazione con il lock
 di ambito anche per le scritture su oggetti, token e forme. La materializzazione acquisisce il lock del
 perimetro prima di modificare la proiezione. La precedente scansione della
-classe è stata rimossa. **Nessun processo di produzione pubblica ancora
-attestazioni complete**: senza un'attestazione il motore produce soltanto
+classe è stata rimossa. Senza un'attestazione il motore produce soltanto
 `REVIEW_REQUIRED`. `GovernedIdentityIndexBackfill.rebuild` offre una scansione
 **una tantum** in preattivazione sotto il lock degli scrittori: ricostruisce
 token e forme e attesta soltanto oggetti con proprietà correnti complete e
 valori confrontabili, inclusi JSON strutturati con `JSON_V1`, per i campi dichiarati nella policy. Un oggetto
 senza revisione, una proprietà non rappresentata nella revisione o un valore
-non confrontabile per una proprietà dichiarata fa fallire la transazione. Il test invoca il
-backfill come fixture; nessun flusso di produzione lo invoca ancora.
+non confrontabile per una proprietà dichiarata fa fallire la transazione. Il
+preflight HUMAN `POST /api/udp/v1/governance/identity/preflight` lo invoca
+esplicitamente per una configurazione congelata con hash verificato. L'attestazione
+persiste tenant, fonte, policy, fingerprint e coverage ref; il GET interno
+autorizzato per Onboarding la considera valida solo finché la copertura resta completa.
 
-Restano da collegare il backfill al preflight governato e da validare le
-policy pubblicate. `refreshOne` mantiene atomicamente token e forme di un
+Il preflight deve ancora essere eseguito con una policy concreta approvata
+nel lab. `refreshOne` mantiene atomicamente token e forme di un
 oggetto materializzato dopo una ricerca completa nella stessa transazione;
 il worker lo invoca nel percorso governed dopo la materializzazione. Merge/split, rimozioni e altre mutazioni
 fuori da quel percorso richiedono riconciliazione. Una mutazione non coperta
@@ -149,8 +151,10 @@ e minimizzata della tabella. Per i casi senza candidato,
 `DISMISS` è una decisione esplicita ma non sostituisce un futuro comando
 governato di creazione manuale: questo resta un gate funzionale.
 
-Il percorso governed è collegato a `PublishedResolutionLoop`, ma la gate di
-attivazione Onboarding resta chiusa. Occorre attestare la completezza dei
+Il percorso governed è collegato a `PublishedResolutionLoop`; Onboarding
+interroga la copertura attuale attraverso Gateway prima di attivarlo. Senza
+route, credenziale SERVICE e attestazione completa la gate resta chiusa.
+Occorre attestare la completezza dei
 candidati anche su classi grandi, verificare il confronto di tutti i valori
 canonici esposti (comprese proprietà multivalore e geometrie), versionare la policy,
 validare la copertura nel preflight e riconciliare le issue storiche che
