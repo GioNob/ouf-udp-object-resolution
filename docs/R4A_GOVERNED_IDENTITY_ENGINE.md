@@ -144,6 +144,18 @@ le conferme sono registrate append-only. Nuove issue arrivate **dopo** la
 lettura sotto lock appartengono al successivo pacchetto; non esiste un lock
 globale sulle ingestion del tenant.
 
+Il deployment UDP governa le richieste HUMAN e SERVICE tramite bearer IAM
+validato localmente (issuer, audience, scadenza, tenant, actor type, subject,
+scope e service principal). La bridge lega il `TrustedPrincipal` al request
+server-side consumato dall'Authorization SDK; header di identità forniti dal
+client non diventano principal. Nel profilo lab impostare
+`OUF_UDP_IAM_ENABLED=true`, `OUF_UDP_IAM_ISSUER` all'issuer IAM effettivo e
+`OUF_UDP_IAM_AUDIENCE` all'audience Gateway. Senza questi valori il nuovo
+container non è pronto per preflight/attestazione; l'immagine staged precedente
+al filtro IAM non è distribuibile per lo smoke autenticato. Verificare 401
+senza bearer e il percorso positivo con token HUMAN/SERVICE distinti prima
+dell'attivazione di una fonte.
+
 La THS Onboarding prepara una pagina trusted condizionata alla configurazione
 del Gateway; il percorso browser→Gateway→UDP e i claim IAM richiedono ancora
 collaudo reale. Il chatbot/MCP espone una proiezione autorizzata e minimizzata
