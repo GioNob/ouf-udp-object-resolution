@@ -28,7 +28,7 @@ class GovernedIdentityEngineTest {
         "{\"a\":null,\"b\":[2.0,{\"a\":1.0,\"z\":true}]}","object://1")));
     assertThat(engine.decide(policy,subject,rows(candidate)).objectId()).isEqualTo(id);
     assertThat(engine.decide(policy,subject,rows(new Candidate(UUID.randomUUID(),"tenant","Place",
-        Map.of("details",new Value(signal.semanticRef(),"{\"a\":false}","object://2")))).outcome())
+        Map.of("details",new Value(signal.semanticRef(),"{\"a\":false}","object://2"))))).outcome())
         .isEqualTo(Outcome.NEW_OBJECT);
   }
 
