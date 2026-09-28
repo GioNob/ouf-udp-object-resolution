@@ -22,6 +22,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired CanonicalMaterializer materializer;
   @Autowired GovernedIdentityIndexBackfill backfill;
   @Autowired JdbcClient db;
+  @Autowired org.springframework.transaction.support.TransactionTemplate tx;
   @org.junit.jupiter.api.BeforeEach void clean(){
     db.sql("truncate table ouf_udp.identity_lookup_token,ouf_udp.identity_lookup_shape,ouf_udp.identity_lookup_shape_catalog,ouf_udp.identity_lookup_coverage").update();
   }
@@ -37,6 +38,24 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .isEqualTo(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED);
     assertThat(new GovernedIdentityEngine().decide(policy,subject,result).reason())
         .isEqualTo("CANDIDATE_COVERAGE_UNVERIFIED");
+  }
+  @Test void incrementalRefreshRecertifiesOnlyOneMaterializedObjectInTheSameTransaction(){
+    clearObjects();
+    materialize("existing","Alpha");
+    var policy=policy();
+    assertThat(backfill.rebuild(policy).indexedObjects()).isEqualTo(1);
+    tx.executeWithoutResult(status->{
+      var before=candidates.retrieve(policy,subject("Beta"));
+      assertThat(before.complete()).isTrue();
+      UUID added=materialize("added","Beta");
+      assertThat(candidates.retrieve(policy,subject("Beta")).complete()).isFalse();
+      backfill.refreshOne(policy,added,before.coverageRef());
+      assertThat(candidates.retrieve(policy,subject("Beta")).rows())
+          .extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(added);
+    });
+    assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
+        .param("p",policy.ref()).query(Long.class).single()).isEqualTo(2);
+    assertThat(candidates.retrieve(policy,subject("Alpha")).complete()).isTrue();
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     clearObjects();
