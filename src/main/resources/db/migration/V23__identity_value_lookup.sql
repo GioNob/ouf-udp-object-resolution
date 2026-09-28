@@ -32,6 +32,21 @@ create index identity_lookup_seed_idx on ouf_udp.identity_lookup_token
   (tenant_id,canonical_class,policy_ref,policy_version,
    property_iri,semantic_ref,comparator,value_hash,urban_object_id);
 
+-- Objects of a different field shape remain possible uncertain candidates
+-- even when none of their values equals a search seed.
+create table ouf_udp.identity_lookup_shape(
+  tenant_id text not null,
+  canonical_class text not null,
+  policy_ref text not null,
+  policy_version text not null,
+  urban_object_id uuid not null references ouf_udp.urban_object on delete restrict,
+  revision_id uuid not null references ouf_udp.object_revision on delete restrict,
+  field_set_hash text not null,
+  primary key(policy_ref,policy_version,urban_object_id)
+);
+create index identity_lookup_shape_idx on ouf_udp.identity_lookup_shape
+  (tenant_id,canonical_class,policy_ref,policy_version,field_set_hash,urban_object_id);
+
 -- Legacy resolution, governed resolution, materialization and merge/split all
 -- touch urban_object. No caller can retain a stale complete coverage marker.
 create function ouf_udp.invalidate_identity_lookup_coverage() returns trigger language plpgsql as $$
@@ -66,6 +81,9 @@ begin
 end$$;
 create trigger identity_lookup_token_change after insert or update or delete
   on ouf_udp.identity_lookup_token for each row
+  execute function ouf_udp.invalidate_identity_lookup_token_coverage();
+create trigger identity_lookup_shape_change after insert or update or delete
+  on ouf_udp.identity_lookup_shape for each row
   execute function ouf_udp.invalidate_identity_lookup_token_coverage();
 
 -- A current revision can still receive an append-only property_value row.
