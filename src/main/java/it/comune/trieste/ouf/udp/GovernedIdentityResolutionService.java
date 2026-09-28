@@ -58,6 +58,13 @@ public class GovernedIdentityResolutionService {
     // An ACTIVE source binding is continuity evidence in its own right. A changed
     // observation may change properties without changing the canonical identity.
     if(healthy){
+      var coverage=candidates.retrieve(policy,subject);
+      if(!coverage.complete()){
+        var unavailable=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,
+            null,"CANDIDATE_COVERAGE_UNVERIFIED",policy.ref(),policy.version(),List.of());
+        reviews.record(handoffId,unavailable,coverage,false);
+        return new Result("REVIEW_REQUIRED",null,false);
+      }
       String bindingRef="source-binding://"+policy.sourceId()+"/"+type+"/"+sourceObject;
       Map<String,Object> evidence=new LinkedHashMap<>();
       evidence.put("bindingRef",bindingRef);
@@ -68,7 +75,7 @@ public class GovernedIdentityResolutionService {
       db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,target_urban_object_id,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref) values(gen_random_uuid(),:h,:c,'MATCH',:u,'GOVERNED_IDENTITY',:v,cast(:e as jsonb),'SERVICE_IDENTITY',:p)")
           .param("h",handoffId).param("c",bindingRef).param("u",bound)
           .param("v",policy.version()).param("e",write(List.of(evidence))).param("p",policy.ref()).update();
-      return new Result("MATCH",bound,false);
+      return new Result("MATCH",bound,false,coverage.coverageRef());
     }
     if(!binding.isEmpty()){
       var conflict=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,
@@ -114,10 +121,12 @@ public class GovernedIdentityResolutionService {
           .param("h",handoffId).update();
       if(inserted!=1)throw new IllegalStateException("UDP_IDENTITY_BINDING_RACE");
     }
-    return new Result(decision.outcome().name(),target,false);
+    return new Result(decision.outcome().name(),target,false,retrieved.coverageRef());
   }
   private String write(Object value){try{return json.writeValueAsString(value);}
     catch(JsonProcessingException failure){throw new IllegalStateException("UDP_IDENTITY_EVIDENCE_INVALID",failure);}}
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_IDENTITY_HANDOFF_MISMATCH");}
-  public record Result(String outcome,UUID targetUrbanObjectId,boolean duplicate){}
+  public record Result(String outcome,UUID targetUrbanObjectId,boolean duplicate,String coverageRef){
+    public Result(String outcome,UUID targetUrbanObjectId,boolean duplicate){this(outcome,targetUrbanObjectId,duplicate,null);}
+  }
 }
