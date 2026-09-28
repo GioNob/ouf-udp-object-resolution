@@ -14,8 +14,10 @@ public class TrustedHumanApi {
   private static final List<String> FORBIDDEN_HEADERS=List.of("X-Actor-Type","X-Actor-Subject","X-Tenant-Id","X-Capabilities","X-Authorization-Decision-Ref");
   private final IdentityGovernanceService service;
   private final ResolutionReviewPackageService packages;
-  public TrustedHumanApi(IdentityGovernanceService service,ResolutionReviewPackageService packages){
-    this.service=service;this.packages=packages;
+  private final GovernedIdentityPreflight preflight;
+  public TrustedHumanApi(IdentityGovernanceService service,ResolutionReviewPackageService packages,
+      GovernedIdentityPreflight preflight){
+    this.service=service;this.packages=packages;this.preflight=preflight;
   }
 
   @PostMapping("/merge/plans") IdentityGovernanceService.Plan planMerge(@RequestBody MergePlanRequest body,HttpServletRequest request){return service.planMerge(body.survivorObjectId(),body.mergedObjectId(),trusted(request));}
@@ -37,6 +39,12 @@ public class TrustedHumanApi {
   @PostMapping("/resolution/issues/package/confirm") ResolutionReviewPackageService.Confirmation confirmReviewPackage(@RequestBody PackageConfirmationRequest body,HttpServletRequest request){return packages.confirm(body.snapshotHash(),body.choices(),trusted(request));}
   @GetMapping("/objects/{id}/identity") Map<String,Object> identity(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("urban.object.read");return service.resolveIdentity(id);}
   @GetMapping("/plans/{id}") IdentityGovernanceService.Plan plan(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("resolution.issue.read");return service.getPlan(id);}
+  @PostMapping("/identity/preflight") GovernedIdentityPreflight.Attestation prepareIdentity(
+      @RequestBody IdentityPreflightRequest body,HttpServletRequest request){
+    return preflight.prepare(body.sourceId(),body.configurationHash(),body.configuration(),trusted(request));
+  }
+  @GetMapping("/identity/preflight/{id}") GovernedIdentityPreflight.Attestation identityPreflight(
+      @PathVariable UUID id,HttpServletRequest request){return preflight.status(id,trusted(request));}
 
   static TrustedHumanContext trusted(HttpServletRequest request){
     for(String h:FORBIDDEN_HEADERS)if(request.getHeader(h)!=null)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"UDP_UNTRUSTED_ACTOR_HEADER");
@@ -50,4 +58,6 @@ public class TrustedHumanApi {
   public record ExecuteRequest(long expectedVersion,String reason){}
   public record IssueDecisionRequest(long expectedVersion,String action,String reason,UUID targetUrbanObjectId){}
   public record PackageConfirmationRequest(String snapshotHash,List<ResolutionReviewPackageService.Choice> choices){}
+  public record IdentityPreflightRequest(String sourceId,String configurationHash,
+      Map<String,Object> configuration){}
 }
