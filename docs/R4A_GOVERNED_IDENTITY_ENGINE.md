@@ -8,8 +8,13 @@ source activation or R-SMOKE claim follows from this branch.
 The published resolver now accepts only the six explicit legacy fields
 (`strategyId`, `strategyVersion`, `policyRef`, `canonicalType`,
 `canonicalKeyProperty`, `matchProperty`) and requires nonblank values.
-`weighted`, `governedIdentity`, any other extension, or an incomplete legacy
-profile cannot be interpreted as an executable single-property strategy.
+`weighted`, `governedIdentity`, any other unrecognized field in the published
+resolution configuration, or an incomplete legacy profile cannot be
+interpreted as an executable single-property strategy. This concerns the
+configuration bundle resolved from Onboarding, not the source file or the
+Ingestion-to-UDP handoff. UDP receives per-record handoffs from Ingestion with
+`sourceIdentity`, `canonicalPayload`, lineage and contract references; UDP
+decides the canonical Urban Object identity and materializes its revision.
 This compatibility check preserves the existing runtime gate while the new
 policy contract and indexed retrieval are developed.
 
