@@ -121,16 +121,29 @@ cambiano proprietà; authority e conflitti dei valori si valutano separatamente.
 ## Revisione umana e attivazione
 
 L'adapter persiste decisione, prove, candidati, versione e copertura in
-`resolution_issue`. Il chatbot deve poter mostrare **tutti** i casi aperti
-accessibili al tenant in una tabella con indizi, candidati e soluzione proposta.
-L'utente può modificare le scelte; THS presenta l'intero pacchetto congelato
-con versioni degli issue e impronta. Solo l'umano autenticato può approvare
-l'intero pacchetto, in una transazione: se un caso, il set dei casi aperti o
-una prova è cambiata, la conferma fallisce e si prepara un nuovo pacchetto.
-Un caso senza proposta utilizzabile resta nel pacchetto e richiede una scelta
-esplicita; la revisione non deve trasformare un'ipotesi in una decisione
-silenziosa. L'endpoint attuale decide un issue alla volta: lista, proposta
-modificabile e conferma atomica sono ancora da implementare.
+`resolution_issue`. La migrazione `V25` attribuisce il tenant ai nuovi casi;
+per i casi storici lo ricava solo quando **tutti** i candidati appartengono
+allo stesso tenant. Un caso storico ancora senza tenant blocca l'intero
+pacchetto, senza esporre dati di un altro tenant: richiede un backfill
+governato prima dell'uso della nuova API.
+
+`GET /api/udp/v1/governance/resolution/issues/package` prepara l'elenco
+integrale dei casi aperti del tenant con versioni, evidenze, candidati e
+un suggerimento quando vi è un solo candidato selezionabile. Il chatbot può
+mostrare la tabella e l'utente può modificare le scelte. La conferma HUMAN
+via `POST /api/udp/v1/governance/resolution/issues/package/confirm` esige
+l'impronta dello snapshot e una decisione esplicita per ogni issue, ricontrolla
+l'insieme e le versioni sotto lock e committa tutte le decisioni nella stessa
+transazione. Una scelta errata o una prova mutata annulla l'intero pacchetto;
+le conferme sono registrate append-only. Nuove issue arrivate **dopo** la
+lettura sotto lock appartengono al successivo pacchetto; non esiste un lock
+globale sulle ingestion del tenant.
+
+La THS deve ancora rendere il card model e il bottone di conferma trusted
+attraverso Gateway; il chatbot/MCP deve ancora esporre una proiezione
+autorizzata e minimizzata della tabella. Per i casi senza candidato,
+`DISMISS` è una decisione esplicita ma non sostituisce un futuro comando
+governato di creazione manuale: questo resta un gate funzionale.
 
 Il percorso governed è preparato ma non collegato a `PublishedResolutionLoop`:
 la gate di attivazione resta chiusa. Occorre attestare la completezza dei
