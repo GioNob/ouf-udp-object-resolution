@@ -14,7 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 @SpringBootTest
 class IdentityGovernanceRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
-  @Autowired IdentityGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired ResolutionRepository jobs;@Autowired GovernedIdentityReviewRepository governedReviews;@Autowired JdbcClient db;
+  @Autowired IdentityGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired ResolutionRepository jobs;@Autowired GovernedIdentityReviewRepository governedReviews;@Autowired GovernedIdentityResolutionService governed;@Autowired JdbcClient db;
   private final TrustedHumanContext human=new TrustedHumanContext("HUMAN_USER","operator-1","tenant-1",Set.of("urban.merge.plan","urban.object.merge","urban.split.plan","urban.object.split","resolution.match.approve"),"authz://decision/1","corr-1");
 
   @BeforeEach void clean(){db.sql("truncate table ouf_udp.merge_resolution_issue,ouf_udp.merge_property_contribution_link,ouf_udp.human_resolution_decision,ouf_udp.split_resolution_issue,ouf_udp.relationship_identity_history,ouf_udp.source_binding_history,ouf_udp.object_identity_history,ouf_udp.governance_audit,ouf_udp.governance_plan,ouf_udp.spatial_resolution_issue,ouf_udp.urban_geometry_current,ouf_udp.urban_geometry,ouf_udp.relationship_issue,ouf_udp.relationship_revision,ouf_udp.relationship_contribution,ouf_udp.urban_relationship,ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
@@ -48,6 +48,18 @@ class IdentityGovernanceRuntimeTest {
     governance.decideResolutionIssue(issue,0,"APPROVE","checked current object",selected,human);
     assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'")
         .query(UUID.class).single()).isEqualTo(selected);
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","roads",2,false,
+        List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,true,"assertion://name/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("name",Set.of("ouf:name"),"assertion://rule/1")));
+    var mapping=new UdpPorts.MaterializationProfile("authority://1",List.of(
+        new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    var resumed=governed.resolve("governed-review",handoff("governed-review","incoming","same"),mapping,policy);
+    assertThat(resumed.outcome()).isEqualTo("MATCH");
+    assertThat(resumed.targetUrbanObjectId()).isEqualTo(selected);
+    assertThat(resumed.duplicate()).isTrue();
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_decision where handoff_id='governed-review'")
+        .query(Long.class).single()).isOne();
   }
 
   @Test void ambiguousHandoffWaitsForHumanThenResumesWithoutChangingDurableAck(){
