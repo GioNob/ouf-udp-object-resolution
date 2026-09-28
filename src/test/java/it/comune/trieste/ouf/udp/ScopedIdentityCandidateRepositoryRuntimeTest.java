@@ -47,6 +47,12 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
     db.sql("update ouf_udp.identity_lookup_coverage set field_set_hash=:shape where policy_ref='policy://identity/1'")
         .param("shape",ScopedIdentityCandidateRepository.hash("ouf:name")).update();
+    var changedComparator=new GovernedIdentityEngine.Policy(policy().ref(),policy().version(),
+        policy().tenantId(),policy().canonicalClass(),policy().sourceId(),1,true,
+        List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.CONCEPT,false,false,"assertion://name/1")),
+        policy().sufficientRules());
+    assertThat(candidates.retrieve(changedComparator,subject("ALPHA")).complete()).isFalse();
     var result=candidates.retrieve(policy(),subject("ALPHA"));
     assertThat(result.complete()).isTrue();
     assertThat(result.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(matching);
