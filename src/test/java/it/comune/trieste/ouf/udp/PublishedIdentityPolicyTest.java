@@ -19,6 +19,8 @@ class PublishedIdentityPolicyTest {
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
     assertThatThrownBy(() -> PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",Set.of("urn:other")))
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+    assertThatThrownBy(() -> PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",Set.of("urn:key","urn:address")))
+        .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
     resolution.put("matchProperty","urn:key");
     assertThatThrownBy(() -> PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",Set.of("urn:key")))
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
