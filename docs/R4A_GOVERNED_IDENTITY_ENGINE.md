@@ -5,6 +5,18 @@ not yet wired to `PublishedResolutionLoop`, `PublishedRuntimeConfiguration`, or
 the database. The current `weighted` fail-closed gate remains in force. No
 source activation or R-SMOKE claim follows from this branch.
 
+`PublishedIdentityPolicy.decode` now reads the proposed `governedIdentity`
+shape under `resolution` strictly and constructs the same policy record used
+by the decision core. It checks exact fields, tenant/source/class scope,
+mapped signal IDs, pinned semantic reference syntax and required assertion
+references. It is not invoked by the active publication resolver. A syntactic
+assertion reference does not verify that the approved publication grants the
+claimed uniqueness, exclusion or sufficient rule; that verification is still
+a prerequisite for activation.
+The identical `identity-governed-proposal-v1.json` fixture is exercised by
+Onboarding proposal validation and this UDP decoder; it is a contract example,
+not a deployed policy or a proof of semantic authority.
+
 The published resolver now accepts only the six explicit legacy fields
 (`strategyId`, `strategyVersion`, `policyRef`, `canonicalType`,
 `canonicalKeyProperty`, `matchProperty`) and requires nonblank values.
