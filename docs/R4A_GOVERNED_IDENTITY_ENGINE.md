@@ -54,7 +54,8 @@ archi senza un indice dei valori non rende questa ricerca selettiva.
 
 Una corrispondenza completa su uno dei due insiemi di campi implica almeno
 un valore comune, quindi quel candidato appartiene necessariamente all'unione.
-Se non si trovano ID e la copertura è attestata, gli oggetti confrontabili
+Se non si trovano ID e la copertura è attestata **anche per lo stesso insieme
+di campi esposti da tutti gli oggetti nel perimetro**, gli oggetti confrontabili
 sono distinti per la regola corrente. I valori mancanti, non confrontabili,
 con versione semantica diversa o non indicizzati richiedono una verifica di
 copertura e, se possono incidere sull'identità, revisione umana. Quando
@@ -63,22 +64,31 @@ si apre un caso troppo ampio. Il costo della ricerca ordinaria dipende dalle
 ricerche indicizzate e dai candidati trovati, non da `m × n` oggetti.
 
 La migrazione `V23` prepara l'indice inverso e una tabella di attestazione per
-tenant, classe e versione della policy. La lettura usa una sola snapshot SQL:
+tenant, classe, versione della policy e impronta dell'insieme dei campi. La
+lettura usa una sola snapshot SQL:
 seleziona l'unione dei valori indicizzati, applica il limite e carica le
 proprietà complete solo per quegli ID. Le mutazioni di `urban_object`
 invalidano automaticamente l'attestazione. La precedente scansione della
 classe è stata rimossa. **Nessun processo di produzione pubblica ancora
 attestazioni complete**: senza un'attestazione il motore produce soltanto
-`REVIEW_REQUIRED`. Il test che inserisce token e attestazione lo fa come
-fixture esplicita, non abilita il percorso pubblicato.
+`REVIEW_REQUIRED`. `GovernedIdentityIndexBackfill.rebuild` offre una scansione
+**una tantum** in preattivazione sotto il lock degli scrittori: ricostruisce i
+token e attesta soltanto classi omogenee con tutti i valori scalari e con
+semantica compatibile. Un oggetto senza revisione, un campo mancante o un
+valore non confrontabile fa fallire l'intera transazione. Il test invoca il
+backfill come fixture; nessun flusso di produzione lo invoca ancora.
 
-Restano da implementare il backfill degli oggetti preesistenti e la verifica
-che ogni oggetto attivo abbia tutti i campi pertinenti confrontabili per ogni
-possibile sottoinsieme in ingresso. Occorre anche mantenere i token
+Restano da collegare il backfill al preflight governato e da validare le
+policy pubblicate. Occorre anche mantenere i token
 atomicamente con le revisioni correnti, con i nuovi oggetti non ancora
 materializzati, con merge/split e con le rimozioni. Una mutazione non coperta
 deve lasciare la classe non attestata. Solo allora la verifica di copertura
 può essere pubblicata senza ripetere una scansione completa a ogni handoff.
+La prima attestazione possibile copre soltanto classi in cui ogni oggetto ha
+esattamente la stessa forma di campi dell'osservazione: forme eterogenee
+richiedono un indice aggiuntivo per i campi mancanti oppure revisione. Questo
+limite conserva la regola di MATCH su sottoinsiemi nel motore, ma non la rende
+ancora automaticamente attivabile su una classe eterogenea.
 
 La forma attuale del contratto mantiene per compatibilità i nomi `signals` e
 `sufficientRules`, ma rifiuta `uniqueWithinScope: true`,
