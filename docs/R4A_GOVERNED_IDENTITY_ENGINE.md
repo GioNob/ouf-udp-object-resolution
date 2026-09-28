@@ -77,6 +77,14 @@ the statement snapshot cannot race a new object or change of identity.
 
 The returned evidence includes comparator version and both provenance refs,
 without copying raw values into the decision.
+`GovernedIdentityReviewRepository` can persist a non-automatic outcome in the
+existing append-only `resolution_decision` and durable `resolution_issue`,
+including policy version, snapshot coverage, all assessments and signal
+provenance. It maps `RESOLUTION_TOO_BROAD` to a review decision with a distinct
+reason and an empty selectable candidate list; the existing HUMAN approval
+endpoint therefore cannot approve one of the truncated rows. This repository
+is not invoked by the published worker yet. Successful MATCH and NEW_OBJECT
+still need an atomic write path and source-binding continuity checks.
 
 `preflight` calls the same `decide` method used for individual observations
 and reports the decision distribution and largest candidate set. Activation
@@ -96,9 +104,10 @@ not a separate simulation algorithm.
    objects and prove complete coverage before activation. An incomplete
    index must fail closed. Persist the coverage reference with each decision
    and carry it through preflight probes.
-3. Persist the complete comparison evidence with the append-only resolution
-   decision. Connect `REVIEW_REQUIRED` and `RESOLUTION_TOO_BROAD` to durable
-   HUMAN quarantine, and preserve the source binding continuity path.
+3. Connect the prepared review persistence to durable HUMAN quarantine and
+   preserve source binding continuity on resume. Implement atomic MATCH and
+   NEW_OBJECT persistence, retaining complete comparison evidence and
+   snapshot coverage in each append-only decision.
 4. Reconcile property conflicts under governed authority or HUMAN choice
    before serving a confirmed merge. Exercise exact historical replay,
    concurrent workers and the database-backed Gateway/THS acceptance path.
