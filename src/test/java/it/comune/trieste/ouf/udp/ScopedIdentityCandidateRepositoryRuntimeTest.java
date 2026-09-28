@@ -23,7 +23,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired GovernedIdentityIndexBackfill backfill;
   @Autowired JdbcClient db;
   @org.junit.jupiter.api.BeforeEach void clean(){
-    db.sql("truncate table ouf_udp.identity_lookup_token,ouf_udp.identity_lookup_shape,ouf_udp.identity_lookup_coverage").update();
+    db.sql("truncate table ouf_udp.identity_lookup_token,ouf_udp.identity_lookup_shape,ouf_udp.identity_lookup_shape_catalog,ouf_udp.identity_lookup_coverage").update();
   }
 
   @Test void neverInfersCompletenessFromClassSizeOrEmptyResults(){
@@ -144,6 +144,47 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         "ouf:name",new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Other","handoff://probe/name"),
         "ouf:address",new GovernedIdentityEngine.Value("ouf:address@semantic://publication/1","Via Nuova","handoff://probe/address")));
     assertThat(new GovernedIdentityEngine().decide(two,allDifferent,candidates.retrieve(two,allDifferent)).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.NEW_OBJECT);
+  }
+  @Test void aDisjointFieldSetRemainsUncertainWithoutScanningEveryDifferentShape(){
+    clearObjects();
+    UUID nameOnly=materialize("name-only","Alpha");
+    materialize("different-name","Beta");
+    var base=policy();
+    var two=new GovernedIdentityEngine.Policy("policy://identity/disjoint","1","default","ouf:Road",
+        "registry",1,true,List.of(base.signals().getFirst(),new GovernedIdentityEngine.Signal(
+            "ouf:address","ouf:address@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,
+            false,false,"assertion://address/1")),List.of(new GovernedIdentityEngine.SufficientRule(
+            "address",Set.of("ouf:address"),"assertion://address-sufficient/1")));
+    assertThat(backfill.rebuild(two).indexedObjects()).isEqualTo(2);
+    var incoming=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of(
+        "ouf:address",new GovernedIdentityEngine.Value("ouf:address@semantic://publication/1",
+            "Via Roma","handoff://incoming/address")));
+    var retrieved=candidates.retrieve(two,incoming);
+    assertThat(retrieved.rows()).hasSize(2);
+    assertThat(new GovernedIdentityEngine().decide(two,incoming,retrieved).outcome())
+        .isEqualTo(GovernedIdentityEngine.Outcome.RESOLUTION_TOO_BROAD);
+    assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).contains(nameOnly);
+  }
+  @Test void differingSharedFieldsDoNotMakeHeterogeneousLookupTooBroad(){
+    clearObjects();
+    for(int i=0;i<5;i++)materialize("road-"+i,"Other-"+i);
+    var base=policy();
+    var two=new GovernedIdentityEngine.Policy("policy://identity/distinct-shapes","1","default","ouf:Road",
+        "registry",1,true,List.of(base.signals().getFirst(),new GovernedIdentityEngine.Signal(
+            "ouf:address","ouf:address@semantic://publication/1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,
+            false,false,"assertion://address/1")),List.of(new GovernedIdentityEngine.SufficientRule(
+            "whole",Set.of("ouf:name","ouf:address"),"assertion://whole/1")));
+    assertThat(backfill.rebuild(two).indexedObjects()).isEqualTo(5);
+    var incoming=new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of(
+        "ouf:name",new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1",
+            "Brand new","handoff://incoming/name"),
+        "ouf:address",new GovernedIdentityEngine.Value("ouf:address@semantic://publication/1",
+            "Via Roma","handoff://incoming/address")));
+    var retrieved=candidates.retrieve(two,incoming);
+    assertThat(retrieved.complete()).isTrue();
+    assertThat(retrieved.rows()).isEmpty();
+    assertThat(new GovernedIdentityEngine().decide(two,incoming,retrieved).outcome())
         .isEqualTo(GovernedIdentityEngine.Outcome.NEW_OBJECT);
   }
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
