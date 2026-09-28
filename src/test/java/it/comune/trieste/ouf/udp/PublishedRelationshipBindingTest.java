@@ -37,7 +37,7 @@ class PublishedRelationshipBindingTest {
   @Test void futureOrIncompleteIdentityProfileCannotFallBackToLegacyMatch()throws Exception{
     var governed=bundle();map(map(map(map(governed,"extractionProfile"),"runtime"),"udp"),"resolution")
         .put("governedIdentity",Map.of("ref","policy://future"));
-    assertThatThrownBy(()->resolve(governed)).hasMessage("UDP_GOVERNED_IDENTITY_RUNTIME_UNAVAILABLE");
+    assertThatThrownBy(()->resolve(governed)).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
     var unknown=bundle();map(map(map(map(unknown,"extractionProfile"),"runtime"),"udp"),"resolution")
         .put("futureStrategy",Map.of());
     assertThatThrownBy(()->resolve(unknown)).hasMessage("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
