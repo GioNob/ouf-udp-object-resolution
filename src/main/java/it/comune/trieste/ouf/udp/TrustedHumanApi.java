@@ -9,13 +9,19 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController @RequestMapping("/api/udp/v1/governance")
 public class TrustedHumanApi {
   private static final List<String> FORBIDDEN_HEADERS=List.of("X-Actor-Type","X-Actor-Subject","X-Tenant-Id","X-Capabilities","X-Authorization-Decision-Ref");
-  private final IdentityGovernanceService service;public TrustedHumanApi(IdentityGovernanceService service){this.service=service;}
+  private final IdentityGovernanceService service;
+  private final ResolutionReviewPackageService packages;
+  public TrustedHumanApi(IdentityGovernanceService service,ResolutionReviewPackageService packages){
+    this.service=service;this.packages=packages;
+  }
 
   @PostMapping("/merge/plans") IdentityGovernanceService.Plan planMerge(@RequestBody MergePlanRequest body,HttpServletRequest request){return service.planMerge(body.survivorObjectId(),body.mergedObjectId(),trusted(request));}
   @PostMapping("/merge/plans/{id}/execute") IdentityGovernanceService.Plan executeMerge(@PathVariable UUID id,@RequestBody ExecuteRequest body,@RequestHeader("Idempotency-Key") String key,HttpServletRequest request){return service.executeMerge(id,body.expectedVersion(),body.reason(),key,trusted(request));}
   @PostMapping("/split/plans") IdentityGovernanceService.Plan planSplit(@RequestBody SplitPlanRequest body,HttpServletRequest request){return service.planSplit(body.originalObjectId(),body.successorObjectIds(),body.bindingAllocations(),trusted(request));}
   @PostMapping("/split/plans/{id}/execute") IdentityGovernanceService.Plan executeSplit(@PathVariable UUID id,@RequestBody ExecuteRequest body,@RequestHeader("Idempotency-Key") String key,HttpServletRequest request){return service.executeSplit(id,body.expectedVersion(),body.reason(),key,trusted(request));}
   @PostMapping("/resolution/issues/{id}/decisions") void decideIssue(@PathVariable UUID id,@RequestBody IssueDecisionRequest body,HttpServletRequest request){service.decideResolutionIssue(id,body.expectedVersion(),body.action(),body.reason(),body.targetUrbanObjectId(),trusted(request));}
+  @GetMapping("/resolution/issues/package") ResolutionReviewPackageService.PackageView reviewPackage(HttpServletRequest request){return packages.prepare(trusted(request));}
+  @PostMapping("/resolution/issues/package/confirm") ResolutionReviewPackageService.Confirmation confirmReviewPackage(@RequestBody PackageConfirmationRequest body,HttpServletRequest request){return packages.confirm(body.snapshotHash(),body.choices(),trusted(request));}
   @GetMapping("/objects/{id}/identity") Map<String,Object> identity(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("urban.object.read");return service.resolveIdentity(id);}
   @GetMapping("/plans/{id}") IdentityGovernanceService.Plan plan(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("resolution.issue.read");return service.getPlan(id);}
 
@@ -30,4 +36,5 @@ public class TrustedHumanApi {
   public record SplitPlanRequest(UUID originalObjectId,List<UUID> successorObjectIds,Map<String,String> bindingAllocations){}
   public record ExecuteRequest(long expectedVersion,String reason){}
   public record IssueDecisionRequest(long expectedVersion,String action,String reason,UUID targetUrbanObjectId){}
+  public record PackageConfirmationRequest(String snapshotHash,List<ResolutionReviewPackageService.Choice> choices){}
 }
