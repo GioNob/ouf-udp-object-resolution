@@ -149,7 +149,7 @@ public final class GovernedIdentityEngine {
           && (incoming.containsAll(existing) || existing.containsAll(incoming));
       Set<String> shared = new HashSet<>(incoming);
       shared.retainAll(existing);
-      boolean distinct = !shared.isEmpty() && shared.stream().allMatch(property ->
+      boolean distinct = !shared.isEmpty() && incoming.equals(existing) && shared.stream().allMatch(property ->
           evidence.stream().anyMatch(item -> item.signalId().equals(property)
               && item.kind() == EvidenceKind.DISAGREE));
       for (SufficientRule rule : policy.sufficientRules())
