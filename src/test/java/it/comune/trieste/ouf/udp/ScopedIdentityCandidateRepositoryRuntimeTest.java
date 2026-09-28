@@ -39,7 +39,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .isEqualTo("CANDIDATE_COVERAGE_UNVERIFIED");
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
-    db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();
+    clearObjects();
     UUID matching=materialize("one","Alpha");materialize("two","Beta");
     assertThat(backfill.rebuild(policy()).indexedObjects()).isEqualTo(2);
     db.sql("update ouf_udp.identity_lookup_coverage set field_set_hash=:shape where policy_ref='policy://identity/1'")
@@ -57,6 +57,15 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThatThrownBy(()->backfill.rebuild(policy())).hasMessageContaining("UNMATERIALIZED_OBJECT");
     assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
   }
+  @Test void backfillRejectsDivergentCanonicalProjection(){
+    clearObjects();
+    UUID id=materialize("three","Alpha");
+    db.sql("update ouf_udp.urban_object_current_state set canonical_payload=cast(:payload as jsonb) where urban_object_id=:id")
+        .param("id",id).param("payload","{\"ouf:name\":\"Other\"}").update();
+    assertThatThrownBy(()->backfill.rebuild(policy())).hasMessageContaining("CURRENT_VALUE_MISMATCH");
+    assertThat(candidates.retrieve(policy(),subject("Alpha")).complete()).isFalse();
+  }
+  private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
   private GovernedIdentityEngine.Policy policy(){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",1,true,
         List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
             GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1")),
