@@ -83,9 +83,8 @@ acquires the same key before retrieval in an explicit transaction. Its
 database-backed test checks both sides against a second connection. The
 legacy resolver also acquires that key before reading its candidates, so its
 read-before-insert path cannot race the governed scan for the same class. The
-published worker does not yet invoke the governed service. Source-binding
-changes and HUMAN repointing still need continuity checks in the atomic
-decision path.
+HUMAN merge/split execution locks the affected scopes before repointing
+bindings. The published worker does not yet invoke the governed service.
 
 The returned evidence includes comparator version and both provenance refs,
 without copying raw values into the decision.
