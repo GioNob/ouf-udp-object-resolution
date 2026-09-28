@@ -46,10 +46,11 @@ public class GovernedIdentityIndexBackfill {
     }
     String shape=ScopedIdentityCandidateRepository.hash(String.join("\u0000",new TreeSet<>(signals.keySet())));
     String ref="coverage://"+UUID.randomUUID();
-    db.sql("insert into ouf_udp.identity_lookup_coverage(tenant_id,canonical_class,policy_ref,policy_version,coverage_ref,field_set_hash,indexed_objects,complete) values(:tenant,:type,:policy,:version,:ref,:shape,:count,true) on conflict(tenant_id,canonical_class,policy_ref,policy_version) do update set coverage_ref=excluded.coverage_ref,field_set_hash=excluded.field_set_hash,indexed_objects=excluded.indexed_objects,complete=true,updated_at=transaction_timestamp()")
+    db.sql("insert into ouf_udp.identity_lookup_coverage(tenant_id,canonical_class,policy_ref,policy_version,coverage_ref,policy_fingerprint,field_set_hash,indexed_objects,complete) values(:tenant,:type,:policy,:version,:ref,:fingerprint,:shape,:count,true) on conflict(tenant_id,canonical_class,policy_ref,policy_version) do update set coverage_ref=excluded.coverage_ref,policy_fingerprint=excluded.policy_fingerprint,field_set_hash=excluded.field_set_hash,indexed_objects=excluded.indexed_objects,complete=true,updated_at=transaction_timestamp()")
         .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version())
-        .param("ref",ref).param("shape",shape).param("count",indexed).update();
+        .param("ref",ref).param("fingerprint",ScopedIdentityCandidateRepository.fingerprint(policy))
+        .param("shape",shape).param("count",indexed).update();
     return new Result(ref,indexed);
   }
   private void indexObject(GovernedIdentityEngine.Policy policy,
