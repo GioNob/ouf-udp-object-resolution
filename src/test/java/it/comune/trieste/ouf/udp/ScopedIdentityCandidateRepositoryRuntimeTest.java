@@ -52,6 +52,10 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(result.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(matching);
     assertThat(new GovernedIdentityEngine().decide(policy(),subject("ALPHA"),result).outcome())
         .isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+    db.sql("update ouf_udp.urban_object_current_state set updated_at=transaction_timestamp() where urban_object_id=:id")
+        .param("id",matching).update();
+    assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
+    assertThat(backfill.rebuild(policy()).indexedObjects()).isEqualTo(2);
     db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(gen_random_uuid(),'default','ouf:Road')").update();
     assertThat(candidates.retrieve(policy(),subject("ALPHA")).complete()).isFalse();
     assertThatThrownBy(()->backfill.rebuild(policy())).hasMessageContaining("UNMATERIALIZED_OBJECT");
