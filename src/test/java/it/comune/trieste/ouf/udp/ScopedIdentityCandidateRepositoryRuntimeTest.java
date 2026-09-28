@@ -35,6 +35,11 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
 
   @Test void readsCurrentPublishedValuesAcrossEntireTenantClassAndBoundsOverflow(){
     UUID first=materialize("one","Alpha"),second=materialize("two","Beta");
+    UUID extra=UUID.randomUUID();
+    db.sql("insert into ouf_udp.property_contribution(contribution_id,urban_object_id,handoff_id,property_iri,value_json,value_hash,access_label,source_id,authority_rank,provenance_json) values(:id,:object,'candidate-one','ouf:address','\"Via Roma 1\"'::jsonb,'sha256:extra','OPEN','registry',1,'{\"contractRefs\":{\"semanticPublicationSetRef\":\"semantic://publication/1\"}}'::jsonb)")
+        .param("id",extra).param("object",first).update();
+    db.sql("insert into ouf_udp.property_value(property_value_id,revision_id,property_iri,value_json,datatype,access_label,contribution_id) select gen_random_uuid(),current_revision_id,'ouf:address','\"Via Roma 1\"'::jsonb,'string','OPEN',:id from ouf_udp.urban_object where urban_object_id=:object")
+        .param("id",extra).param("object",first).update();
     var full=candidates.retrieve(policy(2));
     assertThat(full.complete()).isTrue();
     assertThat(full.coverageRef()).startsWith("postgres-snapshot://");
@@ -42,6 +47,8 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(full.rows().stream().filter(candidate->candidate.objectId().equals(first)).findFirst().orElseThrow().values().get("ouf:name"))
         .satisfies(value->{assertThat(value.semanticRef()).isEqualTo("ouf:name@semantic://publication/1");
           assertThat(value.raw()).isEqualTo("Alpha");assertThat(value.provenanceRef()).startsWith("contribution://");});
+    assertThat(full.rows().stream().filter(candidate->candidate.objectId().equals(first)).findFirst().orElseThrow().values())
+        .containsKey("ouf:address");
     var decision=new GovernedIdentityEngine().decide(policy(2),
         new GovernedIdentityEngine.Subject("default","ouf:Road","registry",Map.of("ouf:name",
             new GovernedIdentityEngine.Value("ouf:name@semantic://publication/1","Alpha","handoff://probe"))),full);
