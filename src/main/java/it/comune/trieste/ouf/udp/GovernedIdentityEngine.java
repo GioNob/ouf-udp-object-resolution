@@ -132,12 +132,14 @@ public final class GovernedIdentityEngine {
             right == null ? null : right.provenanceRef(), signal.comparator().name(), signal.assertionRef()));
       }
       Set<String> satisfied = new TreeSet<>();
-      if (!excluded) for (SufficientRule rule : policy.sufficientRules())
+      for (SufficientRule rule : policy.sufficientRules())
         if (agreeing.containsAll(rule.signalIds())) satisfied.add(rule.id());
       assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), excluded));
     }
     assessments.sort(Comparator.comparing(Assessment::objectId));
     List<Assessment> eligible = assessments.stream().filter(a -> !a.excluded()).toList();
+    if (assessments.stream().anyMatch(a -> a.excluded() && !a.satisfiedRules().isEmpty()))
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "CONFLICTING_IDENTITY_EVIDENCE", assessments);
     if (eligible.isEmpty()) {
       if (policy.allowAutoNew()) return result(policy, Outcome.NEW_OBJECT, null, "SOURCE_SCOPED_CREATION", assessments);
       return result(policy, Outcome.REVIEW_REQUIRED, null, "CREATION_NOT_AUTHORIZED", assessments);
