@@ -1,6 +1,25 @@
 openapi: 3.1.0
 info: {title: OUF UDP Trusted Human Governance API, version: 1.0.0}
 paths:
+  /api/udp/v1/governance/identity/preflight:
+    post:
+      operationId: prepareGovernedIdentityPreflight
+      x-ouf-capability: urban.identity.preflight
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Frozen configuration hash, policy and complete indexed coverage attested after scoped rebuild}}
+    get:
+      operationId: readGovernedIdentityPreflight
+      x-ouf-capability: urban.identity.preflight
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Current validity of the tenant-scoped attestation identified by id}}
+  /api/udp/v1/governance/internal/identity/preflight:
+    get:
+      operationId: readCurrentGovernedIdentityAttestationForOnboarding
+      x-ouf-capability: ouf.udp.identity.attestation.read
+      x-ouf-mcp-eligible: false
+      responses: {'200': {description: Latest attestation for the exact frozen configuration hash and source, including current coverage validity}}
   /api/udp/v1/governance/replays:
     post:
       operationId: planHistoricalReplay
