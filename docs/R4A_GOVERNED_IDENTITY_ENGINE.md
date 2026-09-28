@@ -99,6 +99,10 @@ previous decision is idempotent. An existing binding must agree with the
 governed result; divergence creates a non-selectable HUMAN issue rather than
 reassigning that binding. The prepared service does not grant policy authority
 or bypass the publication gate.
+The shared HUMAN approval path now parses candidate IDs as exact JSON entries.
+For governed issues it takes the scope lock and checks that the selected object
+is still ACTIVE in the recorded tenant/class before writing a binding; a
+concurrent ACTIVE binding conflict aborts the approval transaction.
 
 `preflight` calls the same `decide` method used for individual observations
 and reports the decision distribution and largest candidate set. Activation
@@ -121,8 +125,9 @@ not a separate simulation algorithm.
    and carry it through preflight probes.
 3. Connect the prepared atomic path to the published worker only after the
    policy's assertions are verified and candidate coverage is certified for
-   its scope. Preserve source-binding continuity on HUMAN resume and prevent
-   a stale approval from binding an object outside the policy scope.
+   its scope. Revalidate versioned signal evidence on HUMAN approval if the
+   selected object's revision changed since review; the current gate checks
+   active tenant/class membership, not full comparison invariance.
 4. Reconcile property conflicts under governed authority or HUMAN choice
    before serving a confirmed merge. Exercise exact historical replay,
    concurrent workers and the database-backed Gateway/THS acceptance path.
