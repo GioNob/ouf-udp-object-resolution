@@ -31,7 +31,7 @@ public final class GovernedIdentityEngine {
     public Policy {
       if (blank(ref) || blank(version) || blank(tenantId) || blank(canonicalClass)
           || blank(sourceId) || maxCandidates < 1 || maxCandidates > 1000
-          || signals == null || signals.isEmpty() || sufficientRules == null || sufficientRules.size() != 1) throw invalid();
+          || signals == null || signals.isEmpty() || sufficientRules == null || sufficientRules.isEmpty()) throw invalid();
       signals = List.copyOf(signals);
       sufficientRules = List.copyOf(sufficientRules);
       Set<String> ids = new HashSet<>();
@@ -40,7 +40,7 @@ public final class GovernedIdentityEngine {
       }
       Set<String> rules = new HashSet<>();
       for (SufficientRule rule : sufficientRules) {
-        if (!rules.add(rule.id()) || !ids.equals(rule.signalIds())) throw invalid();
+        if (!rules.add(rule.id()) || !ids.containsAll(rule.signalIds())) throw invalid();
       }
     }
   }
@@ -149,11 +149,11 @@ public final class GovernedIdentityEngine {
           && (incoming.containsAll(existing) || existing.containsAll(incoming));
       Set<String> shared = new HashSet<>(incoming);
       shared.retainAll(existing);
-      boolean distinct = !shared.isEmpty() && incoming.equals(existing) && shared.stream().allMatch(property ->
+      boolean distinct = !shared.isEmpty() && shared.stream().allMatch(property ->
           evidence.stream().anyMatch(item -> item.signalId().equals(property)
               && item.kind() == EvidenceKind.DISAGREE));
       for (SufficientRule rule : policy.sufficientRules())
-        if (nested && !shared.isEmpty() && rule.signalIds().containsAll(shared)
+        if (nested && !shared.isEmpty() && shared.containsAll(rule.signalIds())
             && agreeing.containsAll(shared)) satisfied.add(rule.id());
       assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), distinct));
     }
