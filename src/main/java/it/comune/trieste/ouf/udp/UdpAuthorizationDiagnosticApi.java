@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /** Temporary, opt-in diagnostic used only on an isolated R4a clone. */
 @RestController
-@ConditionalOnProperty(name = "ouf.udp.authorization-diagnostic.enabled", havingValue = "true")
+@ConditionalOnProperty(name = "ouf.udp.authorization.diagnostic.enabled", havingValue = "true")
 final class UdpAuthorizationDiagnosticApi {
   private static final String CAPABILITY = "urban.identity.preflight";
   private final LocalAuthorization engine;
