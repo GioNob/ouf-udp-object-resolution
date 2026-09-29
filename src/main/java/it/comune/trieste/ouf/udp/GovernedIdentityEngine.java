@@ -1,0 +1,207 @@
+package it.comune.trieste.ouf.udp;
+
+import java.math.BigDecimal;
+import java.text.Normalizer;
+import java.util.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+/** Deterministic identity decision core. Candidate retrieval and persistence are separate ports. */
+public final class GovernedIdentityEngine {
+  public enum ComparatorKind { CONCEPT, TEXT_V1, DECIMAL_V1, JSON_V1 }
+  public enum Outcome { MATCH, NEW_OBJECT, REVIEW_REQUIRED, RESOLUTION_TOO_BROAD }
+  public enum EvidenceKind { AGREE, DISAGREE, MISSING }
+
+  /** A semantic reference includes its publication/version; a coincidentally equal IRI is insufficient. */
+  public record Signal(String id, String semanticRef, ComparatorKind comparator,
+                       boolean excludesOnDisagreement, boolean uniqueWithinScope,
+                       String assertionRef) {
+    public Signal {
+      if (blank(id) || blank(semanticRef) || comparator == null || blank(assertionRef)) throw invalid();
+    }
+  }
+  /** The comparison vocabulary covers every mapped property; each observation may expose a subset. */
+  public record SufficientRule(String id, Set<String> signalIds, String assertionRef) {
+    public SufficientRule {
+      if (blank(id) || signalIds == null || signalIds.isEmpty() || blank(assertionRef)) throw invalid();
+      signalIds = Set.copyOf(signalIds);
+    }
+  }
+  public record Policy(String ref, String version, String tenantId, String canonicalClass,
+                       String sourceId, int maxCandidates, boolean allowAutoNew,
+                       List<Signal> signals, List<SufficientRule> sufficientRules) {
+    public Policy {
+      if (blank(ref) || blank(version) || blank(tenantId) || blank(canonicalClass)
+          || blank(sourceId) || maxCandidates < 1 || maxCandidates > 1000
+          || signals == null || signals.isEmpty() || sufficientRules == null || sufficientRules.isEmpty()) throw invalid();
+      signals = List.copyOf(signals);
+      sufficientRules = List.copyOf(sufficientRules);
+      Set<String> ids = new HashSet<>();
+      for (Signal signal : signals) {
+        if (!ids.add(signal.id()) || signal.uniqueWithinScope() || signal.excludesOnDisagreement()) throw invalid();
+      }
+      Set<String> rules = new HashSet<>();
+      for (SufficientRule rule : sufficientRules) {
+        if (!rules.add(rule.id()) || !ids.containsAll(rule.signalIds())) throw invalid();
+      }
+    }
+  }
+  public record Value(String semanticRef, String raw, String provenanceRef) {
+    public Value { if (blank(semanticRef) || raw == null || blank(provenanceRef)) throw invalid(); }
+  }
+  public record Subject(String tenantId, String canonicalClass, String sourceId,
+                        Map<String, Value> values) {
+    public Subject {
+      if (blank(tenantId) || blank(canonicalClass) || blank(sourceId) || values == null) throw invalid();
+      values = Map.copyOf(values);
+    }
+  }
+  public record Candidate(UUID objectId, String tenantId, String canonicalClass,
+                          Map<String, Value> values) {
+    public Candidate {
+      if (objectId == null || blank(tenantId) || blank(canonicalClass) || values == null) throw invalid();
+      values = Map.copyOf(values);
+    }
+  }
+  public record Evidence(String signalId, EvidenceKind kind, String subjectProvenance,
+                         String candidateProvenance, String comparatorVersion, String assertionRef) {}
+  public record Assessment(UUID objectId, List<Evidence> evidence, Set<String> satisfiedRules,
+                           boolean excluded) {}
+  public record Decision(Outcome outcome, UUID objectId, String reason,
+                         String policyRef, String policyVersion, List<Assessment> assessments) {}
+  /** Retrieval attests index coverage for the entire policy scope at a stable snapshot. */
+  public record Candidates(String policyRef, String policyVersion, String tenantId,
+                           String canonicalClass, String coverageRef, boolean complete,
+                           List<Candidate> rows) {
+    public Candidates {
+      if (blank(policyRef) || blank(policyVersion) || blank(tenantId) || blank(canonicalClass)
+          || rows == null || (complete && blank(coverageRef))) throw invalid();
+      rows = List.copyOf(rows);
+    }
+  }
+  public record Probe(Subject subject, Candidates retrieved) {}
+  public record Preflight(int total, Map<Outcome, Long> outcomes, int largestCandidateSet) {}
+
+  /** Preactivation and runtime call the same decision method. The caller supplies representative probes. */
+  public Preflight preflight(Policy policy, List<Probe> probes) {
+    if (probes == null || probes.isEmpty()) throw invalid();
+    EnumMap<Outcome, Long> counts = new EnumMap<>(Outcome.class);
+    int largest = 0;
+    for (Probe probe : probes) {
+      if (probe == null || probe.retrieved() == null) throw invalid();
+      Decision decision = decide(policy, probe.subject(), probe.retrieved());
+      counts.merge(decision.outcome(), 1L, Long::sum);
+      largest = Math.max(largest, probe.retrieved().rows().size());
+    }
+    return new Preflight(probes.size(), Collections.unmodifiableMap(counts), largest);
+  }
+
+  /** The caller must query maxCandidates + 1 and attest complete index coverage. */
+  public Decision decide(Policy policy, Subject subject, Candidates retrieval) {
+    Objects.requireNonNull(policy); Objects.requireNonNull(subject); Objects.requireNonNull(retrieval);
+    if (!policy.tenantId().equals(subject.tenantId())
+        || !policy.canonicalClass().equals(subject.canonicalClass())
+        || !policy.sourceId().equals(subject.sourceId())) throw invalid();
+    if (!policy.ref().equals(retrieval.policyRef()) || !policy.version().equals(retrieval.policyVersion())
+        || !policy.tenantId().equals(retrieval.tenantId())
+        || !policy.canonicalClass().equals(retrieval.canonicalClass())) throw invalid();
+    Map<String, Signal> configured = new HashMap<>();
+    for (Signal signal : policy.signals()) configured.put(signal.id(), signal);
+    if (!configured.keySet().containsAll(subject.values().keySet())) throw invalid();
+    for (var entry : subject.values().entrySet())
+      if (!configured.get(entry.getKey()).semanticRef().equals(entry.getValue().semanticRef())) throw invalid();
+    List<Candidate> retrieved = retrieval.rows();
+    if (retrieved.size() > policy.maxCandidates())
+      return result(policy, Outcome.RESOLUTION_TOO_BROAD, null, "CANDIDATE_LIMIT", List.of());
+    if (!retrieval.complete())
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "CANDIDATE_COVERAGE_UNVERIFIED", List.of());
+    if (subject.values().isEmpty())
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "NO_EXPOSED_CANONICAL_FIELDS", List.of());
+    Set<UUID> seen = new HashSet<>();
+    List<Assessment> assessments = new ArrayList<>();
+    for (Candidate candidate : retrieved) {
+      if (!seen.add(candidate.objectId()) || !policy.tenantId().equals(candidate.tenantId())
+          || !policy.canonicalClass().equals(candidate.canonicalClass())) throw invalid();
+      List<Evidence> evidence = new ArrayList<>();
+      Set<String> agreeing = new HashSet<>();
+      Set<String> properties = new TreeSet<>(subject.values().keySet());
+      properties.addAll(candidate.values().keySet());
+      for (String property : properties) {
+        Signal signal = configured.get(property);
+        Value left = subject.values().get(property), right = candidate.values().get(property);
+        EvidenceKind kind;
+        if (left == null || right == null || signal == null
+            || !signal.semanticRef().equals(right.semanticRef())) kind = EvidenceKind.MISSING;
+        else {
+          try {
+            if (normalize(signal.comparator(), left.raw()).equals(normalize(signal.comparator(), right.raw()))) {
+              kind = EvidenceKind.AGREE; agreeing.add(property);
+            } else kind = EvidenceKind.DISAGREE;
+          } catch (IllegalArgumentException unsupported) {
+            kind = EvidenceKind.MISSING;
+          }
+        }
+        evidence.add(new Evidence(property, kind, left == null ? null : left.provenanceRef(),
+            right == null ? null : right.provenanceRef(), signal == null ? "UNSUPPORTED" : signal.comparator().name(),
+            signal == null ? null : signal.assertionRef()));
+      }
+      Set<String> satisfied = new TreeSet<>();
+      Set<String> incoming = subject.values().keySet(), existing = candidate.values().keySet();
+      boolean nested = !existing.isEmpty()
+          && (incoming.containsAll(existing) || existing.containsAll(incoming));
+      Set<String> shared = new HashSet<>(incoming);
+      shared.retainAll(existing);
+      boolean distinct = !shared.isEmpty() && shared.stream().allMatch(property ->
+          evidence.stream().anyMatch(item -> item.signalId().equals(property)
+              && item.kind() == EvidenceKind.DISAGREE));
+      for (SufficientRule rule : policy.sufficientRules())
+        if (nested && !shared.isEmpty() && shared.containsAll(rule.signalIds())
+            && agreeing.containsAll(shared)) satisfied.add(rule.id());
+      assessments.add(new Assessment(candidate.objectId(), List.copyOf(evidence), Set.copyOf(satisfied), distinct));
+    }
+    assessments.sort(Comparator.comparing(Assessment::objectId));
+    if (assessments.isEmpty()) {
+      if (policy.allowAutoNew()) return result(policy, Outcome.NEW_OBJECT, null, "SOURCE_SCOPED_CREATION", assessments);
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "CREATION_NOT_AUTHORIZED", assessments);
+    }
+    // Every field of the smaller object must correspond; either side may carry additional fields.
+    List<Assessment> exact = assessments.stream().filter(a -> !a.satisfiedRules().isEmpty()).toList();
+    if (exact.size() == 1 && assessments.stream().allMatch(a -> a == exact.getFirst() || a.excluded()))
+      return result(policy, Outcome.MATCH, exact.getFirst().objectId(), "COMPLETE_CANONICAL_EQUALITY", assessments);
+    if (exact.isEmpty() && assessments.stream().allMatch(Assessment::excluded)) {
+      if (policy.allowAutoNew()) return result(policy, Outcome.NEW_OBJECT, null, "ALL_CANDIDATES_DISTINCT", assessments);
+      return result(policy, Outcome.REVIEW_REQUIRED, null, "CREATION_NOT_AUTHORIZED", assessments);
+    }
+    return result(policy, Outcome.REVIEW_REQUIRED, null, "UNRESOLVED_IDENTITY", assessments);
+  }
+
+  private static Decision result(Policy p, Outcome o, UUID target, String reason, List<Assessment> evidence) {
+    return new Decision(o, target, reason, p.ref(), p.version(), List.copyOf(evidence));
+  }
+  static String normalize(ComparatorKind kind, String raw) {
+    return switch (kind) {
+      case CONCEPT -> raw; // Published concept ID, exact and case sensitive.
+      case TEXT_V1 -> Normalizer.normalize(raw, Normalizer.Form.NFKC).strip()
+          .replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+      case DECIMAL_V1 -> new BigDecimal(raw.strip()).stripTrailingZeros().toPlainString();
+      case JSON_V1 -> canonicalJson(raw);
+    };
+  }
+  private static String canonicalJson(String raw) {
+    try {
+      ObjectMapper json=new ObjectMapper();
+      return json.writeValueAsString(sortedJson(json.readValue(raw,Object.class)));
+    } catch(Exception invalid) { throw new IllegalArgumentException("UDP_IDENTITY_JSON_INVALID",invalid); }
+  }
+  private static Object sortedJson(Object value) {
+    if(value instanceof Map<?,?> map){
+      Map<String,Object> sorted=new TreeMap<>();
+      map.forEach((key,item)->sorted.put(String.valueOf(key),sortedJson(item)));
+      return sorted;
+    }
+    if(value instanceof List<?> list)return list.stream().map(GovernedIdentityEngine::sortedJson).toList();
+    if(value instanceof Number number)return new BigDecimal(number.toString()).stripTrailingZeros();
+    return value;
+  }
+  private static boolean blank(String value) { return value == null || value.isBlank(); }
+  private static IllegalArgumentException invalid() { return new IllegalArgumentException("UDP_IDENTITY_POLICY_INVALID"); }
+}

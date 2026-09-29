@@ -15,6 +15,10 @@ server:
   port: ${PORT:8080}
   shutdown: graceful
 spring.lifecycle.timeout-per-shutdown-phase: ${OUF_UDP_SHUTDOWN_TIMEOUT:45s}
+ouf.udp.iam:
+  enabled: ${OUF_UDP_IAM_ENABLED:false}
+  issuer: ${OUF_UDP_IAM_ISSUER:}
+  audience: ${OUF_UDP_IAM_AUDIENCE:}
 ouf.udp.lake:
   required: ${OUF_UDP_LAKE_REQUIRED:true}
   raw-retention-days: ${OUF_UDP_RAW_RETENTION_DAYS:0}

@@ -15,14 +15,14 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class IdentityGovernanceService {
-  private final JdbcClient db;private final ObjectMapper json;
-  public IdentityGovernanceService(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
+  private final JdbcClient db;private final ObjectMapper json;private final GovernedIdentityScopeLock identityScope;
+  public IdentityGovernanceService(JdbcClient db,ObjectMapper json,GovernedIdentityScopeLock identityScope){this.db=db;this.json=json;this.identityScope=identityScope;}
 
   @Transactional(readOnly=true) public Map<String,Object> mergeImpact(UUID survivor,UUID merged){requireActive(survivor);requireActive(merged);if(survivor.equals(merged))throw new IllegalArgumentException("UDP_MERGE_SAME_OBJECT");Map<String,Object> impact=new LinkedHashMap<>();impact.put("survivorObjectId",survivor);impact.put("mergedObjectId",merged);impact.put("bindingsToMove",count("select count(*) from ouf_udp.source_binding where urban_object_id=:u",merged));impact.put("propertiesToReevaluate",count("select count(distinct property_iri) from ouf_udp.property_contribution where urban_object_id in(:a,:b)",survivor,merged));impact.put("relationshipsToRepoint",count("select count(*) from ouf_udp.urban_relationship where status='ACTIVE' and (source_object_id=:u or target_object_id=:u)",merged));impact.put("potentialDuplicateEdges",db.sql("select count(*) from ouf_udp.urban_relationship x join ouf_udp.urban_relationship y on y.source_object_id=:s and x.source_object_id=:m and y.relation_iri=x.relation_iri and y.target_object_id=x.target_object_id and y.status='ACTIVE' and x.status='ACTIVE'").param("s",survivor).param("m",merged).query(Long.class).single());impact.put("geometryDistanceMeters",geometryDistance(survivor,merged));impact.put("deprecatedObjectIds",List.of(merged));return impact;}
 
   @Transactional public Plan planMerge(UUID survivor,UUID merged,TrustedHumanContext actor){actor.require("urban.merge.plan");Map<String,Object> proposal=Map.of("survivorObjectId",survivor,"mergedObjectId",merged);return createPlan("MERGE",List.of(survivor,merged),proposal,mergeImpact(survivor,merged),actor);}
 
-  @Transactional public Plan executeMerge(UUID planId,long expectedVersion,String reason,String idempotencyKey,TrustedHumanContext actor){actor.require("urban.object.merge");validateDecision(reason,idempotencyKey);Plan replay=idempotent(planId,idempotencyKey);if(replay!=null)return replay;Map<String,Object> plan=lockPlan(planId,"MERGE",expectedVersion);Map<String,Object> proposal=read(String.valueOf(plan.get("proposal")));UUID survivor=UUID.fromString(String.valueOf(proposal.get("survivorObjectId"))),merged=UUID.fromString(String.valueOf(proposal.get("mergedObjectId")));requireActive(survivor);requireActive(merged);
+  @Transactional public Plan executeMerge(UUID planId,long expectedVersion,String reason,String idempotencyKey,TrustedHumanContext actor){actor.require("urban.object.merge");validateDecision(reason,idempotencyKey);Plan replay=idempotent(planId,idempotencyKey);if(replay!=null)return replay;Map<String,Object> plan=lockPlan(planId,"MERGE",expectedVersion);Map<String,Object> proposal=read(String.valueOf(plan.get("proposal")));UUID survivor=UUID.fromString(String.valueOf(proposal.get("survivorObjectId"))),merged=UUID.fromString(String.valueOf(proposal.get("mergedObjectId")));lockObjectScopes(List.of(survivor,merged));requireActive(survivor);requireActive(merged);
     db.sql("insert into ouf_udp.source_binding_history(history_id,source_id,type_code,source_object_id,previous_urban_object_id,new_urban_object_id,disposition,plan_id) select gen_random_uuid(),source_id,type_code,source_object_id,urban_object_id,:s,'REALLOCATED',:p from ouf_udp.source_binding where urban_object_id=:m and state='ACTIVE'").param("s",survivor).param("p",planId).param("m",merged).update();db.sql("update ouf_udp.source_binding set urban_object_id=:s where urban_object_id=:m and state='ACTIVE'").param("s",survivor).param("m",merged).update();
     db.sql("insert into ouf_udp.merge_property_contribution_link(link_id,plan_id,survivor_object_id,contribution_id) select gen_random_uuid(),:p,:s,contribution_id from ouf_udp.property_contribution where urban_object_id=:m").param("p",planId).param("s",survivor).param("m",merged).update();repointMergeRelationships(planId,survivor,merged);
     db.sql("update ouf_udp.urban_object set status='MERGED',redirect_to=:s,revision=revision+1,updated_at=transaction_timestamp() where urban_object_id=:m").param("s",survivor).param("m",merged).update();db.sql("insert into ouf_udp.object_identity_history(history_id,object_id,transition,successor_ids,plan_id,decision_ref) values(gen_random_uuid(),:m,'MERGED',cast(:s as jsonb),:p,:d)").param("m",merged).param("s",write(List.of(survivor))).param("p",planId).param("d",actor.authorizationDecisionRef()).update();finish(planId,expectedVersion,reason,idempotencyKey,actor,"UDP_OBJECT_MERGED");return getPlan(planId);}
@@ -31,12 +31,118 @@ public class IdentityGovernanceService {
 
   @Transactional public Plan planSplit(UUID original,List<UUID> successors,Map<String,String> allocations,TrustedHumanContext actor){actor.require("urban.split.plan");Map<String,Object> proposal=new LinkedHashMap<>();proposal.put("originalObjectId",original);proposal.put("successorObjectIds",successors);proposal.put("bindingAllocations",allocations);return createPlan("SPLIT",concat(original,successors),proposal,splitImpact(original,successors,allocations),actor);}
 
-  @Transactional public Plan executeSplit(UUID planId,long expectedVersion,String reason,String idempotencyKey,TrustedHumanContext actor){actor.require("urban.object.split");validateDecision(reason,idempotencyKey);Plan replay=idempotent(planId,idempotencyKey);if(replay!=null)return replay;Map<String,Object> plan=lockPlan(planId,"SPLIT",expectedVersion);Map<String,Object> proposal=read(String.valueOf(plan.get("proposal")));UUID original=UUID.fromString(String.valueOf(proposal.get("originalObjectId")));List<UUID> successors=((List<?>)proposal.get("successorObjectIds")).stream().map(x->UUID.fromString(String.valueOf(x))).toList();Map<String,String> allocations=stringMap(proposal.get("bindingAllocations"));splitImpact(original,successors,allocations);
+  @Transactional public Plan executeSplit(UUID planId,long expectedVersion,String reason,String idempotencyKey,TrustedHumanContext actor){actor.require("urban.object.split");validateDecision(reason,idempotencyKey);Plan replay=idempotent(planId,idempotencyKey);if(replay!=null)return replay;Map<String,Object> plan=lockPlan(planId,"SPLIT",expectedVersion);Map<String,Object> proposal=read(String.valueOf(plan.get("proposal")));UUID original=UUID.fromString(String.valueOf(proposal.get("originalObjectId")));List<UUID> successors=((List<?>)proposal.get("successorObjectIds")).stream().map(x->UUID.fromString(String.valueOf(x))).toList();Map<String,String> allocations=stringMap(proposal.get("bindingAllocations"));lockObjectScopes(concat(original,successors));splitImpact(original,successors,allocations);
     List<Map<String,Object>> bindings=db.sql("select source_id,type_code,source_object_id,urban_object_id from ouf_udp.source_binding where urban_object_id=:u and state='ACTIVE' for update").param("u",original).query().listOfRows();for(var b:bindings){String key=b.get("source_id")+"|"+b.get("type_code")+"|"+b.get("source_object_id"),choice=allocations.get(key);if("UNRESOLVED".equals(choice)){history(b,null,"UNRESOLVED",planId);db.sql("update ouf_udp.source_binding set state='UNRESOLVED' where source_id=:s and type_code=:c and source_object_id=:o").param("s",b.get("source_id")).param("c",b.get("type_code")).param("o",b.get("source_object_id")).update();db.sql("insert into ouf_udp.split_resolution_issue(issue_id,plan_id,issue_type,resource_ref,evidence_json) values(gen_random_uuid(),:p,'BINDING_UNRESOLVED',:r,cast(:e as jsonb))").param("p",planId).param("r","source-binding://"+key).param("e",write(Map.of("previousObjectId",original))).update();}else{UUID target=UUID.fromString(choice);history(b,target,"REALLOCATED",planId);db.sql("update ouf_udp.source_binding set urban_object_id=:t where source_id=:s and type_code=:c and source_object_id=:o").param("t",target).param("s",b.get("source_id")).param("c",b.get("type_code")).param("o",b.get("source_object_id")).update();}}
     List<Map<String,Object>> edges=db.sql("select relationship_id,source_object_id,target_object_id,relation_iri from ouf_udp.urban_relationship where status='ACTIVE' and (source_object_id=:u or target_object_id=:u)").param("u",original).query().listOfRows();for(var e:edges){db.sql("insert into ouf_udp.relationship_identity_history(history_id,relationship_id,previous_source_object_id,previous_target_object_id,disposition,plan_id) values(gen_random_uuid(),:r,:s,:t,'REVIEW_REQUIRED',:p)").param("r",e.get("relationship_id")).param("s",e.get("source_object_id")).param("t",e.get("target_object_id")).param("p",planId).update();db.sql("insert into ouf_udp.split_resolution_issue(issue_id,plan_id,issue_type,resource_ref,evidence_json) values(gen_random_uuid(),:p,'RELATIONSHIP_REVIEW_REQUIRED',:r,cast(:e as jsonb))").param("p",planId).param("r","relationship://"+e.get("relationship_id")).param("e",write(Map.of("relationIri",e.get("relation_iri"),"successorCandidates",successors))).update();}
     db.sql("update ouf_udp.urban_object set status='SPLIT',revision=revision+1,updated_at=transaction_timestamp() where urban_object_id=:u").param("u",original).update();db.sql("insert into ouf_udp.object_identity_history(history_id,object_id,transition,successor_ids,plan_id,decision_ref) values(gen_random_uuid(),:u,'SPLIT',cast(:s as jsonb),:p,:d)").param("u",original).param("s",write(successors)).param("p",planId).param("d",actor.authorizationDecisionRef()).update();finish(planId,expectedVersion,reason,idempotencyKey,actor,"UDP_OBJECT_SPLIT");return getPlan(planId);}
 
-  @Transactional public void decideResolutionIssue(UUID issueId,long expectedVersion,String action,String reason,UUID target,TrustedHumanContext actor){actor.require("resolution.match.approve");if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_REASON_REQUIRED");boolean approve="APPROVE".equals(action);if(!approve&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");Map<String,Object> issue=db.sql("select i.handoff_id,i.candidate_refs::text candidates,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update").param("i",issueId).param("v",expectedVersion).query().listOfRows().stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"UDP_ISSUE_VERSION_CONFLICT"));if(approve){if(target==null||!String.valueOf(issue.get("candidates")).contains(target.toString()))throw new IllegalArgumentException("UDP_TARGET_NOT_A_CANDIDATE");db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict(source_id,type_code,source_object_id) do update set urban_object_id=excluded.urban_object_id,state='ACTIVE' where source_binding.state='UNRESOLVED'").param("s",issue.get("source_id")).param("t",issue.get("type_code")).param("o",issue.get("source_object_id")).param("u",target).param("h",issue.get("handoff_id")).update();}String state=approve?"RESOLVED":"DISMISSED",decisionAction=approve?"APPROVE_MATCH":"DISMISS",evidence=hash(Map.of("issueId",issueId,"target",Objects.toString(target,"")));db.sql("insert into ouf_udp.human_resolution_decision(decision_id,issue_id,action,target_urban_object_id,actor_subject,authorization_decision_ref,reason,evidence_hash) values(gen_random_uuid(),:i,:x,:t,:a,:d,:r,:e)").param("i",issueId).param("x",decisionAction).param("t",target,Types.OTHER).param("a",actor.subject()).param("d",actor.authorizationDecisionRef()).param("r",reason).param("e",evidence).update();db.sql("update ouf_udp.resolution_issue set state=:s,version=version+1,resolved_at=transaction_timestamp(),resolved_by_subject=:a,resolution_reason=:r,authorization_decision_ref=:d where issue_id=:i and version=:v").param("s",state).param("a",actor.subject()).param("r",reason).param("d",actor.authorizationDecisionRef()).param("i",issueId).param("v",expectedVersion).update();db.sql("update ouf_udp.materialization_job set state='READY',state_version=state_version+1,claimed_by=null,lease_until=null,safe_failure_code=null,updated_at=transaction_timestamp() where handoff_id=:h and (state='SUCCEEDED' or (state='QUARANTINED' and safe_failure_code='UDP_IDENTITY_REVIEW_REQUIRED'))").param("h",issue.get("handoff_id")).update();audit(decisionAction,null,actor,reason,evidence);}
+  @Transactional public void decideResolutionIssue(UUID issueId,long expectedVersion,String action,String reason,UUID target,TrustedHumanContext actor){
+    actor.require("resolution.match.approve");
+    if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_REASON_REQUIRED");
+    boolean approve="APPROVE".equals(action),create="CREATE_NEW".equals(action);
+    if(!approve&&!create&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
+    Map<String,Object> issue=db.sql("select i.handoff_id,i.tenant_id,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
+        .param("i",issueId).param("v",expectedVersion).query().listOfRows().stream().findFirst()
+        .orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"UDP_ISSUE_VERSION_CONFLICT"));
+    if(!actor.tenantId().equals(issue.get("tenant_id")))
+      throw new SecurityException("UDP_REVIEW_TENANT_REQUIRED");
+    if(approve){
+      Object rawCandidates=readAny(String.valueOf(issue.get("candidates")));
+      if(target==null||!(rawCandidates instanceof List<?> candidates)
+          ||candidates.stream().noneMatch(candidate->target.toString().equals(candidate)))
+        throw new IllegalArgumentException("UDP_TARGET_NOT_A_CANDIDATE");
+      if("GOVERNED_IDENTITY".equals(issue.get("strategy_id")))verifyGovernedReviewTarget(issue,target);
+      int changed=db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict(source_id,type_code,source_object_id) do update set urban_object_id=excluded.urban_object_id,state='ACTIVE' where source_binding.state='UNRESOLVED'")
+          .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
+          .param("o",issue.get("source_object_id")).param("u",target)
+          .param("h",issue.get("handoff_id")).update();
+      if(changed!=1)throw new IllegalStateException("UDP_BINDING_CONFLICT");
+    }
+    if(create){
+      if(target!=null||!"GOVERNED_IDENTITY".equals(issue.get("strategy_id")))
+        throw new IllegalArgumentException("UDP_NEW_IDENTITY_DECISION_INVALID");
+      Map<?,?> evidence=governedReviewEvidence(issue);
+      identityScope.acquire(String.valueOf(evidence.get("tenantId")),String.valueOf(evidence.get("canonicalClass")));
+      if(!Boolean.TRUE.equals(evidence.get("complete"))
+          ||!currentIdentityCoverage(evidence)
+          ||db.sql("select 1 from ouf_udp.source_binding where source_id=:s and type_code=:t and source_object_id=:o")
+              .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
+              .param("o",issue.get("source_object_id")).query(Integer.class).optional().isPresent())
+        throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_NEW_IDENTITY_EVIDENCE_STALE");
+    }
+    String state=approve||create?"RESOLVED":"DISMISSED",decisionAction=approve?"APPROVE_MATCH":create?"CREATE_NEW":"DISMISS";
+    String evidence=hash(Map.of("issueId",issueId,"target",Objects.toString(target,"")));
+    db.sql("insert into ouf_udp.human_resolution_decision(decision_id,issue_id,action,target_urban_object_id,actor_subject,authorization_decision_ref,reason,evidence_hash) values(gen_random_uuid(),:i,:x,:t,:a,:d,:r,:e)")
+        .param("i",issueId).param("x",decisionAction).param("t",target,Types.OTHER)
+        .param("a",actor.subject()).param("d",actor.authorizationDecisionRef()).param("r",reason).param("e",evidence).update();
+    db.sql("update ouf_udp.resolution_issue set state=:s,version=version+1,resolved_at=transaction_timestamp(),resolved_by_subject=:a,resolution_reason=:r,authorization_decision_ref=:d where issue_id=:i and version=:v")
+        .param("s",state).param("a",actor.subject()).param("r",reason)
+        .param("d",actor.authorizationDecisionRef()).param("i",issueId).param("v",expectedVersion).update();
+    audit(decisionAction,null,actor,reason,evidence);
+    if(approve||create)db.sql("update ouf_udp.materialization_job set state='READY',state_version=state_version+1,safe_failure_code=null,updated_at=transaction_timestamp() where handoff_id=:h and state='QUARANTINED' and safe_failure_code in ('UDP_RESOLUTION_REVIEW_REQUIRED','UDP_IDENTITY_REVIEW_REQUIRED')")
+        .param("h",issue.get("handoff_id")).update();
+  }
+
+  private Map<?,?> governedReviewEvidence(Map<String,Object> issue){
+    Object raw=readAny(String.valueOf(issue.get("evidence")));
+    if(!(raw instanceof List<?> list)||list.isEmpty()||!(list.getFirst() instanceof Map<?,?> evidence)
+        ||!(evidence.get("tenantId") instanceof String tenant)||tenant.isBlank()
+        ||!tenant.equals(issue.get("tenant_id"))
+        ||!(evidence.get("canonicalClass") instanceof String canonicalClass)||canonicalClass.isBlank()
+        ||!(evidence.get("policyRef") instanceof String)||!(evidence.get("policyVersion") instanceof String))
+      throw new IllegalStateException("UDP_GOVERNED_REVIEW_SCOPE_MISSING");
+    return evidence;
+  }
+
+  private boolean currentIdentityCoverage(Map<?,?> evidence){
+    Object observed=evidence.get("coverageRef");
+    if(!(observed instanceof String ref)||!ref.startsWith("indexed-snapshot://"))return false;
+    String current=db.sql("select coverage_ref from ouf_udp.identity_lookup_coverage where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version and complete")
+        .param("tenant",evidence.get("tenantId")).param("type",evidence.get("canonicalClass"))
+        .param("policy",evidence.get("policyRef")).param("version",evidence.get("policyVersion"))
+        .query(String.class).optional().orElse(null);
+    return current!=null&&ref.startsWith("indexed-snapshot://"+current+"/");
+  }
+
+  private void lockObjectScopes(Collection<UUID> objects){
+    Map<String,List<String>> scopes=new TreeMap<>();
+    for(UUID id:objects){
+      var row=db.sql("select tenant_id,canonical_type from ouf_udp.urban_object where urban_object_id=:id")
+          .param("id",id).query().singleRow();
+      String tenant=String.valueOf(row.get("tenant_id")),type=String.valueOf(row.get("canonical_type"));
+      scopes.put("identity:"+tenant+":"+type,List.of(tenant,type));
+    }
+    for(var scope:scopes.values())identityScope.acquire(scope.get(0),scope.get(1));
+  }
+
+  private void verifyGovernedReviewTarget(Map<String,Object> issue,UUID target){
+    Object raw=readAny(String.valueOf(issue.get("evidence")));
+    if(!(raw instanceof List<?> list)||list.isEmpty()||!(list.getFirst() instanceof Map<?,?> evidence)
+        ||!(evidence.get("tenantId") instanceof String tenant)||tenant.isBlank()
+        ||!(evidence.get("canonicalClass") instanceof String canonicalClass)||canonicalClass.isBlank())
+      throw new IllegalStateException("UDP_GOVERNED_REVIEW_SCOPE_MISSING");
+    identityScope.acquire(tenant,canonicalClass);
+    if(db.sql("select 1 from ouf_udp.urban_object where urban_object_id=:u and tenant_id=:tenant and canonical_type=:type and status='ACTIVE'")
+        .param("u",target).param("tenant",tenant).param("type",canonicalClass)
+        .query(Integer.class).optional().isEmpty())
+      throw new IllegalStateException("UDP_GOVERNED_TARGET_STALE");
+    if(!(evidence.get("assessments") instanceof List<?> assessments))
+      throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+    Map<?,?> selected=null;
+    for(Object item:assessments)
+      if(item instanceof Map<?,?> assessment&&target.toString().equals(assessment.get("objectId")))
+        selected=assessment;
+    if(selected==null||!(selected.get("evidence") instanceof List<?> signals)||signals.isEmpty())
+      throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+    for(Object item:signals){
+      if(!(item instanceof Map<?,?> signal)||!(signal.get("signalId") instanceof String property))
+        throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+      String current=db.sql("select 'contribution://' || p.contribution_id from ouf_udp.urban_object o join ouf_udp.property_value p on p.revision_id=o.current_revision_id where o.urban_object_id=:u and p.property_iri=:p")
+          .param("u",target).param("p",property).query(String.class).optional().orElse(null);
+      if(!Objects.equals(current,signal.get("candidateProvenance")))
+        throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
+    }
+  }
 
   @Transactional(readOnly=true) public Map<String,Object> resolveIdentity(UUID id){Map<String,Object> source=db.sql("select urban_object_id,status,redirect_to,current_revision_id,revision from ouf_udp.urban_object where urban_object_id=:i").param("i",id).query().listOfRows().stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_OBJECT_NOT_FOUND"));Map<String,Object> row=new LinkedHashMap<>(source);if("SPLIT".equals(row.get("status")))row.put("successorIds",db.sql("select successor_ids::text from ouf_udp.object_identity_history where object_id=:i order by occurred_at desc limit 1").param("i",id).query(String.class).list().stream().findFirst().map(this::readAny).orElse(List.of()));return row;}
   @Transactional(readOnly=true) public Plan getPlan(UUID id){return db.sql("select plan_id,action,state,version,impact_json::text impact,proposal_json::text proposal from ouf_udp.governance_plan where plan_id=:i").param("i",id).query((rs,n)->new Plan(rs.getObject("plan_id",UUID.class),rs.getString("action"),rs.getString("state"),rs.getLong("version"),read(rs.getString("impact")),read(rs.getString("proposal")))).list().stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_PLAN_NOT_FOUND"));}

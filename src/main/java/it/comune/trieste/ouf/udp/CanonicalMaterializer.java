@@ -13,10 +13,18 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class CanonicalMaterializer {
-  private final JdbcClient db;private final ObjectMapper json;public CanonicalMaterializer(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
-  @Transactional public Result materialize(String handoffId,UUID urbanObjectId,Map<String,Object> handoff,UdpPorts.MaterializationProfile profile){return materialize(handoffId,urbanObjectId,handoff,profile,false);}
-  @Transactional public Result applyAuthorityDecision(String handoffId,UUID object,Map<String,Object> handoff,UdpPorts.MaterializationProfile profile){return materialize(handoffId,object,handoff,profile,true);}
+  private final JdbcClient db;private final ObjectMapper json;private final GovernedIdentityScopeLock identityScope;
+  public CanonicalMaterializer(JdbcClient db,ObjectMapper json,GovernedIdentityScopeLock identityScope){this.db=db;this.json=json;this.identityScope=identityScope;}
+  @Transactional public Result materialize(String handoffId,UUID urbanObjectId,Map<String,Object> handoff,UdpPorts.MaterializationProfile profile){
+    return materialize(handoffId,urbanObjectId,handoff,profile,false);
+  }
+  @Transactional public Result applyAuthorityDecision(String handoffId,UUID urbanObjectId,Map<String,Object> handoff,UdpPorts.MaterializationProfile profile){
+    return materialize(handoffId,urbanObjectId,handoff,profile,true);
+  }
   private Result materialize(String handoffId,UUID urbanObjectId,Map<String,Object> handoff,UdpPorts.MaterializationProfile profile,boolean refresh){
+    Map<String,Object> scope=db.sql("select tenant_id,canonical_type from ouf_udp.urban_object where urban_object_id=:id")
+        .param("id",urbanObjectId).query().singleRow();
+    identityScope.acquire(String.valueOf(scope.get("tenant_id")),String.valueOf(scope.get("canonical_type")));
     List<Map<String,Object>> old=db.sql("select observation_id,revision_id,material_change from ouf_udp.materialization_observation where handoff_id=:h").param("h",handoffId).query().listOfRows();if(!refresh&&!old.isEmpty())return new Result((UUID)old.getFirst().get("revision_id"),(Boolean)old.getFirst().get("material_change"),true);
     Map<String,Object> change=HandoffIntakeService.object(handoff,"changeRepresentation");String changeFingerprint=fingerprint(change);FastCurrent fast=fastCurrent(urbanObjectId);if(!refresh&&changeFingerprint!=null&&fast!=null&&changeFingerprint.equals(fast.changeFingerprint())){observe(handoffId,urbanObjectId,fast.revisionId(),false,fast.canonicalHash(),changeFingerprint);return new Result(fast.revisionId(),false,false);}
     Map<String,Object> source=HandoffIntakeService.object(handoff,"sourceIdentity"),payload=HandoffIntakeService.object(handoff,"canonicalPayload"),refs=HandoffIntakeService.object(handoff,"contractRefs");String sourceId=HandoffIntakeService.text(source,"sourceId"),mode=HandoffIntakeService.text(change,"mode");OffsetDateTime observed=parse(source.get("observedAt"));Current current=current(urbanObjectId);if(!refresh)validateBase(mode,change,current);

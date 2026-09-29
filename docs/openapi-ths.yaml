@@ -1,6 +1,25 @@
 openapi: 3.1.0
 info: {title: OUF UDP Trusted Human Governance API, version: 1.0.0}
 paths:
+  /api/udp/v1/governance/identity/preflight:
+    post:
+      operationId: prepareGovernedIdentityPreflight
+      x-ouf-capability: urban.identity.preflight
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Frozen configuration hash, policy and complete indexed coverage attested after scoped rebuild}}
+    get:
+      operationId: readGovernedIdentityPreflight
+      x-ouf-capability: urban.identity.preflight
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Current validity of the tenant-scoped attestation identified by id}}
+  /api/udp/v1/governance/internal/identity/preflight:
+    get:
+      operationId: readCurrentGovernedIdentityAttestationForOnboarding
+      x-ouf-capability: ouf.udp.identity.attestation.read
+      x-ouf-mcp-eligible: false
+      responses: {'200': {description: Latest attestation for the exact frozen configuration hash and source, including current coverage validity}}
   /api/udp/v1/governance/replays:
     post:
       operationId: planHistoricalReplay
@@ -87,6 +106,19 @@ paths:
       x-ouf-mcp-eligible: false
       x-ouf-trusted-human-only: true
       responses: {'200': {description: Human decision recorded}}
+  /api/udp/v1/governance/resolution/issues/package:
+    get:
+      operationId: readResolutionReviewPackage
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Complete tenant-scoped OPEN issue snapshot with evidence, candidate references and version hash; read only}}
+  /api/udp/v1/governance/resolution/issues/package/confirm:
+    post:
+      operationId: confirmResolutionReviewPackage
+      x-ouf-capability: resolution.match.approve
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Atomic human confirmation of the entire unchanged issue snapshot}}
   /api/udp/v1/governance/geometry/issues/{id}:
     get:
       operationId: reviewGeometryConflict
