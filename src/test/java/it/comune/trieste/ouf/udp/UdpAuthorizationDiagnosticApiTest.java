@@ -7,9 +7,20 @@ import it.comune.trieste.ouf.authorization.ServletAuthorization;
 import it.comune.trieste.ouf.authorization.TestAuthorization;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 class UdpAuthorizationDiagnosticApiTest {
+  @Test void remainsDisabledUnlessClonePropertyIsExplicitlyEnabled() {
+    var context = new ApplicationContextRunner()
+        .withBean(LocalAuthorization.class, () -> TestAuthorization.runtime(
+            "fixture", "HUMAN", Set.of("urban.identity.preflight")))
+        .withUserConfiguration(UdpAuthorizationDiagnosticApi.class);
+    context.run(beans -> assertThat(beans).doesNotHaveBean(UdpAuthorizationDiagnosticApi.class));
+    context.withPropertyValues("ouf.udp.authorization.diagnostic.enabled=true")
+        .run(beans -> assertThat(beans).hasSingleBean(UdpAuthorizationDiagnosticApi.class));
+  }
+
   @Test void reportsOnlyDecisionMetadataForVerifiedPrincipal() {
     var request = new MockHttpServletRequest();
     TestAuthorization.bind(request, "private-test-subject", "HUMAN",
