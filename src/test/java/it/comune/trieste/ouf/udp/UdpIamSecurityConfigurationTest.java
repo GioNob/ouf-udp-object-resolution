@@ -13,6 +13,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter;
 
 class UdpIamSecurityConfigurationTest {
   private final UdpIamSecurityConfiguration configuration = new UdpIamSecurityConfiguration();
@@ -40,15 +41,19 @@ class UdpIamSecurityConfigurationTest {
     assertThat(authentication).isNotNull();
     SecurityContextHolder.getContext().setAuthentication(authentication);
     var request = new MockHttpServletRequest("POST", "/api/udp/v1/governance/identity/preflight");
-    new UdpIamSecurityConfiguration.TrustedPrincipalBridge().doFilter(
-        request, new MockHttpServletResponse(), (req, res) -> {
+    var response = new MockHttpServletResponse();
+    var servletAdapter = new SecurityContextHolderAwareRequestFilter();
+    servletAdapter.afterPropertiesSet();
+    servletAdapter.doFilter(request, response, (adapted, res) ->
+        new UdpIamSecurityConfiguration.TrustedPrincipalBridge().doFilter(
+            adapted, res, (req, ignored) -> {
           var http = (jakarta.servlet.http.HttpServletRequest) req;
           assertThat(http.getUserPrincipal()).isInstanceOf(TrustedPrincipal.class);
           var principal = (TrustedPrincipal) http.getUserPrincipal();
           assertThat(principal.context().actorType()).isEqualTo(PrincipalContext.ActorType.HUMAN);
           assertThat(principal.context().tenantId()).isEqualTo("ouf-lab");
           assertThat(principal.context().scopes()).contains("urban.identity.preflight");
-        });
+        }));
   }
 
   @Test void serviceRequiresCanonicalWorkloadAndInvalidActorFailsClosed() {

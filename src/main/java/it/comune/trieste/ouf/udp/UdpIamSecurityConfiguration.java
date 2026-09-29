@@ -35,6 +35,7 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.servletapi.SecurityContextHolderAwareRequestFilter;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Binds a validated IAM bearer to the SDK's server-only TrustedPrincipal SPI. */
@@ -94,7 +95,9 @@ public class UdpIamSecurityConfiguration {
         .requestMatchers("/api/udp/v1/governance/**", "/api/internal/v1/**").authenticated()
         .anyRequest().permitAll());
     http.oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(udpTrustedJwtConverter)));
-    http.addFilterAfter(new TrustedPrincipalBridge(), BearerTokenAuthenticationFilter.class);
+    // The servlet API adapter wraps the request and supplies its own principal.
+    // Bind the SDK principal on the final request passed to the controller.
+    http.addFilterAfter(new TrustedPrincipalBridge(), SecurityContextHolderAwareRequestFilter.class);
     return http.build();
   }
 
