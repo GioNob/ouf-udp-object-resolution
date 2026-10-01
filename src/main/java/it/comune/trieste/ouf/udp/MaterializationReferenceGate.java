@@ -12,7 +12,7 @@ public class MaterializationReferenceGate {
     HistoricalContractCatalog.Resolution result;
     try{
       Map<String,Object> refs=HandoffIntakeService.object(claim.payload(),"contractRefs");result=catalog.resolve(refs);
-    }catch(IllegalArgumentException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CONTRACT_INVALID");return false;}catch(IllegalStateException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CATALOG_INVALID");return false;}
+    }catch(IllegalArgumentException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CONTRACT_INVALID",ReferenceFailureEvidence.detail(e));return false;}catch(IllegalStateException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CATALOG_INVALID",ReferenceFailureEvidence.detail(e));return false;}
     if(!result.ready()){jobs.pause(claim,result.missingRefHashes(),delay(claim.integrityAttempts()),maxAttempts);return false;}
     if(claim.integrityBaselineHash()!=null&&!claim.integrityBaselineHash().equals(result.baselineHash())){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_DRIFT");return false;}
     jobs.integrityPassed(claim,result.baselineHash());return true;
