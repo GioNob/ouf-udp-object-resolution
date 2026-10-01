@@ -3,6 +3,10 @@ package it.comune.trieste.ouf.udp;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy;
+import it.comune.trieste.ouf.authorization.PrincipalContext;
+import it.comune.trieste.ouf.authorization.ResourceContext;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
@@ -37,7 +41,11 @@ class MaterializationRecoveryRuntimeTest {
   }
   @Test void reviewIsReadOnlyAndRetryPreservesOriginalDurableInputAndCounters() throws Exception {
     UUID job=fixture("one");String payload=payload(job);
-    var review=recovery.review(job,human(),scope->assertThat(scope).isNotNull());
+    var review=recovery.review(job,human(),scope->{
+      assertThat(scope.organizationId()).isNull();
+      assertThat(scope.attributes()).containsEntry("dataAccessLabel","OPEN")
+          .containsEntry("sourceRef","roads").containsEntry("jobRef","run");
+    });
     assertThat(review.contractReady()).isTrue();assertThat(review.retryEligible()).isTrue();
     assertThat(events()).isZero();assertThat(state(job)).isEqualTo("QUARANTINED");
     var request=request(review,UUID.randomUUID());var receipt=recovery.retry(job,request,human(),scope->{});
@@ -60,6 +68,36 @@ class MaterializationRecoveryRuntimeTest {
     assertThat(state(job)).isEqualTo("SUCCEEDED");
     assertThat(db.sql("select state from ouf_udp.handoff_intake where handoff_id='one'").query(String.class).single())
         .isEqualTo("PROCESSED");
+  }
+  @Test void sdkDataLabelConstraintsProtectBothReviewAndRetryBeforeReferenceRead(){
+    UUID job=fixture("label");
+    var allowed=labelAuthorization(job,"OPEN");
+    var review=recovery.review(job,human(),allowed);
+    reset(catalog);
+    var denied=labelAuthorization(job,"RESTRICTED");
+    assertThatThrownBy(()->recovery.review(job,human(),denied)).isInstanceOf(SecurityException.class);
+    assertThatThrownBy(()->recovery.retry(job,request(review,UUID.randomUUID()),human(),denied))
+        .isInstanceOf(SecurityException.class);
+    verifyNoInteractions(catalog);
+    assertThat(events()).isZero();assertThat(state(job)).isEqualTo("QUARANTINED");
+    when(catalog.resolve(anyMap())).thenReturn(ready(HASH));
+    recovery.retry(job,request(review,UUID.randomUUID()),human(),allowed);
+    assertThat(state(job)).isEqualTo("READY");assertThat(events()).isOne();
+  }
+  private static java.util.function.Consumer<ResourceContext> labelAuthorization(UUID job,String label){
+    var now=Instant.parse("2026-10-01T10:00:00Z");
+    var principal=new PrincipalContext("operator","tenant",PrincipalContext.ActorType.HUMAN,
+        null,"auth-test","issuer","audience",Set.of(CAP));
+    var constraints=new AuthorizationPolicy.GrantConstraints("ALLOW",null,"materialization-job",job.toString(),
+        Map.of("module","UDP","sourceRef","roads","jobRef","run"),Set.of(label),Set.of(),null,Set.of(),null);
+    var grant=new AuthorizationPolicy.Grant("review-grant",CAP,"tenant","operator",null,null,
+        now.minusSeconds(60),now.plusSeconds(600),constraints);
+    var descriptor=new AuthorizationPolicy.CapabilityDescriptor(CAP,"COMMAND",CAP,Set.of(PrincipalContext.ActorType.HUMAN));
+    var policy=new AuthorizationPolicy.PolicyBundle("review-policy",1,now,List.of(descriptor),List.of(grant));
+    return resource->{
+      if(!AuthorizationPolicy.evaluate(policy,principal,resource,CAP,"COMMAND",now).allowed())
+        throw new SecurityException("data label denied");
+    };
   }
   @Test void sameOperationIsIdempotentEvenAfterWorkerClaim(){
     UUID job=fixture("idempotent");var request=request(recovery.review(job,human(),s->{}),UUID.randomUUID());

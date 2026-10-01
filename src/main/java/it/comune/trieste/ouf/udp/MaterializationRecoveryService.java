@@ -144,8 +144,9 @@ public class MaterializationRecoveryService {
   }
   private static ResourceContext resource(Map<String,Object> row,String tenant){
     return new ResourceContext("materialization-job",String.valueOf(row.get("job_id")),tenant,
-        String.valueOf(row.get("access_label")),Map.of("module","UDP","sourceRef",String.valueOf(row.get("source_id")),
-        "jobRef",String.valueOf(row.get("ingestion_run_id")),"typeRef",String.valueOf(row.get("type_code"))));
+        null,Map.of("module","UDP","sourceRef",String.valueOf(row.get("source_id")),
+        "jobRef",String.valueOf(row.get("ingestion_run_id")),"typeRef",String.valueOf(row.get("type_code")),
+        "dataAccessLabel",String.valueOf(row.get("access_label"))));
   }
   private static long version(Map<String,Object> row){return ((Number)row.get("state_version")).longValue();}
   private Map<String,Object> read(String value){try{return json.readValue(value,new TypeReference<>(){});}
