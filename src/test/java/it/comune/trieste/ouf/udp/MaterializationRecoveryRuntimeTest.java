@@ -6,6 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy;
 import it.comune.trieste.ouf.authorization.PrincipalContext;
 import it.comune.trieste.ouf.authorization.ResourceContext;
+import it.comune.trieste.ouf.authorization.LocalAuthorization;
+import it.comune.trieste.ouf.authorization.ServletAuthorization;
+import it.comune.trieste.ouf.authorization.TrustedPrincipal;
+import java.nio.file.Files;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
@@ -13,12 +19,19 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
 
-@SpringBootTest
+@SpringBootTest(properties="ouf.udp.materialization-recovery.enabled=true")
+@AutoConfigureMockMvc(addFilters=false)
 class MaterializationRecoveryRuntimeTest {
   private static final String HASH="sha256:"+"a".repeat(64);
   private static final String CAP=MaterializationRecoveryService.CAPABILITY;
@@ -33,12 +46,80 @@ class MaterializationRecoveryRuntimeTest {
   @Autowired MaterializationReferenceGate gate;
   @Autowired JdbcClient db;
   @Autowired ObjectMapper json;
+  @Autowired MockMvc http;
   @MockBean HistoricalContractCatalog catalog;
 
   @BeforeEach void clean(){
     db.sql("truncate table ouf_udp.handoff_intake,ouf_udp.lake_object restart identity cascade").update();
     reset(catalog);when(catalog.resolve(anyMap())).thenReturn(ready(HASH));
   }
+  @Test void scopedGrantAdmitsHttpReviewAndRetryWithoutGrantOnGenericCapability() throws Exception {
+    UUID job=fixture("http-scoped");String original=payload(job);
+    var engine=scopedPolicy(job,"operator","OPEN","roads");
+    var principal=principal("operator",PrincipalContext.ActorType.HUMAN,Set.of(CAP));
+    assertThat(engine.evaluate(principal,new ResourceContext("capability",null,"tenant",null,Map.of()),CAP,"COMMAND").allowed()).isFalse();
+    var response=http.perform(get(api(job)).with(identity(engine,principal)))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.jobId").value(job.toString()))
+        .andExpect(jsonPath("$.retryEligible").value(true)).andReturn();
+    assertThat(state(job)).isEqualTo("QUARANTINED");assertThat(events()).isZero();
+    var review=json.readValue(response.getResponse().getContentAsByteArray(),MaterializationRecoveryService.Review.class);
+    http.perform(post(api(job)+"/retry").with(identity(engine,principal)).contentType(MediaType.APPLICATION_JSON)
+        .content(json.writeValueAsBytes(request(review,UUID.randomUUID()))))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.acceptedVersion").value(3));
+    assertThat(state(job)).isEqualTo("READY");assertThat(events()).isOne();assertThat(payload(job)).isEqualTo(original);
+  }
+  @Test void scopedHttpAdmissionNeverReleasesOtherJobsSubjectsLabelsOrSources() throws Exception {
+    UUID job=fixture("http-denied"),outside=fixture("http-outside");
+    var principal=principal("operator",PrincipalContext.ActorType.HUMAN,Set.of(CAP));
+    var allowed=scopedPolicy(job,"operator","OPEN","roads");
+    http.perform(get(api(outside)).with(identity(allowed,principal))).andExpect(status().isForbidden());
+    for(var engine:List.of(scopedPolicy(job,"different-human","OPEN","roads"),
+        scopedPolicy(job,"operator","RESTRICTED","roads"),scopedPolicy(job,"operator","OPEN","other-source"))){
+      http.perform(get(api(job)).with(identity(engine,principal))).andExpect(status().isForbidden());
+      http.perform(post(api(job)+"/retry").with(identity(engine,principal)).contentType(MediaType.APPLICATION_JSON)
+          .content(json.writeValueAsBytes(new MaterializationRecoveryService.Request(UUID.randomUUID(),2L,HASH,"reviewed"))))
+          .andExpect(status().isForbidden());
+    }
+    verifyNoInteractions(catalog);assertThat(events()).isZero();assertThat(state(job)).isEqualTo("QUARANTINED");
+    assertThat(state(outside)).isEqualTo("QUARANTINED");
+  }
+  @Test void httpAdmissionRequiresHumanScopeAndRejectsUntrustedActorHeaders() throws Exception {
+    UUID job=fixture("http-principal");var engine=scopedPolicy(job,"operator","OPEN","roads");
+    for(var principal:List.of(principal("operator",PrincipalContext.ActorType.HUMAN,Set.of()),
+        principal("operator",PrincipalContext.ActorType.SERVICE,Set.of(CAP)),
+        principal("operator",PrincipalContext.ActorType.AI_AGENT,Set.of(CAP)))){
+      http.perform(get(api(job)).with(identity(engine,principal))).andExpect(status().isForbidden());
+    }
+    http.perform(get(api(job))).andExpect(status().isForbidden());
+    http.perform(get(api(job)).with(identity(engine,principal("operator",PrincipalContext.ActorType.HUMAN,Set.of(CAP))))
+        .header("X-Actor-Type","HUMAN")).andExpect(status().isBadRequest());
+    verifyNoInteractions(catalog);assertThat(events()).isZero();assertThat(state(job)).isEqualTo("QUARANTINED");
+  }
+  // Real SDK admission/resource enforcement. JWT signature and gateway filters have separate tests.
+  private LocalAuthorization scopedPolicy(UUID job,String subject,String label,String source) throws Exception {
+    var now=Instant.now();
+    var constraints=new AuthorizationPolicy.GrantConstraints("ALLOW",null,"materialization-job",job.toString(),
+        Map.of("module","UDP","sourceRef",source,"jobRef","run","typeRef","ROAD"),Set.of(label),Set.of(),null,Set.of(),null);
+    var grant=new AuthorizationPolicy.Grant("http-job-grant",CAP,"tenant",subject,null,null,
+        now.minusSeconds(60),now.plusSeconds(600),constraints);
+    var descriptor=new AuthorizationPolicy.CapabilityDescriptor(CAP,"COMMAND",CAP,Set.of(PrincipalContext.ActorType.HUMAN));
+    var bundle=new AuthorizationPolicy.PolicyBundle("http-recovery-policy",1,now,List.of(descriptor),List.of(grant));
+    var engine=new LocalAuthorization(Clock.systemUTC(),Duration.ofMinutes(5));
+    byte[] bytes=json.writeValueAsBytes(bundle);var path=Files.createTempFile("recovery-http-policy-",".json");
+    try{
+      Files.write(path,bytes);String hash=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+      assertThat(engine.refresh(new LocalAuthorization.BundleReference(path,bundle.bundleId(),1,hash,1)).installed()).isTrue();
+    }finally{Files.deleteIfExists(path);}
+    return engine;
+  }
+  private static PrincipalContext principal(String subject,PrincipalContext.ActorType actor,Set<String> scopes){
+    return new PrincipalContext(subject,"tenant",actor,null,"http-auth","issuer","audience",scopes);
+  }
+  private static RequestPostProcessor identity(LocalAuthorization engine,PrincipalContext principal){
+    return request->{request.getServletContext().setAttribute(ServletAuthorization.RUNTIME,engine);
+      request.setUserPrincipal(new TrustedPrincipal(principal));return request;};
+  }
+  private static String api(UUID job){return "/api/udp/v1/governance/materialization/jobs/"+job;}
   @Test void reviewIsReadOnlyAndRetryPreservesOriginalDurableInputAndCounters() throws Exception {
     UUID job=fixture("one");String payload=payload(job);
     var review=recovery.review(job,human(),scope->{
