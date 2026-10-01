@@ -60,3 +60,6 @@ ouf.udp.search:
   audience: ${OUF_UDP_SEARCH_AUDIENCE:}
   workload: ${OUF_UDP_SEARCH_WORKLOAD:}
   owner-key-file: ${OUF_UDP_SEARCH_OWNER_KEY_FILE:}
+
+ouf.udp.materialization-recovery:
+  enabled: ${OUF_UDP_MATERIALIZATION_RECOVERY_ENABLED:false}

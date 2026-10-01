@@ -1,6 +1,238 @@
 openapi: 3.1.0
 info: {title: OUF UDP Trusted Human Governance API, version: 1.0.0}
 paths:
+  /api/udp/v1/governance/materialization/jobs/{id}:
+    get:
+      operationId: reviewTechnicalMaterializationQuarantine
+      x-ouf-capability: udp.materialization.retry
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Feature-gated tenant and source scoped review of one original durable job; validates historical contracts using the live Spring mapper without materialization. Payload, token and raw references are excluded.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: State version, eligibility, contract check, verified baseline and exact snapshot hash}
+        '403': {description: Human capability or resource scope denied}
+        '404': {description: No job backed by RAW metadata in the authorized tenant}
+  /api/udp/v1/governance/materialization/jobs/{id}/retry:
+    post:
+      operationId: authorizeOriginalMaterializationRetry
+      x-ouf-capability: udp.materialization.retry
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Requeues only a technical reference quarantine before canonical side effects. Preserves original job and handoff, payload, baseline and counters. Atomically appends human evidence. Successful response acknowledges READY admission, not materialization completion. Duplicate operation returns its original accepted version without requeue.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operationId, expectedVersion, expectedSnapshotHash, reason]
+              properties:
+                operationId: {type: string, format: uuid}
+                expectedVersion: {type: integer, minimum: 0}
+                expectedSnapshotHash: {type: string, pattern: '^sha256:[0-9a-f]{64}  /api/udp/v1/governance/identity/preflight:
+    post:
+      operationId: prepareGovernedIdentityPreflight
+      x-ouf-capability: urban.identity.preflight
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Frozen configuration hash, policy and complete indexed coverage attested after scoped rebuild}}
+    get:
+      operationId: readGovernedIdentityPreflight
+      x-ouf-capability: urban.identity.preflight
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Current validity of the tenant-scoped attestation identified by id}}
+  /api/udp/v1/governance/internal/identity/preflight:
+    get:
+      operationId: readCurrentGovernedIdentityAttestationForOnboarding
+      x-ouf-capability: ouf.udp.identity.attestation.read
+      x-ouf-mcp-eligible: false
+      responses: {'200': {description: Latest attestation for the exact frozen configuration hash and source, including current coverage validity}}
+  /api/udp/v1/governance/replays:
+    post:
+      operationId: planHistoricalReplay
+      x-ouf-capability: udp.replay.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Immutable REPRODUCE plan, READY or PAUSED by reference-integrity gate}}
+  /api/udp/v1/governance/replays/{id}/resume:
+    post:
+      operationId: resumeHistoricalReplay
+      x-ouf-capability: udp.replay.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Revalidated REPRODUCE plan}}
+  /api/udp/v1/governance/replays/{id}/execute:
+    post:
+      operationId: executeHistoricalReplay
+      x-ouf-capability: udp.replay.execute
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Durable replay handoff pinned to the historical baseline}}
+  /api/udp/v1/governance/replays/{id}/abort:
+    post:
+      operationId: abortHistoricalReplay
+      x-ouf-capability: udp.replay.execute
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Aborted plan with retained evidence and no execution}}
+  /api/udp/v1/governance/lake/shadow-rebuilds:
+    post:
+      operationId: planLakeShadowRebuild
+      x-ouf-capability: lake.shadow.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Frozen tenant and tier rebuild plan}}
+  /api/udp/v1/governance/lake/shadow-rebuilds/{id}/cutover:
+    post:
+      operationId: cutoverLakeShadowRebuild
+      x-ouf-capability: lake.shadow.cutover
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Governed physical locator cutover}}
+  /api/udp/v1/governance/lake/shadow-rebuilds/{id}/rollback:
+    post:
+      operationId: rollbackLakeShadowRebuild
+      x-ouf-capability: lake.shadow.rollback
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Governed rollback to frozen source locators}}
+  /api/udp/v1/governance/lake/objects/{id}/deletion:
+    post:
+      operationId: authorizeLakeObjectDeletion
+      x-ouf-capability: lake.object.delete
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Deletion pending after all guards pass}}
+  /api/udp/v1/governance/merge/plans:
+    post:
+      operationId: planMerge
+      x-ouf-capability: urban.merge.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Immutable impact plan}}
+  /api/udp/v1/governance/merge/plans/{id}/execute:
+    post:
+      operationId: executeMerge
+      x-ouf-capability: urban.object.merge
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Executed merge}}
+  /api/udp/v1/governance/split/plans:
+    post:
+      operationId: planSplit
+      x-ouf-capability: urban.split.plan
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Immutable impact plan}}
+  /api/udp/v1/governance/split/plans/{id}/execute:
+    post:
+      operationId: executeSplit
+      x-ouf-capability: urban.object.split
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Executed split}}
+  /api/udp/v1/governance/resolution/issues/{id}/decisions:
+    post:
+      operationId: decideResolutionIssue
+      x-ouf-capability: resolution.match.approve
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Human decision recorded}}
+  /api/udp/v1/governance/resolution/issues/package:
+    get:
+      operationId: readResolutionReviewPackage
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      responses: {'200': {description: Complete tenant-scoped OPEN issue snapshot with evidence, candidate references and version hash; read only}}
+  /api/udp/v1/governance/resolution/issues/package/confirm:
+    post:
+      operationId: confirmResolutionReviewPackage
+      x-ouf-capability: resolution.match.approve
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      responses: {'200': {description: Atomic human confirmation of the entire unchanged issue snapshot}}
+  /api/udp/v1/governance/geometry/issues/{id}:
+    get:
+      operationId: reviewGeometryConflict
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      description: Returns both geometries only after tenant, source and data-label authorization, including urban.geometry.read. The initial Gateway profile permits OPEN/ANONYMOUS only, even for more privileged principals. Coordinates are in EPSG:4326; original envelopes and provenance are retained.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Exact current and candidate revisions with permitted actions}
+        '403': {description: Evidence is not authorized}
+        '404': {description: Issue or active tenant object is unavailable}
+  /api/udp/v1/governance/geometry/issues/{id}/decisions:
+    post:
+      operationId: decideGeometryConflict
+      x-ouf-capability: authority.override
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Requires the human session cookie and X-OUF-CSRF from the review GET. Human choice applies to this exact pair and policy. Atomically records immutable evidence and resumes the paused handoff. It does not create a global source priority.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedCurrentRevision, chosenRevision, reason]
+              properties:
+                expectedCurrentRevision: {type: string, format: uuid}
+                chosenRevision: {type: string, format: uuid}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Immutable decision reference; an identical authorized retry returns the same reference}
+        '403': {description: Human capability or access to either geometry is missing}
+        '409': {description: Stale geometry, invalid selection or conflicting repeated decision}
+  /api/udp/v1/governance/properties/conflicts/{id}:
+    get:
+      operationId: reviewPropertyConflict
+      x-ouf-capability: resolution.issue.read
+      x-ouf-mcp-eligible: true
+      description: Authorize every candidate and return the exact policy/evidence snapshot. Initial exposure is OPEN/ANONYMOUS only. Verified humans also receive a session-bound csrfToken; machine callers never receive it.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Current revision and permitted scalar candidates with provenance}
+        '403': {description: At least one candidate is not authorized}
+        '404': {description: Conflict or active tenant object unavailable}
+        '409': {description: Geometry must use the geometry review workflow}
+  /api/udp/v1/governance/properties/conflicts/{id}/decisions:
+    post:
+      operationId: decidePropertyConflict
+      x-ouf-capability: authority.override
+      x-ouf-mcp-eligible: false
+      x-ouf-trusted-human-only: true
+      description: Requires the human session cookie and X-OUF-CSRF from the review GET. Validates exact current revision, candidates, evidence and policy; appends an immutable decision and a canonical revision atomically. Unrelated properties are preserved.
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {name: X-OUF-CSRF, in: header, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedCurrentRevision, chosenContribution, reason]
+              properties:
+                expectedCurrentRevision: {type: string, format: uuid}
+                chosenContribution: {type: string, format: uuid}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Immutable decision reference; exact authorized retry is idempotent}
+        '403': {description: Human authority, classification, session or CSRF check failed}
+        '409': {description: Evidence changed or choice no longer eligible}
+}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: Immutable operation receipt and accepted version; worker processing is asynchronous}
+        '400': {description: Invalid confirmation request}
+        '403': {description: Human capability or exact resource scope denied}
+        '404': {description: Job not visible in authorized tenant}
+        '409': {description: Stale snapshot/version, ineligible job, unresolved contracts, baseline drift or operation conflict}
   /api/udp/v1/governance/identity/preflight:
     post:
       operationId: prepareGovernedIdentityPreflight
