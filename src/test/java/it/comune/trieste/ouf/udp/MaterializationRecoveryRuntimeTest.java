@@ -103,7 +103,7 @@ class MaterializationRecoveryRuntimeTest {
     when(catalog.resolve(anyMap())).thenThrow(new IllegalArgumentException("private profile body"));
     var invalid=recovery.review(job,human(),s->{});assertThat(invalid.contractCheck()).isEqualTo("CONTRACT_INVALID");
     assertThat(invalid.toString()).doesNotContain("private profile body");
-    when(catalog.resolve(anyMap())).thenReturn(ready(HASH));
+    doReturn(ready(HASH)).when(catalog).resolve(anyMap());
     db.sql("update ouf_udp.materialization_job set integrity_baseline_hash=:hash where job_id=:id")
         .param("hash","sha256:"+"c".repeat(64)).param("id",job).update();
     var drift=recovery.review(job,human(),s->{});
