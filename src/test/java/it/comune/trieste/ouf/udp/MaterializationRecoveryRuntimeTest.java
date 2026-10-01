@@ -113,7 +113,8 @@ class MaterializationRecoveryRuntimeTest {
     return engine;
   }
   private static PrincipalContext principal(String subject,PrincipalContext.ActorType actor,Set<String> scopes){
-    return new PrincipalContext(subject,"tenant",actor,null,"http-auth","issuer","audience",scopes);
+    return new PrincipalContext(subject,"tenant",actor,
+        actor==PrincipalContext.ActorType.SERVICE?"test-service":null,"http-auth","issuer","audience",scopes);
   }
   private static RequestPostProcessor identity(LocalAuthorization engine,PrincipalContext principal){
     return request->{request.getServletContext().setAttribute(ServletAuthorization.RUNTIME,engine);
