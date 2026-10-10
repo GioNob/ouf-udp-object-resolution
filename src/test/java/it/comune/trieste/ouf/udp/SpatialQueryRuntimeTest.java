@@ -15,7 +15,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
 
-@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
+@org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 @SpringBootTest
 class SpatialQueryRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
