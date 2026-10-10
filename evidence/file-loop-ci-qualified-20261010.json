@@ -1,0 +1,35 @@
+{
+  "schema": "ouf.component.file-loop-ci-qualification.v1",
+  "date": "2026-10-10",
+  "repository": "ouf-udp-object-resolution",
+  "sourceCommit": "c7a158a9d8b9f514fd2d9dd6e80a659a407e1b96",
+  "workflowRuns": [
+    {
+      "id": 38065524321,
+      "name": "UDP Object Resolution module CI",
+      "conclusion": "success"
+    },
+    {
+      "id": 38065524250,
+      "name": "R2d governed CRS and grid execution",
+      "conclusion": "success"
+    },
+    {
+      "id": 38065524252,
+      "name": "Shared Authorization SDK pairwise",
+      "conclusion": "success"
+    }
+  ],
+  "mainIntegrated": true,
+  "javaTests": {
+    "run": 127,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "newIdentityRegressionCases": 14,
+  "scope": "Automatic candidate lookup, source-binding reuse, materializing replay, HUMAN approval and merge; not all governance or weighted strategies",
+  "applicationHealthProven": false,
+  "releaseAcceptance": false,
+  "verificationScope": "Pinned source revision; not a new VPS read or deployment"
+}
