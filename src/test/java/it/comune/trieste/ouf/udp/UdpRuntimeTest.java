@@ -27,6 +27,69 @@ class UdpRuntimeTest {
 
   @Test void resolutionDecisionAndEventsAreAppendOnly(){Map<String,Object> payload=handoff("h-history","o-4","R4","History");intake.accept(payload);resolution.resolve("h-history",payload,profile);assertThatThrownBy(()->db.sql("delete from ouf_udp.resolution_decision where handoff_id='h-history'").update()).hasStackTraceContaining("append-only");assertThatThrownBy(()->db.sql("delete from ouf_udp.handoff_event where handoff_id='h-history'").update()).hasStackTraceContaining("append-only");}
 
+
+  @Test void sameAttributesAcrossDifferentNaturesNeverMatch(){
+    var cinema=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://cinema/1","schema:MovieTheater","code","name");
+    var address=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://address/1","schema:PostalAddress","code","name");
+    var a=handoff("h-cinema","cinema-row","SAME-CODE","Via Roma 12");intake.accept(a);
+    var first=resolution.resolve("h-cinema",a,cinema);
+    var b=handoff("h-address","address-row","SAME-CODE","Via Roma 12");intake.accept(b);
+    var second=resolution.resolve("h-address",b,address);
+    assertThat(first.outcome()).isEqualTo("NEW_OBJECT");assertThat(second.outcome()).isEqualTo("NEW_OBJECT");
+    assertThat(second.targetUrbanObjectId()).isNotEqualTo(first.targetUrbanObjectId());
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isEqualTo(2);
+  }
+
+  @Test void sourceBindingCannotBypassReclassification(){
+    var a=handoff("h-original","same-row","R1","Via Roma 12");intake.accept(a);
+    var original=resolution.resolve("h-original",a,profile);
+    var b=handoff("h-reclassified","same-row","R1","Via Roma 12");intake.accept(b);
+    var address=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://address/1","schema:PostalAddress","code","name");
+    var reviewed=resolution.resolve("h-reclassified",b,address);
+    assertThat(reviewed.outcome()).isEqualTo("REVIEW_REQUIRED");assertThat(reviewed.targetUrbanObjectId()).isNull();
+    assertThat(db.sql("select reason_code from ouf_udp.resolution_issue").query(String.class).single()).isEqualTo("UDP_SOURCE_BINDING_SCOPE_MISMATCH");
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='same-row'").query(UUID.class).single()).isEqualTo(original.targetUrbanObjectId());
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    assertThat(resolution.resolve("h-reclassified",b,address)).isEqualTo(new ObjectResolutionService.Decision("REVIEW_REQUIRED",null,true));
+  }
+
+  @Test void foreignTenantBindingCannotBeReusedOrExposed(){
+    var a=handoff("h-tenant-old","tenant-row","R1","Main");intake.accept(a);var original=resolution.resolve("h-tenant-old",a,profile);
+    db.sql("update ouf_udp.urban_object set tenant_id='another-tenant' where urban_object_id=:u").param("u",original.targetUrbanObjectId()).update();
+    var b=handoff("h-tenant-new","tenant-row","R1","Main");intake.accept(b);var reviewed=resolution.resolve("h-tenant-new",b,profile);
+    assertThat(reviewed.outcome()).isEqualTo("REVIEW_REQUIRED");assertThat(reviewed.targetUrbanObjectId()).isNull();
+    assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.resolution_issue").query(Integer.class).single()).isZero();
+  }
+
+  @Test void inactiveBindingCannotBeReused(){
+    var a=handoff("h-inactive-old","inactive-row","R1","Main");intake.accept(a);var original=resolution.resolve("h-inactive-old",a,profile);
+    db.sql("update ouf_udp.urban_object set status='DELETED' where urban_object_id=:u").param("u",original.targetUrbanObjectId()).update();
+    var b=handoff("h-inactive-new","inactive-row","R1","Main");intake.accept(b);
+    assertThat(resolution.resolve("h-inactive-new",b,profile).outcome()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+  }
+
+  @Test void duplicateReplayCannotBypassCurrentNatureGuard(){
+    var a=handoff("h-replay-nature","same-row","R1","Main");intake.accept(a);resolution.resolve("h-replay-nature",a,profile);
+    var changed=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://address/1","schema:PostalAddress","code","name");
+    assertThatThrownBy(()->resolution.resolve("h-replay-nature",a,changed)).isInstanceOf(SecurityException.class).hasMessage("UDP_RESOLUTION_REPLAY_TARGET_SCOPE_MISMATCH");
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_decision").query(Long.class).single()).isOne();
+  }
+
+  @Test void blankMatchAttributesDoNotProvideIdentityEvidence(){
+    var a=handoff("h-blank-a","blank-a","R1","  ");intake.accept(a);var first=resolution.resolve("h-blank-a",a,profile);
+    var b=handoff("h-blank-b","blank-b","R2","");intake.accept(b);var second=resolution.resolve("h-blank-b",b,profile);
+    assertThat(first.outcome()).isEqualTo("NEW_OBJECT");assertThat(second.outcome()).isEqualTo("NEW_OBJECT");
+    assertThat(second.targetUrbanObjectId()).isNotEqualTo(first.targetUrbanObjectId());
+  }
+
+  @Test void sameNatureBindingAndReplayPreserveIdentity(){
+    var a=handoff("h-continuity-a","continuity","R1","Old name");intake.accept(a);var first=resolution.resolve("h-continuity-a",a,profile);
+    var b=handoff("h-continuity-b","continuity","R1","New name");intake.accept(b);var second=resolution.resolve("h-continuity-b",b,profile);
+    assertThat(second.outcome()).isEqualTo("MATCH");assertThat(second.targetUrbanObjectId()).isEqualTo(first.targetUrbanObjectId());
+    assertThat(resolution.resolve("h-continuity-b",b,profile)).isEqualTo(new ObjectResolutionService.Decision("MATCH",first.targetUrbanObjectId(),true));
+  }
+
   private void seed(String key,String match){db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,canonical_key,match_key) values(gen_random_uuid(),'ouf:Road',:k,:m)").param("k",key.toLowerCase()).param("m",match).update();}
   private static Map<String,Object> handoff(String id,String object,String code,String name){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId","roads","typeCode","ROAD","sourceObjectId",object))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",code,"name",name)),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
