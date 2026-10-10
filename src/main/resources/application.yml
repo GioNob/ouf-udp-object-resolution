@@ -1,4 +1,5 @@
 spring:
+  http.converters.preferred-json-mapper: jackson2
   application.name: ouf-udp-object-resolution
   datasource:
     url: ${OUF_UDP_DB_URL}

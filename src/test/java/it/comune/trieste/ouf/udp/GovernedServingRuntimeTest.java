@@ -10,7 +10,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
 
-@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
+@org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 @SpringBootTest
 class GovernedServingRuntimeTest {
   private static final String SEARCH_KEY="ab".repeat(32);

@@ -18,8 +18,8 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -47,7 +47,7 @@ class MaterializationRecoveryRuntimeTest {
   @Autowired JdbcClient db;
   @Autowired ObjectMapper json;
   @Autowired MockMvc http;
-  @MockBean HistoricalContractCatalog catalog;
+  @MockitoBean HistoricalContractCatalog catalog;
 
   @BeforeEach void clean(){
     db.sql("truncate table ouf_udp.handoff_intake,ouf_udp.lake_object restart identity cascade").update();
