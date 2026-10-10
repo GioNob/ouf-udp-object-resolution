@@ -11,3 +11,11 @@ Prima del rilascio servono CI della combinazione effettiva, test natura/tenant s
 Questa revisione non cambia SQL, motore, policy, JAR/immagine live o autorità di installazione. Resta candidato, non release acceptance.
 
 Riferimenti: https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide ; https://docs.spring.io/spring-boot/4.0/reference/features/json.html ; main qualificato c7a158a9d8b9f514fd2d9dd6e80a659a407e1b96.
+
+## Guard identità trasferiti selettivamente
+
+I 14 nuovi casi main sono aggiunti, conservando tutte le suite governate/recovery preesistenti. Resolver storico: binding/replay validano natura, tenant e stato, nessun target per REVIEW non risolta; una review HUMAN risolta resta riprendibile con scope ricontrollato. Query candidati e binding sono serializzati senza cambiare WeightedIdentity/GovernedIdentityEngine o la policy pubblicata. Decisioni legacy nuove conservano scope nella prova append-only.
+
+Merge pianificato/eseguito richiede natura/tenant compatibili e tenant HUMAN; l'esecuzione conserva le scope lock avanzate. L'approvazione legacy legge lo scope dalla decisione immutabile, prende le lock nello stesso ordine e ricontrolla il target. Il percorso GOVERNED_IDENTITY conserva le prove strutturate, coverage e riapertura review stale già installati; nessuna sostituzione con stringhe legacy. Errori/binding conflict esistenti restano stabili.
+
+Le prove devono essere eseguite sul nuovo SHA prima di qualificare il candidato. Nessun apply target o nuovo gate storico chiuso.
