@@ -56,7 +56,9 @@ class IdentityGovernanceRuntimeTest {
   }
   @Test void legacyIssueWithoutFrozenScopeCannotBeApprovedByGuessing(){
     UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID original=reviewIssue();
-    UUID issue=db.sql("insert into ouf_udp.resolution_issue(issue_id,resolution_decision_id,handoff_id,reason_code,candidate_refs,evidence_refs) select gen_random_uuid(),resolution_decision_id,handoff_id,reason_code,candidate_refs,'[]'::jsonb from ouf_udp.resolution_issue where issue_id=:i returning issue_id").param("i",original).query(UUID.class).single();
+    intake.accept(handoff("legacy-h","legacy-row","same"));
+    UUID decision=db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref) select gen_random_uuid(),'legacy-h','handoff://legacy-h','REVIEW_REQUIRED',strategy_id,strategy_version,'[]'::jsonb,decided_by,policy_ref from ouf_udp.resolution_decision where handoff_id='review-h' returning resolution_decision_id").query(UUID.class).single();
+    UUID issue=db.sql("insert into ouf_udp.resolution_issue(issue_id,resolution_decision_id,handoff_id,reason_code,candidate_refs,evidence_refs) select gen_random_uuid(),:d,'legacy-h',reason_code,candidate_refs,'[]'::jsonb from ouf_udp.resolution_issue where issue_id=:i returning issue_id").param("d",decision).param("i",original).query(UUID.class).single();
     assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");assertReviewUntouched(issue);
   }
   @Test void mergeCannotJoinDifferentNaturesOrTenants(){
