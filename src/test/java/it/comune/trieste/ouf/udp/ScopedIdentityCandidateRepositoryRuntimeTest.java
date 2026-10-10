@@ -399,6 +399,46 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(new GovernedIdentityEngine().decide(two,incoming,retrieved).outcome())
         .isEqualTo(GovernedIdentityEngine.Outcome.NEW_OBJECT);
   }
+
+  @Test void governedLookupExcludesIdenticalValuesFromOtherNaturesAndTenants(){
+    clearObjects();
+    UUID foreignNature=materialize("address","Same address"),foreignTenant=materialize("foreign","Same address");
+    db.sql("update ouf_udp.urban_object set canonical_type='ouf:PostalAddress' where urban_object_id=:u")
+        .param("u",foreignNature).update();
+    db.sql("update ouf_udp.urban_object set tenant_id='another-ente' where urban_object_id=:u")
+        .param("u",foreignTenant).update();
+    UUID eligible=materialize("cinema","Same address");
+    assertThat(backfill.rebuild(policy()).indexedObjects()).isOne();
+    var retrieved=candidates.retrieve(policy(),subject("Same address"));
+    assertThat(retrieved.complete()).isTrue();
+    assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(eligible);
+    var decision=new GovernedIdentityEngine().decide(policy(),subject("Same address"),retrieved);
+    assertThat(decision.outcome()).isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+    assertThat(decision.objectId()).isEqualTo(eligible);
+  }
+
+  @Test void governedSourceBindingCannotCrossNatureOrTenantEvenWithIdenticalProperties(){
+    clearObjects();
+    UUID original=materialize("existing","Same address");
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",
+        List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    for(String drift:List.of("nature","tenant")){
+      db.sql("update ouf_udp.urban_object set tenant_id=:tenant,canonical_type=:type where urban_object_id=:u")
+          .param("tenant",drift.equals("tenant")?"another-ente":"default")
+          .param("type",drift.equals("nature")?"ouf:PostalAddress":"ouf:Road").param("u",original).update();
+      Map<String,Object> incoming=envelope("drift-"+drift,"Same address");
+      incoming.put("sourceIdentity",Map.of("sourceId","registry","typeCode","ROAD","sourceObjectId","existing",
+          "observedAt","2026-09-12T00:00:00Z"));
+      intake.accept(incoming);
+      var result=governed.resolve("candidate-drift-"+drift,incoming,mapping,policy());
+      assertThat(result.outcome()).isEqualTo("REVIEW_REQUIRED");
+      assertThat(result.targetUrbanObjectId()).isNull();
+      assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_id='registry' and source_object_id='existing'")
+          .query(UUID.class).single()).isEqualTo(original);
+      assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    }
+  }
+
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
   private GovernedIdentityEngine.Policy policy(){return new GovernedIdentityEngine.Policy("policy://identity/1","1","default","ouf:Road","registry",1,true,
         List.of(new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
