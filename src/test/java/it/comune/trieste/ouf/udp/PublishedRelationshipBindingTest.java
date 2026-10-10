@@ -28,6 +28,25 @@ class PublishedRelationshipBindingTest {
     var b=bundle();map(((List<Map<String,Object>>)b.get("relationshipMappings")).getFirst(),"resolution").put("onMultipleMatches","FIRST");
     assertThatThrownBy(()->resolve(b)).hasMessage("UDP_PINNED_PROFILE_INVALID");
   }
+  @Test void weightedProposalBindsItsPolicyAndRejectsUnmappedBlockingFields()throws Exception{
+    var b=bundle();var runtime=map(map(b,"extractionProfile"),"runtime");
+    var udp=map(runtime,"udp");var resolution=map(udp,"resolution");
+    resolution.put("weighted",new LinkedHashMap<>(Map.of("signals",List.of(Map.of("property","ref","comparator","TEXT","weight",1)),"blockingProperties",List.of("ref"),"maxCandidates",10,"highThreshold",.85,"reviewThreshold",.5,"minimumMargin",.1,"allowSpatialIdentity",false)));
+    assertThat(resolve(b).resolution().weighted().blockingProperties()).containsExactly("ref");
+    map(resolution,"weighted").put("blockingProperties",List.of("controller"));
+    assertThatThrownBy(()->resolve(b)).hasMessage("UDP_PINNED_PROFILE_INVALID");
+  }
+  @Test void futureOrIncompleteIdentityProfileCannotFallBackToLegacyMatch()throws Exception{
+    var governed=bundle();map(map(map(map(governed,"extractionProfile"),"runtime"),"udp"),"resolution")
+        .put("governedIdentity",Map.of("ref","policy://future"));
+    assertThatThrownBy(()->resolve(governed)).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+    var unknown=bundle();map(map(map(map(unknown,"extractionProfile"),"runtime"),"udp"),"resolution")
+        .put("futureStrategy",Map.of());
+    assertThatThrownBy(()->resolve(unknown)).hasMessage("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
+    var incomplete=bundle();map(map(map(map(incomplete,"extractionProfile"),"runtime"),"udp"),"resolution")
+        .remove("matchProperty");
+    assertThatThrownBy(()->resolve(incomplete)).hasMessage("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
+  }
   private PublishedRuntimeConfiguration.Profiles resolve(Map<String,Object> bundle)throws Exception{
     bundle.remove("checksum");String hash="sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(new TreeMap<>(bundle))));bundle.put("checksum",hash);
     byte[] response=json.writeValueAsBytes(Map.of("tenantId","tenant-a","sourceId","cameras","checksum",hash,"bundle",bundle));

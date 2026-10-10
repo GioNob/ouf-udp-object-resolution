@@ -12,7 +12,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest
 class CanonicalMaterializerRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
-  @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;
+  @Autowired PropertyGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;
   private final UdpPorts.ResolutionProfile resolutionProfile=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code");
   private final UdpPorts.MaterializationProfile authorityProfile=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry","survey")),new UdpPorts.PropertyRule("surface","ouf:surface","number","RESTRICTED",List.of("survey","registry"))));
 
@@ -25,6 +25,113 @@ class CanonicalMaterializerRuntimeTest {
   @Test void propertyAuthorityIsSpecificAndNotLastWriteWins(){Fixture registry=resolved("h-reg","registry","r-reg","R1","Authoritative",10);materializer.materialize("h-reg",registry.objectId,registry.payload,authorityProfile);Fixture survey=resolved("h-survey","survey","r-survey","R1","Later but fallback",99);materializer.materialize("h-survey",survey.objectId,survey.payload,authorityProfile);String current=db.sql("select canonical_payload::text from ouf_udp.object_revision where revision_id=(select current_revision_id from ouf_udp.urban_object where urban_object_id=:u)").param("u",registry.objectId).query(String.class).single();assertThat(current).contains("Authoritative","99").doesNotContain("Later but fallback","10");}
 
   @Test void equalAuthorityConflictCreatesIssueAndPreservesCurrentValue(){var open=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));Fixture a=resolved("h-c1","source-a","c1","R1","First",1);materializer.materialize("h-c1",a.objectId,a.payload,open);Fixture b=resolved("h-c2","source-b","c2","R1","Second",1);var result=materializer.materialize("h-c2",b.objectId,b.payload,open);assertThat(result.materialChange()).isFalse();assertThat(db.sql("select count(*) from ouf_udp.property_conflict where state='OPEN'").query(Long.class).single()).isOne();String current=db.sql("select canonical_payload::text from ouf_udp.object_revision where revision_id=(select current_revision_id from ouf_udp.urban_object where urban_object_id=:u)").param("u",a.objectId).query(String.class).single();assertThat(current).contains("First").doesNotContain("Second");}
+
+  @Test void updatedPolicyReevaluatesHistoricalRanksWithoutRewritingContributions(){
+    Fixture a=resolved("rank-a","registry","r-a","R1","Registry value",10);materializer.materialize("rank-a",a.objectId,a.payload,authorityProfile);
+    Fixture b=resolved("rank-b","survey","r-b","R1","Survey value",99);materializer.materialize("rank-b",b.objectId,b.payload,authorityProfile);
+    var changed=new UdpPorts.MaterializationProfile("policy://authority/2",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("survey","registry"))));
+    Fixture next=resolved("rank-c","registry","r-a","R1","Registry value",10);materializer.materialize("rank-c",next.objectId,next.payload,changed);
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state where urban_object_id=:u").param("u",a.objectId).query(String.class).single()).isEqualTo("Survey value");
+    assertThat(db.sql("select authority_rank from ouf_udp.property_contribution where handoff_id='rank-a' and property_iri='ouf:name'").query(Integer.class).single()).isZero();
+  }
+
+  @Test void weightedIdentityMatchesDifferentSourceKeysAndPersistsEvidence(){
+    var mapped=new UdpPorts.MaterializationProfile("policy://weighted-fixture",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of()),new UdpPorts.PropertyRule("surface","surface","number","OPEN",List.of())));
+    Fixture first=resolved("weighted-a","registry","native-a","KEY-A","Via Roma",42);
+    materializer.materialize("weighted-a",first.objectId,first.payload,mapped);
+    var policy=new WeightedIdentity.Policy(List.of(new WeightedIdentity.Signal("name","TEXT",1,null)),List.of("surface"),null,10,.85,.5,.1,false);
+    var weighted=new UdpPorts.ResolutionProfile("COMPOSITE","1","policy://weighted/1","ouf:Road","code","code",policy);
+    var incoming=handoff("weighted-b","survey","native-b","DIFFERENT-KEY","Via Romo",42);intake.accept(incoming);
+    var decision=resolution.resolve("weighted-b",incoming,weighted);
+    assertThat(decision.outcome()).isEqualTo("MATCH");assertThat(decision.targetUrbanObjectId()).isEqualTo(first.objectId);
+    assertThat(db.sql("select confidence from ouf_udp.resolution_decision where handoff_id='weighted-b'").query(Double.class).single()).isEqualTo(.875);
+    assertThat(db.sql("select score_evidence::text from ouf_udp.resolution_decision where handoff_id='weighted-b'").query(String.class).single()).contains("HIGH_CONFIDENCE_UNIQUE","name:TEXT").doesNotContain("Via Romo");
+    assertThat(resolution.resolve("weighted-b",incoming,weighted).duplicate()).isTrue();
+  }
+
+  @Test void incompleteWeightedEvidenceOpensReviewWithoutCreatingAnotherObjectOrBinding(){
+    var mapped=new UdpPorts.MaterializationProfile("policy://weighted-fixture",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of()),new UdpPorts.PropertyRule("surface","surface","number","OPEN",List.of())));
+    Fixture first=resolved("missing-a","registry","native-a","KEY-A","Via Roma",42);
+    materializer.materialize("missing-a",first.objectId,first.payload,mapped);
+    var policy=new WeightedIdentity.Policy(List.of(new WeightedIdentity.Signal("name","EXACT",.7,null),new WeightedIdentity.Signal("surface","NUMBER",.3,10.0)),List.of("surface"),null,10,.85,.5,.1,false);
+    var profile=new UdpPorts.ResolutionProfile("COMPOSITE","1","policy://weighted/1","ouf:Road","code","code",policy);
+    var incoming=handoff("missing-b","survey","native-b","DIFFERENT-KEY","unused",42);
+    incoming.put("canonicalPayload",Map.of("code","DIFFERENT-KEY","surface",42));
+    intake.accept(incoming);
+    var decision=resolution.resolve("missing-b",incoming,profile);
+    assertThat(decision.outcome()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(decision.targetUrbanObjectId()).isNull();
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_udp.source_binding where source_id='survey'").query(Long.class).single()).isZero();
+    assertThat(db.sql("select reason_code from ouf_udp.resolution_issue where handoff_id='missing-b'").query(String.class).single()).isEqualTo("IDENTITY_EVIDENCE_INCOMPLETE");
+    assertThat(db.sql("select score_evidence::text from ouf_udp.resolution_decision where handoff_id='missing-b'").query(String.class).single()).contains("missingSignals","name:EXACT").doesNotContain("Via Roma");
+    assertThat(resolution.resolve("missing-b",incoming,profile).duplicate()).isTrue();
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_issue where handoff_id='missing-b'").query(Long.class).single()).isOne();
+  }
+
+  @Test void humanPropertyChoiceIsAuthorizedImmutableAndScopedToExactEvidence(){
+    var profile=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of()),new UdpPorts.PropertyRule("surface","ouf:surface","number","OPEN",List.of())));
+    Fixture a=resolved("human-a","source-a","a","R1","First",1);materializer.materialize("human-a",a.objectId,a.payload,profile);
+    Fixture b=resolved("human-b","source-b","b","R1","Second",1);materializer.materialize("human-b",b.objectId,b.payload,profile);
+    UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
+    UUID before=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='human-b' and property_iri='ouf:name'").query(UUID.class).single();
+    var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
+    var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+    var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThat(governance.review(issue,auth)).containsEntry("currentRevision",before);
+    var machine=new TrustedHumanContext("SERVICE_IDENTITY","operator","default",caps,"authz://review","review-1");
+    assertThatThrownBy(()->governance.decide(issue,before,chosen,"Verified",machine,auth)).isInstanceOf(SecurityException.class);
+    var denied=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of(),"authz://review","review-1");
+    assertThatThrownBy(()->governance.review(issue,denied)).hasMessageContaining("403");
+    var foreign=new ServingAuthorizationContext("HUMAN","operator","other",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThatThrownBy(()->governance.review(issue,foreign)).hasMessageContaining("404");
+    assertThatThrownBy(()->governance.decide(issue,UUID.randomUUID(),chosen,"Verified",actor,auth)).hasMessageContaining("409");
+    UUID decision=governance.decide(issue,before,chosen,"Verified",actor,auth);
+    assertThat(governance.decide(issue,before,chosen,"Verified",actor,auth)).isEqualTo(decision);
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
+    assertThat(db.sql("select authority_state::text from ouf_udp.urban_object_current_state").query(String.class).single()).contains("property-decision://"+decision);
+    assertThat(db.sql("select count(*) from ouf_udp.property_value where revision_id=(select current_revision_id from ouf_udp.urban_object)").query(Long.class).single()).isEqualTo(2);
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation").query(Long.class).single()).isEqualTo(2);
+    assertThatThrownBy(()->db.sql("update ouf_udp.human_property_decision set reason='changed'").update()).hasStackTraceContaining("append-only");
+    Fixture repeat=resolved("human-repeat","source-b","b","R1","Second",1);materializer.materialize("human-repeat",repeat.objectId,repeat.payload,profile);
+    assertThat(db.sql("select count(*) from ouf_udp.property_conflict").query(Long.class).single()).isOne();
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
+    Fixture changed=resolved("human-changed","source-b","b","R1","Third",1);materializer.materialize("human-changed",changed.objectId,changed.payload,profile);
+    assertThat(db.sql("select count(*) from ouf_udp.property_conflict where state='OPEN'").query(Long.class).single()).isOne();
+    assertThat(db.sql("select canonical_payload->>'ouf:name' from ouf_udp.urban_object_current_state").query(String.class).single()).isEqualTo("Second");
+  }
+
+  @Test void propertyChoiceRejectsStaleContributionsEvenWhenCanonicalRevisionIsUnchanged(){
+    var profile=new UdpPorts.MaterializationProfile("policy://authority/tie",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    Fixture a=resolved("stale-a","source-a","a","R1","First",1);materializer.materialize("stale-a",a.objectId,a.payload,profile);
+    Fixture b=resolved("stale-b","source-b","b","R1","Second",1);materializer.materialize("stale-b",b.objectId,b.payload,profile);
+    UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
+    UUID before=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='stale-b'").query(UUID.class).single();
+    Fixture c=resolved("stale-c","source-b","b","R1","Third",1);materializer.materialize("stale-c",c.objectId,c.payload,profile);
+    var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
+    var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+    var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThatThrownBy(()->governance.decide(issue,before,chosen,"Verified",actor,auth)).hasMessageContaining("409");
+    assertThat(db.sql("select count(*) from ouf_udp.human_property_decision").query(Long.class).single()).isZero();
+  }
+
+  @Test void supersededAuthorityPolicyCannotBeOverriddenThroughAnOldConflict(){
+    var profile=new UdpPorts.MaterializationProfile("policy://tie/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of())));
+    Fixture a=resolved("policy-a","source-a","a","R1","First",1);materializer.materialize("policy-a",a.objectId,a.payload,profile);
+    Fixture b=resolved("policy-b","source-b","b","R1","Second",1);materializer.materialize("policy-b",b.objectId,b.payload,profile);
+    UUID issue=db.sql("select conflict_id from ouf_udp.property_conflict").query(UUID.class).single();
+    UUID chosen=db.sql("select contribution_id from ouf_udp.property_contribution where handoff_id='policy-b'").query(UUID.class).single();
+    var next=new UdpPorts.MaterializationProfile("policy://tie/2",profile.properties());
+    Fixture repeat=resolved("policy-new","source-b","b","R1","Second",1);materializer.materialize("policy-new",repeat.objectId,repeat.payload,next);
+    UUID current=db.sql("select current_revision_id from ouf_udp.urban_object").query(UUID.class).single();
+    var caps=Set.of("authority.override","resolution.issue.read","urban.object.read");
+    var actor=new TrustedHumanContext("HUMAN","operator","default",caps,"authz://review","review-1");
+    var auth=new ServingAuthorizationContext("HUMAN","operator","default",caps,Set.of("OPEN"),"authz://review","review-1");
+    assertThatThrownBy(()->governance.decide(issue,current,chosen,"Verified",actor,auth)).hasMessageContaining("409");
+    assertThat(db.sql("select count(*) from ouf_udp.human_property_decision").query(Long.class).single()).isZero();
+  }
 
   private Fixture resolved(String handoff,String source,String object,String code,String name,int surface){Map<String,Object> payload=handoff(handoff,source,object,code,name,surface);intake.accept(payload);var decision=resolution.resolve(handoff,payload,resolutionProfile);return new Fixture(decision.targetUrbanObjectId(),payload);}
   private static Map<String,Object> handoff(String id,String source,String object,String code,String name,int surface){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"typeCode","ROAD","sourceObjectId",object,"observedAt","2026-09-12T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",code,"name",name,"surface",surface)),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}

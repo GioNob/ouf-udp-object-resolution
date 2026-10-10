@@ -27,7 +27,6 @@ class UdpRuntimeTest {
 
   @Test void resolutionDecisionAndEventsAreAppendOnly(){Map<String,Object> payload=handoff("h-history","o-4","R4","History");intake.accept(payload);resolution.resolve("h-history",payload,profile);assertThatThrownBy(()->db.sql("delete from ouf_udp.resolution_decision where handoff_id='h-history'").update()).hasStackTraceContaining("append-only");assertThatThrownBy(()->db.sql("delete from ouf_udp.handoff_event where handoff_id='h-history'").update()).hasStackTraceContaining("append-only");}
 
-
   @Test void sameAttributesAcrossDifferentNaturesNeverMatch(){
     var cinema=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://cinema/1","schema:MovieTheater","code","name");
     var address=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://address/1","schema:PostalAddress","code","name");

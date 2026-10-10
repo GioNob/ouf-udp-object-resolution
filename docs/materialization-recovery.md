@@ -1,0 +1,44 @@
+# Governed original materialization retry
+
+Candidate implementation based on deployed UDP `edaba2bff18a2aaf52d1180f21f0e68984cc3437` / Flyway34. No new migration. API disabled by default; enable only through explicit installation binding `OUF_UDP_MATERIALIZATION_RECOVERY_ENABLED=true`, after release acceptance, IAM/policy and Gateway bindings are proven.
+
+PET UDP1.3 §§109.6,109.7,109.9: state/version control, re-run from evidence, point-of-use historical reference integrity and recovery audit. Ingestion1.3 §45.2: durable ACK does not prove completed canonical materialization. This operation resumes the original durable job; it is separate from HistoricalReplayService REPRODUCE, which creates a new handoff/job.
+
+## Capability and environment acceptance
+
+New capability `udp.materialization.retry`, required scope of the same name, HUMAN only, MCP-ineligible, privileged governance operation. Both review GET and retry POST use server-verified TrustedHumanContext and a second SDK owner decision on the same request snapshot. Resource kind materialization-job; tenant and RAW access label; scopes module UDP, sourceRef, jobRef (ingestion run), typeRef. Do not install unrestricted SERVICE/AI_AGENT grants or reuse replay grants. Capability descriptor, intended human grant and IAM scope must be governed/activated through the platform catalogue workflow, then exact Gateway GET/POST route bindings and owner deny/allow evidence verified. This candidate does not activate policies, create scopes/grants or expose Gateway routes.
+
+Required installation bindings: existing configured IAM issuer/audience, UDP tenant, Gateway URL, rotating SERVICE execution-token directory, policy registry configuration, DB/S3 bindings, plus the feature switch. No lab source, tenant, domain, image tag, user or host value is hardcoded in production code. The exact scope semantics must be registered in the shared capability catalogue before publication; default-off API and missing descriptor deny remain release blockers.
+
+## Preconditions and transaction
+
+GET `/api/udp/v1/governance/materialization/jobs/{jobId}` is read-only. It returns safe state, stateVersion, counts, contract check, verified baseline and snapshot hash, never payload, contractRefs or credentials. HistoricalContractCatalog uses the actual live Spring ObjectMapper and current publication/Semantic resolver; this GET is the live mapper validation still missing from the isolated Java probe.
+
+Eligible state: jobQUARANTINED, intakeDURABLE, no claim/lease, RAW metadata same tenant/source/type in VERIFIED/COMPACTED/COLD, and failure code limited to REFERENCE_INTEGRITY_CONTRACT_INVALID, CATALOG_INVALID or MISSING. No resolution decision, canonical revision, property contribution, materialization observation or initial source binding for the handoff may exist. HUMAN resolution review, baseline DRIFT and successful/failed materialization jobs are excluded. RAW metadata durability is checked; this operation is not an independent S3 byte/hash verification.
+
+POST `/{jobId}/retry` requires operationId UUID, expectedVersion, exact expectedSnapshotHash from fresh review and bounded explicit reason. Application transaction acquires operation advisory lock and row locks on job, intake and RAW metadata, authorizes exact resource, checks current contracts and unchanged snapshot, and refuses to replace any stored integrity baseline. Transition QUARANTINED -> READY advances stateVersion once. Original job/handoff IDs, ingestion run, durable payload/RAW refs, historical baseline, attempts, integrityAttempts and prior failure evidence are retained. Worker performs normal reference gate and resolution asynchronously. A200 receipt proves authorized requeue, not success or eight-row materialization.
+
+Operation UUID is the append-only handoff_event primary key. Exact repeated actor/tenant/job/version/snapshot/reason returns the original acceptedVersion, even after worker claim/completion, without a second retry. Reused operation with different request conflicts. Event and job update commit atomically; audit failure rolls back requeue. Two concurrent confirmations of the same version cannot both commit. Append-only event stores actor, subject, tenant, authorization decision ref, correlation, reason, old code, versions, snapshot/verified baseline and request fingerprint. No raw refs/payload/token are stored in this new event.
+
+Future reference-gate quarantines retain allowlisted symbolic nested code and at most four application Java frames/category alongside the original safeFailureCode. Arbitrary exception messages, Jackson body details, credentials and cause dumps are omitted. Existing historical events remain unchanged; lost historical details cannot be reconstructed by this additive instrumentation.
+
+## Release and operator workflow
+
+1. Candidate build/full test/Flyway compatibility/SDK packaging/security gates; stopped candidate prepared from current environment/mounts, private receipt and rollback/backup evidence. No live deployment is implied by this candidate.
+2. Governed registration/activation of capability, scope and exact human resource grant; Gateway bindings plus direct-owner and Gateway negative SERVICE/AI_AGENT/source/tenant tests.
+3. Explicitly enable feature in candidate installation configuration. Read the exact three scoped original jobs with a fresh HUMAN login; verify eligibility and live reference readiness. Show exact job/run/source, version and effect to the operator.
+4. Only after explicit operator confirmation in the same human session, POST each original job using stable private operation IDs/receipts. Do not replay Ingestion or reactivate consumed trigger_once schedule.
+5. Read back original run/handoff/job ID sets: still eight original handoffs, eightPROCESSED/SUCCEEDED, no remaining original technical quarantines, observations/revisions/bindings/objects assessed according to resolution semantics, original failure/retry events preserved. Search and independent S3 readback remain separate acceptance gates.
+6. If a retry fails, preserve its new symbolic diagnostic evidence and stop; do not loop retries or mutate frozen bundles.
+
+Tests introduced: real PostgreSQL recovery tests for read-only review, durable input/counter preservation, worker continuation, idempotence after claim, stale version/snapshot, authorization/tenant/resource denies, missing/invalid/drifting contracts, HUMAN-review/success exclusion, canonical decision exclusion, concurrent confirmations and audit rollback; safe diagnostic unit tests. Execution evidence is recorded in CI, not assumed from writing tests.
+
+## Candidate verification checkpoint 2026-10-01
+
+Candidate code `b437f0fb2e3a732342c1334d30120b4c04af224c`: focused PostgreSQL17 CI run36833579424 SUCCESS, 14 tests / zero failures / zero errors / zero skipped (recovery9, safe diagnostics2, existing integrity gate3). SDK dependency tests10 also pass. Shared Authorization SDK pairwise and R2d CRS/grid workflows SUCCESS. Full module/supply-chain/DR/performance workflow still running; no release acceptance is implied. Draft PR38 targets frozen deployed-baseline branch `codex/r4a-materialization-recovery-base`, exactly `edaba2bff18a2aaf52d1180f21f0e68984cc3437`, because main predates the deployed runtime. Review diff is isolated from preceding unreconciled branch history.
+
+Registration input `catalogue/r4a-udp-materialization-recovery.json` uses the platform's immutable ownerRef/descriptor schema, owner udp, operation COMMAND, requiredScope equal capability, HUMAN only. Locally validated by the existing batch registrar with MANIFEST_VALID / NO_NETWORK_OR_WRITES. It contains no tenant, subject, domain or deployment binding. Registration does not publish the policy or grant permissions. Use the existing generic HUMAN registrar/lifecycle with explicit endpoint/token bindings; the legacy registrar Device Grant helper contains lab defaults and must not be used as a portable deploy primitive without parameterization. Activation/grant simulation, IAM binding and Gateway/owner evidence remain TODO.
+
+## Candidate security gate 2026-10-01
+
+Code b437f0fb2e3a732342c1334d30120b4c04af224c full module run36833579517: Java21/PostgreSQL17 and production image SUCCESS, disaster-recovery drill SUCCESS, performance baseline SUCCESS; supply-chain deployment failed only Enforce vulnerability gate. Scanner reports two HIGH findings in jackson-databind2.21.6, CVE-2026-91776 and CVE-2026-91777, fixed in2.21.7 (and other maintained branches). Upgrade the existing Jackson BOM within2.21 to2.21.7; official FasterXML jackson-bom-2.21.7 tag/pom checked, no suppressions or gate changes. Repeat focused/full/SDK/profile/security/deploy-chart gates for the patched candidate. Patched candidate CI remains pending. Other live modules with older BOMs are a separate cross-module release review item; this candidate changes no live module.

@@ -1,0 +1,20 @@
+{
+  "source": "bc336208ce41876f2854c3a4d8623fb6698bdcdd",
+  "baseline": "83249a897eb4add4289b5181b3299f48ea4c0f99",
+  "migrationCount": 34,
+  "tests": 208,
+  "failures": 0,
+  "errors": 0,
+  "preexistingSkipped": 2,
+  "newTestsExecuted": 16,
+  "workflowRuns": [
+    38068463646,
+    38068463744,
+    38068463572,
+    38068463688,
+    38068463612
+  ],
+  "imageId": "sha256:32fa42e3f906b8c8092a94e6a0a77fc5c5100e8f29583027478146ed5f97cfd3",
+  "freshHighCriticalFindings": 0,
+  "deploymentAuthorized": false
+}

@@ -23,7 +23,7 @@ public class ServingConsumerFixture {
     @Bean FilterRegistrationBean<Filter> identity()throws Exception{
       String serviceToken=required("OUF_PAIRWISE_TOKEN"),humanToken=required("OUF_PAIRWISE_HUMAN_TOKEN");
       Set<String> serviceCaps=Set.of("datalake.write","udp.candidate.write");
-      Set<String> humanCaps=Set.of("urban.relationship.read","urban.geometry.read","urban.object.search","urban.object.read","urban.object.history.read","lineage.object.read","lineage.source.read","udp.replay.plan","udp.replay.execute");
+      Set<String> humanCaps=Set.of("authority.override","resolution.issue.read","urban.relationship.read","urban.geometry.read","urban.object.search","urban.object.read","urban.object.history.read","lineage.object.read","lineage.source.read","udp.replay.plan","udp.replay.execute");
       var service=TestAuthorization.runtime("fixture-ingestion","SERVICE",serviceCaps);var human=TestAuthorization.runtime("fixture-human","HUMAN",humanCaps);
       var descriptors=new ArrayList<CapabilityDescriptor>(service.currentSnapshot().bundle().capabilities());descriptors.addAll(human.currentSnapshot().bundle().capabilities());
       var grants=new ArrayList<Grant>(service.currentSnapshot().bundle().grants());grants.addAll(human.currentSnapshot().bundle().grants());

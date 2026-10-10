@@ -1,0 +1,13 @@
+[
+  {
+    "ownerRef": "udp",
+    "descriptor": {
+      "capabilityId": "udp.materialization.retry",
+      "operation": "COMMAND",
+      "requiredScope": "udp.materialization.retry",
+      "allowedActors": [
+        "HUMAN"
+      ]
+    }
+  }
+]
