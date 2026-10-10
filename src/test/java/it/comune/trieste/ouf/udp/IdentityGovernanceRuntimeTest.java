@@ -15,7 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 class IdentityGovernanceRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
   @Autowired IdentityGovernanceService governance;@Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired JdbcClient db;
-  private final TrustedHumanContext human=new TrustedHumanContext("HUMAN_USER","operator-1","tenant-1",Set.of("urban.merge.plan","urban.object.merge","urban.split.plan","urban.object.split","resolution.match.approve"),"authz://decision/1","corr-1");
+  private final TrustedHumanContext human=new TrustedHumanContext("HUMAN_USER","operator-1","default",Set.of("urban.merge.plan","urban.object.merge","urban.split.plan","urban.object.split","resolution.match.approve"),"authz://decision/1","corr-1");
 
   @BeforeEach void clean(){db.sql("truncate table ouf_udp.merge_resolution_issue,ouf_udp.merge_property_contribution_link,ouf_udp.human_resolution_decision,ouf_udp.split_resolution_issue,ouf_udp.relationship_identity_history,ouf_udp.source_binding_history,ouf_udp.object_identity_history,ouf_udp.governance_audit,ouf_udp.governance_plan,ouf_udp.spatial_resolution_issue,ouf_udp.urban_geometry_current,ouf_udp.urban_geometry,ouf_udp.relationship_issue,ouf_udp.relationship_revision,ouf_udp.relationship_contribution,ouf_udp.urban_relationship,ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
 
@@ -29,9 +29,69 @@ class IdentityGovernanceRuntimeTest {
 
   @Test void actorHeadersAreRejectedInsteadOfBecomingTrustContext(){MockHttpServletRequest request=new MockHttpServletRequest();request.addHeader("X-Actor-Type","HUMAN_USER");request.setAttribute("ouf.actorType","HUMAN_USER");request.setAttribute("ouf.subject","operator");request.setAttribute("ouf.tenantId","tenant");request.setAttribute("ouf.capabilities",Set.of("urban.object.merge"));request.setAttribute("ouf.authorizationDecisionRef","authz://1");request.setAttribute("ouf.correlationId","corr");assertThatThrownBy(()->TrustedHumanApi.trusted(request)).isInstanceOf(ResponseStatusException.class).hasMessageContaining("400");}
 
+  @Test void humanApprovalRejectsCandidateReclassificationAfterProposal(){
+    UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID issue=reviewIssue();
+    db.sql("update ouf_udp.urban_object set canonical_type='ouf:PostalAddress' where urban_object_id=:i").param("i",target).update();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_RESOLUTION_TARGET_SCOPE_MISMATCH");assertReviewUntouched(issue);
+  }
+  @Test void humanApprovalRejectsForeignTenantAndInactiveCandidate(){
+    UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID issue=reviewIssue();
+    db.sql("update ouf_udp.urban_object set tenant_id='foreign' where urban_object_id=:i").param("i",target).update();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_RESOLUTION_TARGET_SCOPE_MISMATCH");assertReviewUntouched(issue);
+    db.sql("update ouf_udp.urban_object set tenant_id='default',status='DELETED' where urban_object_id=:i").param("i",target).update();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_RESOLUTION_TARGET_SCOPE_MISMATCH");assertReviewUntouched(issue);
+  }
+  @Test void humanFromAnotherTenantCannotApproveCandidate(){
+    UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID issue=reviewIssue();
+    var other=new TrustedHumanContext("HUMAN","other","foreign",human.capabilities(),"authz://other","corr-other");
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,other)).isInstanceOf(SecurityException.class).hasMessage("UDP_IDENTITY_TENANT_MISMATCH");assertReviewUntouched(issue);
+  }
+  @Test void changedBindingCannotBeFalselyReportedAsApproved(){
+    UUID target=seedCandidate("A","same"),other=seedCandidate("B","same");UUID issue=reviewIssue();
+    db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values('roads','ROAD','incoming',:u,'review-h')").param("u",other).update();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_SOURCE_BINDING_CHANGED_DURING_REVIEW");
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:i").param("i",issue).query(String.class).single()).isEqualTo("OPEN");
+    assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision").query(Long.class).single()).isZero();
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'").query(UUID.class).single()).isEqualTo(other);
+  }
+  @Test void legacyIssueWithoutFrozenScopeCannotBeApprovedByGuessing(){
+    UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID original=reviewIssue();
+    UUID issue=db.sql("insert into ouf_udp.resolution_issue(issue_id,resolution_decision_id,handoff_id,reason_code,candidate_refs,evidence_refs) select gen_random_uuid(),resolution_decision_id,handoff_id,reason_code,candidate_refs,'[]'::jsonb from ouf_udp.resolution_issue where issue_id=:i returning issue_id").param("i",original).query(UUID.class).single();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");assertReviewUntouched(issue);
+  }
+  @Test void mergeCannotJoinDifferentNaturesOrTenants(){
+    UUID a=object("A"),b=object("B");
+    db.sql("update ouf_udp.urban_object set canonical_type='ouf:PostalAddress' where urban_object_id=:i").param("i",b).update();
+    assertThatThrownBy(()->governance.planMerge(a,b,human)).hasMessageContaining("UDP_IDENTITY_SCOPE_MISMATCH");
+    db.sql("update ouf_udp.urban_object set canonical_type='ouf:Road',tenant_id='foreign' where urban_object_id=:i").param("i",b).update();
+    assertThatThrownBy(()->governance.planMerge(a,b,human)).hasMessageContaining("UDP_IDENTITY_SCOPE_MISMATCH");
+    assertThat(db.sql("select count(*) from ouf_udp.governance_plan").query(Long.class).single()).isZero();
+  }
+  @Test void mergeRechecksScopeAtExecutionAndActorTenantAtPlanning(){
+    UUID a=object("A"),b=object("B");
+    var other=new TrustedHumanContext("HUMAN","other","foreign",human.capabilities(),"authz://other","corr-other");
+    assertThatThrownBy(()->governance.planMerge(a,b,other)).isInstanceOf(SecurityException.class);
+    var plan=governance.planMerge(a,b,human);
+    db.sql("update ouf_udp.urban_object set canonical_type='ouf:PostalAddress' where urban_object_id=:i").param("i",b).update();
+    assertThatThrownBy(()->governance.executeMerge(plan.planId(),0,"review","scope-merge",human)).hasMessageContaining("UDP_IDENTITY_SCOPE_MISMATCH");
+    assertThat(governance.getPlan(plan.planId()).state()).isEqualTo("DRAFT");
+    assertThat(db.sql("select count(*) from ouf_udp.object_identity_history").query(Long.class).single()).isZero();
+  }
+  private UUID reviewIssue(){
+    Map<String,Object> payload=handoff("review-h","incoming","same");intake.accept(payload);
+    var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");
+    assertThat(resolution.resolve("review-h",payload,profile).outcome()).isEqualTo("REVIEW_REQUIRED");
+    return db.sql("select issue_id from ouf_udp.resolution_issue").query(UUID.class).single();
+  }
+  private void assertReviewUntouched(UUID issue){
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:i").param("i",issue).query(String.class).single()).isEqualTo("OPEN");
+    assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_udp.source_binding where source_object_id='incoming'").query(Long.class).single()).isZero();
+  }
   private UUID object(String key){UUID id=UUID.randomUUID();db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,canonical_key,match_key) values(:i,'ouf:Road',:k,:m)").param("i",id).param("k",key.toLowerCase()).param("m",key.toLowerCase()).update();return id;}
   private UUID seedCandidate(String key,String match){UUID id=UUID.randomUUID();db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,canonical_key,match_key) values(:i,'ouf:Road',:k,:m)").param("i",id).param("k",key.toLowerCase()).param("m",match).update();return id;}
   private void binding(String handoff,String source,String type,String sourceObject,UUID target){db.sql("insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,content_hash,payload_json,receipt_ref) values(:h,'run','ing',:s,:t,:o,:c,'{}',:r)").param("h",handoff).param("s",source).param("t",type).param("o",sourceObject).param("c","sha256:"+handoff).param("r","udp://"+handoff).update();db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h)").param("s",source).param("t",type).param("o",sourceObject).param("u",target).param("h",handoff).update();}
   private static Map<String,Object> handoff(String id,String object,String name){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId","roads","typeCode","ROAD","sourceObjectId",object))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("identity",object,"name",name)),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://1","bundleRef","bundle://1","semanticPublicationSetRef","semantic://1","adapterProfileRef","adapter://1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-13T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
 }
+
