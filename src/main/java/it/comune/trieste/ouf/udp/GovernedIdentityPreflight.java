@@ -15,8 +15,9 @@ public class GovernedIdentityPreflight {
   private final JdbcClient db;
   private final ObjectMapper json;
   private final GovernedIdentityIndexBackfill index;
-  public GovernedIdentityPreflight(JdbcClient db,ObjectMapper json,GovernedIdentityIndexBackfill index){
-    this.db=db;this.json=json;this.index=index;
+  private final GovernedIdentityScopeLock locks;
+  public GovernedIdentityPreflight(JdbcClient db,ObjectMapper json,GovernedIdentityIndexBackfill index,GovernedIdentityScopeLock locks){
+    this.db=db;this.json=json;this.index=index;this.locks=locks;
   }
 
   @Transactional public Attestation prepare(String sourceId,String configurationHash,
@@ -47,8 +48,18 @@ public class GovernedIdentityPreflight {
             &&canonicalClass.equals(target.get("classIri"))))throw invalid("CLASS");
     var policy=PublishedIdentityPolicy.decode(json,resolution,actor.tenantId(),sourceId,
         canonicalClass,mapped);
+    // Serialize with existing scope materialization/rebuild writers. Repeated delivery of
+    // the same immutable review reconciles its live proof instead of replacing coverage.
+    locks.acquire(policy.tenantId(),policy.canonicalClass());
+    String fingerprint=ScopedIdentityCandidateRepository.fingerprint(policy);
+    var retained=db.sql("select attestation_id from ouf_udp.identity_preactivation_attestation where configuration_hash=:hash and source_id=:source and tenant_id=:tenant order by created_at desc,attestation_id desc limit 1")
+        .param("hash",configurationHash).param("source",sourceId).param("tenant",actor.tenantId()).query(UUID.class).list();
+    if(!retained.isEmpty()){
+      var previous=read(retained.getFirst(),actor.tenantId());
+      if(previous.valid()&&fingerprint.equals(previous.policyFingerprint()))return previous;
+    }
     var rebuilt=index.rebuild(policy);
-    UUID id=UUID.randomUUID();String fingerprint=ScopedIdentityCandidateRepository.fingerprint(policy);
+    UUID id=UUID.randomUUID();
     db.sql("insert into ouf_udp.identity_preactivation_attestation(attestation_id,configuration_hash,tenant_id,source_id,canonical_class,policy_ref,policy_version,policy_fingerprint,coverage_ref,indexed_objects,actor_subject) values(:id,:hash,:tenant,:source,:class,:policy,:version,:fingerprint,:coverage,:count,:actor)")
         .param("id",id).param("hash",configurationHash).param("tenant",actor.tenantId())
         .param("source",sourceId).param("class",canonicalClass).param("policy",policy.ref())

@@ -246,9 +246,22 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     var attestation=preflight.prepare("registry",hash,configuration,admin);
     assertThat(attestation.valid()).isTrue();
     assertThat(attestation.indexedObjects()).isOne();
+    // Concurrent/retried delivery keeps the same durable evidence and coverage generation.
+    try(var workers=java.util.concurrent.Executors.newFixedThreadPool(2)){
+      var start=new java.util.concurrent.CountDownLatch(1);
+      var first=workers.submit(()->{start.await();return preflight.prepare("registry",hash,configuration,admin);});
+      var second=workers.submit(()->{start.await();return preflight.prepare("registry",hash,configuration,admin);});
+      start.countDown();
+      assertThat(first.get(10,java.util.concurrent.TimeUnit.SECONDS).attestationId()).isEqualTo(attestation.attestationId());
+      assertThat(second.get(10,java.util.concurrent.TimeUnit.SECONDS).coverageRef()).isEqualTo(attestation.coverageRef());
+    }
     db.sql("update ouf_udp.urban_object_current_state set updated_at=transaction_timestamp()")
         .update();
     assertThat(preflight.status(attestation.attestationId(),admin).valid()).isFalse();
+    var refreshed=preflight.prepare("registry",hash,configuration,admin);
+    assertThat(refreshed.valid()).isTrue();
+    assertThat(refreshed.attestationId()).isNotEqualTo(attestation.attestationId());
+    assertThat(refreshed.coverageRef()).isNotEqualTo(attestation.coverageRef());
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     clearObjects();
