@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 /** Exact historical publication resolution over the Gateway, including checksum validation. */
 @Component @ConditionalOnProperty(name="ouf.udp.execution.enabled",havingValue="true")
 public class PublishedRuntimeConfiguration {
+  static final int MAX_SEMANTIC_REFERENCES=32;
   private final ObjectMapper json;private final URI gateway;private final Path token;private final String tenant;private final HttpClient http;
   public PublishedRuntimeConfiguration(ObjectMapper json,@Value("${ouf.udp.execution.gateway-url}") String gateway,@Value("${ouf.udp.execution.token-file}") String token,@Value("${ouf.udp.lake.tenant-id}") String tenant){
     this.json=json;this.gateway=URI.create(gateway);this.token=Path.of(token);this.tenant=tenant;
@@ -99,7 +100,7 @@ public class PublishedRuntimeConfiguration {
     var resolved=new ArrayList<HistoricalContractCatalog.ResolvedRef>();
     for(String key:List.of("sourceSchemaRef","semanticPublicationSetRef","adapterProfileRef"))if(!text(execution,key).equals(text(refs,key)))throw invalid();
     for(String key:List.of("mappingRefs","authorityPolicyRef","relationshipResolutionStrategyRefs"))if(!Objects.equals(execution.get(key),refs.get(key)))throw invalid();
-    Object raw=bundle.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>20)throw invalid();
+    Object raw=bundle.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw invalid();
     boolean publicationFound=false;
     for(Object item:bindings){if(!(item instanceof Map<?,?>))throw invalid();@SuppressWarnings("unchecked")var binding=(Map<String,Object>)item;
       String id=text(binding,"semanticId"),revision=UUID.fromString(text(binding,"revisionId")).toString(),publication=UUID.fromString(text(binding,"publicationSetId")).toString();
