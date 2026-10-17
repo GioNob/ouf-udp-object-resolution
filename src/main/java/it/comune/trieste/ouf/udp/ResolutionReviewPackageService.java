@@ -102,13 +102,14 @@ public class ResolutionReviewPackageService {
           String.valueOf(row.get("type_code")),null,null,row.get("incoming_fields")!=null,
           fields(row.get("incoming_fields")));
       Map<String,ReviewObject> objects=new LinkedHashMap<>();
-      for(String ref:refs)objects.put(ref,candidate(ref,tenant,expectedType,lock));
+      Map<String,Object> previews=new LinkedHashMap<>();
+      for(String ref:refs){objects.put(ref,candidate(ref,tenant,expectedType,lock));previews.put(ref,LinkedPropertyPreview.prepare(db,json,String.valueOf(row.get("handoff_id")),ref,tenant));}
       Map<String,Object> item=new LinkedHashMap<>();
       item.put("id",id);item.put("version",version);item.put("reason",reason);
       item.put("candidates",candidates);item.put("evidence",evidence);
-      item.put("incomingObject",incoming);item.put("candidateObjects",objects);
+      item.put("incomingObject",incoming);item.put("candidateObjects",objects);item.put("propertyPreviews",previews);
       canonical.add(item);
-      cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item)));
+      cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item),Collections.unmodifiableMap(previews)));
     }
     return new PackageView(tenant,digest(canonical),List.copyOf(cards));
   }
@@ -176,7 +177,9 @@ public class ResolutionReviewPackageService {
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_REVIEW_PACKAGE_INVALID");}
   public record IssueCard(UUID issueId,long version,String reasonCode,List<String> candidateRefs,
                           Object evidence,UUID suggestedTargetUrbanObjectId,ReviewObject incomingObject,
-                          Map<String,ReviewObject> candidateObjects,String reviewHash){}
+                          Map<String,ReviewObject> candidateObjects,String reviewHash,Map<String,Object> propertyPreviews){
+    public IssueCard(UUID id,long version,String reason,List<String> refs,Object evidence,UUID suggested,ReviewObject incoming,Map<String,ReviewObject> objects,String hash){this(id,version,reason,refs,evidence,suggested,incoming,objects,hash,Map.of());}
+  }
   public record ReviewObject(String reference,String sourceId,String sourceObjectId,String type,
                              Long revision,String revisionRef,boolean available,Map<String,Object> fields){}
   public record PackageView(String tenantId,String snapshotHash,List<IssueCard> issues){}
@@ -187,3 +190,4 @@ public class ResolutionReviewPackageService {
   }
   public record Confirmation(UUID packageId,String snapshotHash,int issueCount){}
 }
+
