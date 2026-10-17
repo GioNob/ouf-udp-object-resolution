@@ -34,7 +34,7 @@ class ResolutionPackageHttpContractTest {
             Set.of("ANONYMOUS","OPEN","PERSONAL","RESTRICTED","SENSITIVE"),
             Set.of("PUBLIC_OPERATIONAL","TENANT_OPERATIONAL","RESTRICTED_OPERATIONAL","SECURITY_SENSITIVE"),null,Set.of(),null);
         try{TestAuthorization.install((LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME),
-            new PolicyBundle("http-fixture",40,now,List.of(new CapabilityDescriptor("resolution.match.approve","COMMAND","resolution.match.approve",Set.of(PrincipalContext.ActorType.HUMAN))),
+            new PolicyBundle("fixture",40,now,List.of(new CapabilityDescriptor("resolution.match.approve","COMMAND","resolution.match.approve",Set.of(PrincipalContext.ActorType.HUMAN))),
                 List.of(new Grant("allow","resolution.match.approve","tenant-a","alice",null,null,now.minusSeconds(60),now.plusSeconds(3600),constraints))));}catch(Exception e){throw new IllegalStateException(e);}
         return request;
       })).andExpect(status().isOk()).andExpect(jsonPath("$.issueCount").value(1));
