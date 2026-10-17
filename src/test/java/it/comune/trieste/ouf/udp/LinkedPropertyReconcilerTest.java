@@ -7,6 +7,24 @@ import org.junit.jupiter.api.Test;
 
 class LinkedPropertyReconcilerTest {
   static final OffsetDateTime NOW=OffsetDateTime.parse("2026-10-17T12:00:00Z");
+  @Test @SuppressWarnings("unchecked") void expiredRevisionNeverResurrectsSupersededValueAndFutureRevisionWaits(){
+    var r=rule("SINGLE","EXACT_TYPED",List.of(),"revision",null);
+    var old=envelope("api","same","old");((Map<String,Object>)old.get("canonicalPayload")).put("revision",1);
+    var next=envelope("api","same","next");((Map<String,Object>)next.get("canonicalPayload")).put("revision",2);
+    var identity=(Map<String,Object>)next.get("sourceIdentity");identity.put("validTo","2026-10-16T00:00:00Z");
+    assertThat(result(r,"old",LinkedPropertyReconciler.incoming("old",old,r),LinkedPropertyReconciler.incoming("next",next,r)).status()).isEqualTo("NO_VALID_CONTRIBUTION");
+    identity.remove("validTo");identity.put("validFrom","2026-10-18T00:00:00Z");
+    assertThat(result(r,null,LinkedPropertyReconciler.incoming("old",old,r),LinkedPropertyReconciler.incoming("next",next,r)).value()).isEqualTo("old");
+  }
+  @Test @SuppressWarnings("unchecked") void servingValidityUsesEveryMemberAndNeverTreatsMissingAsDeletion(){
+    var r=rule("MULTI","EXACT_TYPED",List.of(),null,null);var a=envelope("api","a","A");var b=envelope("layer","b","B");
+    ((Map<String,Object>)b.get("sourceIdentity")).put("validTo","2026-10-18T00:00:00Z");
+    var value=result(r,null,LinkedPropertyReconciler.incoming("a",a,r),LinkedPropertyReconciler.incoming("b",b,r));
+    String evidence=LinkedPropertyReconciler.write(Map.of("rule",r,"members",value.members()));
+    assertThat(LinkedPropertyAccess.validAt(evidence,NOW)).isTrue();
+    assertThat(LinkedPropertyAccess.validAt(evidence,NOW.plusDays(2))).isFalse();
+    assertThat(value.members()).hasSize(2);
+  }
   static UdpPorts.PropertyRule rule(String cardinality,String normalizer,List<String> order,String revision,String deletion){return new UdpPorts.PropertyRule("name","name","string","OPEN",order,new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,cardinality,normalizer,1,"SOURCE_INTERVAL",revision,deletion));}
   static Map<String,Object> envelope(String source,String record,Object value){var payload=new LinkedHashMap<String,Object>();payload.put("name",value);return new LinkedHashMap<>(Map.of("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"sourceObjectId",record,"typeCode","FEATURE")),"canonicalPayload",payload,"ingestionRunId","run","lineageId","lineage","contractRefs",Map.of("bundleRef","bundle:1")));}
   static Map<String,Object> row(String source,String record,Object value,UdpPorts.PropertyRule rule){return LinkedPropertyReconciler.incoming(source+record,envelope(source,record,value),rule);}

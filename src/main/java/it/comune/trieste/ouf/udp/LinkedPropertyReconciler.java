@@ -17,9 +17,9 @@ public final class LinkedPropertyReconciler {
   public record Rule(String policyRef,String cardinality,String normalizerRef,int normalizerVersion,
                      String validity,String revisionField,String deletionField){
     public Rule{
-      if(!POLICY.equals(policyRef)||!Set.of("SINGLE","MULTI").contains(cardinality)
-          ||!Set.of("EXACT_TYPED","NFC_TRIM").contains(normalizerRef)||normalizerVersion!=1
-          ||!Set.of("UNBOUNDED","SOURCE_INTERVAL").contains(validity)
+      if(!POLICY.equals(policyRef)||!Set.of("SINGLE","MULTI").contains(Objects.toString(cardinality,""))
+          ||!Set.of("EXACT_TYPED","NFC_TRIM").contains(Objects.toString(normalizerRef,""))||normalizerVersion!=1
+          ||!Set.of("UNBOUNDED","SOURCE_INTERVAL").contains(Objects.toString(validity,""))
           ||revisionField!=null&&revisionField.isBlank()||deletionField!=null&&deletionField.isBlank())throw invalid();
       if(deletionField!=null&&(revisionField==null||!"SINGLE".equals(cardinality)))throw invalid();
     }
@@ -28,9 +28,9 @@ public final class LinkedPropertyReconciler {
   public record Result(String status,Object value,boolean determined,boolean deleted,
                        List<Member> members,List<Map<String,Object>> candidates,String evidenceHash){}
   static void validate(String datatype,Rule rule,List<String> order){
-    if(!Set.of("string","number","integer","boolean","object").contains(datatype)
+    if(!Set.of("string","number","integer","boolean","object").contains(Objects.toString(datatype,""))
         ||"NFC_TRIM".equals(rule.normalizerRef())&&!"string".equals(datatype)
-        ||rule.deletionField()!=null&&order.isEmpty()||new HashSet<>(order).size()!=order.size())throw invalid();
+        ||rule.deletionField()!=null&&order.isEmpty()||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(String::isBlank))throw invalid();
   }
   static boolean absent(Object value){return value==null||value instanceof String s&&s.isBlank();}
   /** Build exactly the same candidate for preview and commit from a canonical handoff. */
@@ -70,7 +70,7 @@ public final class LinkedPropertyReconciler {
     for(var original:input){var row=new LinkedHashMap<>(original);var id=identity(row);if(id==null||id.get("sourceObjectId")==null||id.get("sourceId")==null)throw invalidValue();
       if("SOURCE_INTERVAL".equals(rule.reconciliation().validity())){
         OffsetDateTime from=time(id.get("validFrom")),to=time(id.get("validTo"));if(from!=null&&to!=null&&!from.isBefore(to))throw invalidValue();
-        if(from!=null&&now.isBefore(from)||to!=null&&!now.isBefore(to))continue;
+        if(from!=null&&now.isBefore(from))continue;
       }
       if(deleted(row)&&(!rule.authorityOrder().contains(String.valueOf(row.get("source_id")))||rule.reconciliation().deletionField()==null))throw invalidValue();
       if(!deleted(row)&&absent(decode(row.get("value_json"))))continue;
@@ -81,6 +81,7 @@ public final class LinkedPropertyReconciler {
       for(var row:active){String key=recordKey(row);BigDecimal revision=revision(row);newest.merge(key,revision,(a,b)->a.max(b));}
       active.removeIf(row->revision(row).compareTo(newest.get(recordKey(row)))!=0);
     }
+    if("SOURCE_INTERVAL".equals(rule.reconciliation().validity()))active.removeIf(row->{var until=time(identity(row).get("validTo"));return until!=null&&!now.isBefore(until);});
     active.sort(Comparator.comparing(row->String.valueOf(row.get("contribution_id"))));
     return active;
   }

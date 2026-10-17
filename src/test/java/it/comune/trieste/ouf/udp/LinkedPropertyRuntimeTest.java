@@ -14,6 +14,14 @@ class LinkedPropertyRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
   @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;@Autowired PropertyGovernanceService governance;@Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   final UdpPorts.ResolutionProfile identity=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","code","code");
+  @Test @SuppressWarnings("unchecked") void temporalIntervalComesFromWinningValueNotLastIncomingSource(){
+    var r=new UdpPorts.PropertyRule("name","name","string","OPEN",List.of("registry","survey"),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"SOURCE_INTERVAL",null,null));
+    var p=new UdpPorts.MaterializationProfile(LinkedPropertyReconciler.POLICY,List.of(r),Set.of("name"),1);
+    var a=handoff("a","registry","a",Map.of("name","official"));((Map<String,Object>)a.get("sourceIdentity")).put("validFrom","2020-01-01T00:00:00Z");accept(a,p);
+    var b=handoff("b","survey","b",Map.of("name","other"));((Map<String,Object>)b.get("sourceIdentity")).put("validFrom","2021-01-01T00:00:00Z");accept(b,p);
+    assertThat(current()).contains("official");
+    assertThat(db.sql("select valid_from from ouf_udp.property_bitemporal_interval where system_to is null").query(java.time.OffsetDateTime.class).single()).isEqualTo(java.time.OffsetDateTime.parse("2020-01-01T00:00:00Z"));
+  }
   @BeforeEach void clean(){db.sql("truncate table ouf_udp.urban_object,ouf_udp.handoff_intake restart identity cascade").update();}
   UdpPorts.PropertyRule rule(String field,String cardinality){return new UdpPorts.PropertyRule(field,field,"string","OPEN",List.of(),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,cardinality,"NFC_TRIM",1,"SOURCE_INTERVAL",null,null));}
   UdpPorts.MaterializationProfile profile(UdpPorts.PropertyRule... rules){return new UdpPorts.MaterializationProfile(LinkedPropertyReconciler.POLICY,List.of(rules));}
