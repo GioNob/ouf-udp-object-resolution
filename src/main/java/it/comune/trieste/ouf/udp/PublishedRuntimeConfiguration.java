@@ -113,13 +113,30 @@ public class PublishedRuntimeConfiguration {
     return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),hash(refs));
   }
   @SuppressWarnings("unchecked") private Map<String,Object> get(String path){
-    try{
-      String credential=Files.readString(token).strip();if(credential.isEmpty()||credential.length()>16384||credential.chars().anyMatch(Character::isWhitespace))throw invalid();
-      var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4)).header("Authorization","Bearer "+credential).GET().build();
-      var pending=http.sendAsync(request,info->new LimitedResponse());HttpResponse<byte[]> response;
-      try{response=pending.get(5,TimeUnit.SECONDS);}catch(TimeoutException|ExecutionException e){pending.cancel(true);throw new IllegalStateException("UDP_PUBLICATION_UNAVAILABLE");}
-      if(response.statusCode()!=200)throw new IllegalStateException("UDP_PUBLICATION_UNAVAILABLE");return json.readValue(response.body(),Map.class);
-    }catch(InterruptedException e){Thread.currentThread().interrupt();throw new IllegalStateException("UDP_PUBLICATION_INTERRUPTED");}catch(java.io.IOException e){throw new IllegalStateException("UDP_PUBLICATION_UNAVAILABLE");}
+    String credential;
+    try{credential=Files.readString(token).strip();}
+    catch(java.io.IOException failure){throw PublicationAccessFailure.credential();}
+    if(credential.isEmpty()||credential.length()>16384||credential.chars().anyMatch(Character::isWhitespace))
+      throw PublicationAccessFailure.credential();
+    var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4))
+        .header("Authorization","Bearer "+credential).GET().build();
+    var pending=http.sendAsync(request,info->new LimitedResponse());HttpResponse<byte[]> response;
+    try{response=pending.get(5,TimeUnit.SECONDS);}
+    catch(TimeoutException failure){pending.cancel(true);throw PublicationAccessFailure.network();}
+    catch(InterruptedException failure){pending.cancel(true);Thread.currentThread().interrupt();throw PublicationAccessFailure.network();}
+    catch(ExecutionException failure){
+      pending.cancel(true);Throwable cause=failure.getCause();
+      for(Throwable item=cause;item!=null;item=item.getCause()){
+        if(item instanceof javax.net.ssl.SSLException)throw PublicationAccessFailure.invalid();
+        if(item instanceof PublicationAccessFailure classified)throw classified;
+      }
+      if(cause instanceof java.io.IOException)throw PublicationAccessFailure.network();
+      throw PublicationAccessFailure.invalid();
+    }
+    if(response.statusCode()!=200)throw PublicationAccessFailure.status(response.statusCode(),
+        response.headers().firstValue("Retry-After").orElse(null),java.time.Instant.now());
+    try{return json.readValue(response.body(),Map.class);}
+    catch(java.io.IOException failure){throw PublicationAccessFailure.invalid();}
   }
   private String hash(Object value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(value)));}catch(Exception e){throw invalid();}}
   @SuppressWarnings("unchecked") static Map<String,Object> object(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof Map<?,?> value))throw invalid();return (Map<String,Object>)value;}
@@ -134,7 +151,7 @@ public class PublishedRuntimeConfiguration {
   private static final class LimitedResponse implements HttpResponse.BodySubscriber<byte[]>{
     private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();private java.util.concurrent.Flow.Subscription subscription;
     public CompletionStage<byte[]> getBody(){return result;}public void onSubscribe(java.util.concurrent.Flow.Subscription s){subscription=s;s.request(1);}
-    public void onNext(List<java.nio.ByteBuffer> buffers){for(var b:buffers){if(bytes.size()+b.remaining()>2097152){subscription.cancel();result.completeExceptionally(new java.io.IOException("UDP_RESPONSE_LIMIT"));return;}byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}subscription.request(1);}
+    public void onNext(List<java.nio.ByteBuffer> buffers){for(var b:buffers){if(bytes.size()+b.remaining()>2097152){subscription.cancel();result.completeExceptionally(PublicationAccessFailure.invalid());return;}byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}subscription.request(1);}
     public void onError(Throwable e){result.completeExceptionally(e);}public void onComplete(){result.complete(bytes.toByteArray());}
   }
 }
