@@ -25,13 +25,13 @@ jobs:
         with: {distribution: temurin, java-version: '21', cache: maven}
       - run: |
           bash scripts/install-authorization-sdk.sh
-          mvn -B -ntp -Dtest=LinkedPropertyReconcilerTest,LinkedPropertyRuntimeTest,CanonicalMaterializerRuntimeTest,TemporalDeltaRuntimeTest,GovernedServingRuntimeTest,PublishedIdentityPolicyTest,IdentityGovernanceRuntimeTest test
+          mvn -B -ntp -Dtest=LinkedPropertyReconcilerTest,LinkedPropertyRuntimeTest,CanonicalMaterializerRuntimeTest,TemporalDeltaRuntimeTest,GovernedServingRuntimeTest,PublishedIdentityPolicyTest,IdentityGovernanceRuntimeTest,ScopedIdentityCandidateRepositoryRuntimeTest test
       - name: Require native tests without skips
         run: |
           python3 - <<'PY'
           import glob,xml.etree.ElementTree as E
-          files=glob.glob('target/surefire-reports/TEST-*LinkedProperty*Test.xml')
-          assert len(files)==2
+          files=glob.glob('target/surefire-reports/TEST-*LinkedProperty*Test.xml')+glob.glob('target/surefire-reports/TEST-*ScopedIdentityCandidateRepositoryRuntimeTest.xml')
+          assert len(files)==3
           for f in files:
               r=E.parse(f).getroot()
               assert int(r.attrib['tests'])>0 and all(int(r.attrib.get(k,0))==0 for k in ('failures','errors','skipped'))

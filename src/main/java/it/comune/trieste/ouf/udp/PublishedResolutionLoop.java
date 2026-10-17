@@ -31,6 +31,7 @@ public class PublishedResolutionLoop {
       tx.executeWithoutResult(status->{
         if(db.sql("select 1 from ouf_udp.materialization_job where job_id=:j and state='RUNNING' and claimed_by=:w and lease_until>transaction_timestamp() for update").param("j",claim.jobId()).param("w",worker).query(Integer.class).optional().isEmpty())throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
         db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))").param("key","resolution:"+profiles.canonicalType()).query().singleRow();
+        materializer.rememberProfile(claim.handoffId(),profiles.canonicalType(),HandoffIntakeService.text(refs,"bundleRef"),profiles.materialization());
         GovernedCrsTransform.Result geometry=null;
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
         var identity=profiles.identity();
