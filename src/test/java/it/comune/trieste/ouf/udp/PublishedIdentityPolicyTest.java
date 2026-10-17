@@ -26,7 +26,7 @@ class PublishedIdentityPolicyTest {
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
   }
 
-  @Test @SuppressWarnings("unchecked") void distinctRulesAreExplicitMultiSignalAndFingerprintBound() {
+  @Test @SuppressWarnings("unchecked") void distinctRulesAreExplicitMultiSignalAndFingerprintBound() throws Exception {
     var resolution=proposal();var policy=(Map<String,Object>)resolution.get("governedIdentity");
     var signals=(List<Map<String,Object>>)policy.get("signals");
     signals.add(new LinkedHashMap<>(Map.of("id","urn:address","semanticRef","urn:address@set-1","comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","assertion://address")));
@@ -74,3 +74,4 @@ class PublishedIdentityPolicyTest {
     }
   }
 }
+
