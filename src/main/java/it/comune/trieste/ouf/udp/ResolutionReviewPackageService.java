@@ -18,8 +18,9 @@ public class ResolutionReviewPackageService {
   private final JdbcClient db;
   private final ObjectMapper json;
   private final IdentityGovernanceService governance;
-  public ResolutionReviewPackageService(JdbcClient db,ObjectMapper json,IdentityGovernanceService governance){
-    this.db=db;this.json=json;this.governance=governance;
+  private final GovernedIdentityScopeLock identityScope;
+  public ResolutionReviewPackageService(JdbcClient db,ObjectMapper json,IdentityGovernanceService governance,GovernedIdentityScopeLock identityScope){
+    this.db=db;this.json=json;this.governance=governance;this.identityScope=identityScope;
   }
 
   @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ) public PackageView prepare(TrustedHumanContext actor){
@@ -35,10 +36,11 @@ public class ResolutionReviewPackageService {
       if(choice==null||choice.issueId()==null||choice.reason()==null||choice.reason().isBlank()
           ||selected.putIfAbsent(choice.issueId(),choice)!=null)throw invalid();
     }
-    if(selected.isEmpty())throw invalid();
+    if(selected.isEmpty())throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_PACKAGE_STALE");
     boolean selective=choices.stream().anyMatch(c->c.expectedReviewHash()!=null);
     if(selective&&choices.stream().anyMatch(c->c.expectedReviewHash()==null
         ||!c.expectedReviewHash().matches("sha256:[0-9a-f]{64}")))throw invalid();
+    lockReviewScopes(actor.tenantId(),selective?selected.keySet():null);
     PackageView current=snapshot(actor.tenantId(),true,selective?selected.keySet():null);
     if((!selective&&!expectedHash.equals(current.snapshotHash()))||current.issues().isEmpty()
         ||selected.size()!=current.issues().size()
@@ -109,6 +111,24 @@ public class ResolutionReviewPackageService {
       cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item)));
     }
     return new PackageView(tenant,digest(canonical),List.copyOf(cards));
+  }
+
+  // Match materialization's lock order: identity scope, then issue/object rows.
+  private void lockReviewScopes(String tenant,Set<UUID> selected){
+    var query=db.sql("select candidate_refs::text candidates,evidence_refs::text evidence from ouf_udp.resolution_issue where tenant_id=:tenant and state='OPEN'"
+        +(selected==null?"":" and issue_id in (:selected)")).param("tenant",tenant);
+    if(selected!=null)query.param("selected",selected);
+    Set<String> classes=new TreeSet<>();Set<UUID> objects=new HashSet<>();
+    for(var row:query.query().listOfRows()){
+      for(String ref:readCandidates(String.valueOf(row.get("candidates"))))
+        try{objects.add(UUID.fromString(ref));}catch(IllegalArgumentException ignored){/* unavailable reference */}
+      Object decoded=readEvidence(String.valueOf(row.get("evidence")));
+      if(decoded instanceof List<?> items&&!items.isEmpty()&&items.getFirst() instanceof Map<?,?> first
+          &&first.get("canonicalClass") instanceof String type&&!type.isBlank())classes.add(type);
+    }
+    if(!objects.isEmpty())classes.addAll(db.sql("select distinct canonical_type from ouf_udp.urban_object where tenant_id=:tenant and urban_object_id in (:objects)")
+        .param("tenant",tenant).param("objects",objects).query(String.class).list());
+    for(String type:classes)identityScope.acquire(tenant,type);
   }
 
   private ReviewObject candidate(String ref,String tenant,String expectedType,boolean lock){
