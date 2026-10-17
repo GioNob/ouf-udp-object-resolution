@@ -27,7 +27,21 @@ public class PropertyGovernanceService {
   public Map<String,Object> review(UUID id,ServingAuthorizationContext auth){
     auth.require("resolution.issue.read");var issue=issue(id,false);UUID object=(UUID)issue.get("urban_object_id");
     UUID current=object(object,auth,false);var candidates=candidates(issue,auth,"resolution.issue.read");
-    return Map.of("conflictId",id,"objectId",object,"currentRevision",current,"state",issue.get("state"),"propertyIri",issue.get("property_iri"),"policyRef",issue.get("policy_ref"),"evidenceHash",issue.get("evidence_hash"),"candidates",candidates);
+    var result=new LinkedHashMap<String,Object>(Map.of("conflictId",id,"objectId",object,"currentRevision",current,"state",issue.get("state"),"propertyIri",issue.get("property_iri"),"policyRef",issue.get("policy_ref"),"evidenceHash",issue.get("evidence_hash"),"candidates",candidates));
+    var profile=read(String.valueOf(issue.get("profile")),UdpPorts.MaterializationProfile.class);
+    var rule=profile.properties().stream().filter(r->r.propertyIri().equals(issue.get("property_iri"))).findFirst().orElseThrow(PropertyGovernanceService::conflict);
+    if(rule.reconciliation()!=null){
+      var values=db.sql("select p.value_json::text value,p.access_label,p.reconciliation_evidence::text evidence,c.source_id from ouf_udp.property_value p join ouf_udp.property_contribution c on c.contribution_id=p.contribution_id where p.revision_id=:r and p.property_iri=:p").param("r",current).param("p",rule.propertyIri()).query().listOfRows();
+      Object value=null;if(!values.isEmpty()){var row=values.getFirst();String label=String.valueOf(row.get("access_label"));var scope=Map.of("propertyRef",rule.propertyIri(),"sourceRef",String.valueOf(row.get("source_id")),"projection","properties");
+        auth.requireResource("resolution.issue.read","object",object,label,scope);auth.requireResource("urban.object.read","object",object,label,scope);
+        for(String capability:List.of("resolution.issue.read","urban.object.read"))if(!LinkedPropertyAccess.permits(row.get("evidence"),object,current,rule.propertyIri(),capability,auth))throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_PROPERTY_PROFILE_LABEL_DENIED");
+        value=read(String.valueOf(row.get("value")),Object.class);
+      }
+      result.put("currentValue",value);result.put("proposedValue",value);result.put("conflict",true);result.put("rule",rule);result.put("ruleHash",PropertyEvidence.policy(rule));
+      result.put("evidenceCurrent",PropertyEvidence.set(PropertyEvidence.top(db,object,rule),rule).equals(issue.get("evidence_hash")));
+      for(var candidate:candidates){candidate.put("normalizedValue",LinkedPropertyReconciler.normalize(candidate.get("value"),rule));candidate.put("explicitDeletion",Boolean.TRUE.equals(((Map<?,?>)candidate.get("provenance")).get("explicitPropertyDeletion")));}
+    }
+    return result;
   }
 
   @Transactional
@@ -85,3 +99,4 @@ public class PropertyGovernanceService {
   private Map<String,Object> map(String value){try{return json.readValue(value,new TypeReference<>(){});}catch(Exception e){throw new IllegalStateException("UDP_STORED_JSON_INVALID",e);}}
   private static ResponseStatusException conflict(){return new ResponseStatusException(HttpStatus.CONFLICT,"UDP_PROPERTY_DECISION_CONFLICT");}
 }
+

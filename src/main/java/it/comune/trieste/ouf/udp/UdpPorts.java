@@ -11,10 +11,13 @@ public final class UdpPorts {
   public record ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty,WeightedIdentity.Policy weighted){
     public ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty){this(strategyId,strategyVersion,policyRef,canonicalType,canonicalKeyProperty,matchProperty,null);}
   }
-  public record PropertyRule(String sourceField,String propertyIri,String datatype,String accessLabel,List<String> authorityOrder) {public PropertyRule{authorityOrder=List.copyOf(authorityOrder);}}
+  public record PropertyRule(String sourceField,String propertyIri,String datatype,String accessLabel,List<String> authorityOrder,@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) LinkedPropertyReconciler.Rule reconciliation) {
+    public PropertyRule(String sourceField,String propertyIri,String datatype,String accessLabel,List<String> authorityOrder){this(sourceField,propertyIri,datatype,accessLabel,authorityOrder,null);}
+    public PropertyRule{authorityOrder=List.copyOf(authorityOrder);if(reconciliation!=null)LinkedPropertyReconciler.validate(datatype,reconciliation,authorityOrder);}
+  }
   public record MaterializationProfile(String policyRef,List<PropertyRule> properties,Set<String> bitemporalProperties,int checkpointInterval) {
     public MaterializationProfile(String policyRef,List<PropertyRule> properties){this(policyRef,properties,Set.of(),1);}
-    public MaterializationProfile{properties=List.copyOf(properties);bitemporalProperties=Set.copyOf(bitemporalProperties);if(checkpointInterval<1)throw new IllegalArgumentException("UDP_CHECKPOINT_INTERVAL_INVALID");}
+    public MaterializationProfile{properties=List.copyOf(properties);bitemporalProperties=Set.copyOf(bitemporalProperties);for(var property:properties)if(property.reconciliation()!=null&&bitemporalProperties.contains(property.propertyIri())&&("MULTI".equals(property.reconciliation().cardinality())||property.reconciliation().deletionField()!=null))throw LinkedPropertyReconciler.invalid();if(checkpointInterval<1)throw new IllegalArgumentException("UDP_CHECKPOINT_INTERVAL_INVALID");}
   }
   public record RelationshipRule(String sourceField,String relationIri,String targetCanonicalType,String targetPropertyIri,String resolutionStrategy,String onNoMatch,String accessLabel,boolean selfLoopAllowed){}
   public record RelationshipProfile(String policyRef,List<RelationshipRule> relationships) {public RelationshipProfile{relationships=List.copyOf(relationships);}}
@@ -31,3 +34,4 @@ public final class UdpPorts {
   public record SpatialRelationshipRule(String relationIri,String targetCanonicalType,String predicate,String onNoMatch,Double maxDistanceMeters,Double minOverlapRatio,Double rankingMarginMeters,String accessLabel,boolean selfLoopAllowed){}
   public record SpatialProfile(String policyRef,GeometryRule geometry,List<SpatialRelationshipRule> relationships) {public SpatialProfile{relationships=List.copyOf(relationships);}}
 }
+

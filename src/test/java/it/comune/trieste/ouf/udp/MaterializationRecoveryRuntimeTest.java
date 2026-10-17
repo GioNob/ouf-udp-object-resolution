@@ -270,6 +270,69 @@ class MaterializationRecoveryRuntimeTest {
       assertThat(state(job)).isEqualTo("QUARANTINED");assertThat(events()).isZero();
     }finally{db.sql("drop trigger test_reject_retry_event on ouf_udp.handoff_event").update();db.sql("drop function ouf_udp.test_reject_retry_event()").update();}
   }
+  @Test void confirmedNewIdentityCanResumeOriginalJobWithoutRepeatingDecisionOrResettingCounters() throws Exception {
+    UUID job=fixture("approved-new");UUID issue=confirmedCreateNew(job,"approved-new");
+    String original=payload(job),decision=humanDecision(issue);
+    var review=recovery.review(job,human(),scope->{});
+    assertThat(review.retryEligible()).isTrue();assertThat(review.contractReady()).isTrue();
+    var request=request(review,UUID.randomUUID());recovery.retry(job,request,human(),scope->{});
+    assertThat(state(job)).isEqualTo("READY");assertThat(payload(job)).isEqualTo(original);
+    assertThat(humanDecision(issue)).isEqualTo(decision);
+    assertThat(db.sql("select attempts,integrity_attempts,integrity_baseline_hash from ouf_udp.materialization_job where job_id=:id")
+        .param("id",job).query().singleRow()).containsEntry("attempts",1).containsEntry("integrity_attempts",5).containsEntry("integrity_baseline_hash",HASH);
+    assertThat(db.sql("select count(*) from ouf_udp.source_binding where first_handoff_id='approved-new'").query(Long.class).single()).isZero();
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",issue).query(String.class).single()).isEqualTo("RESOLVED");
+    assertThat(recovery.retry(job,request,human(),scope->{}).repeated()).isTrue();assertThat(events()).isOne();
+    var audit=json.readTree(db.sql("select safe_detail::text from ouf_udp.handoff_event where event_id=:id").param("id",request.operationId()).query(String.class).single());
+    assertThat(audit.path("preservesApprovedNewIdentity").asBoolean()).isTrue();
+    assertThat(audit.path("identityReviewSnapshotHash").asText()).startsWith("sha256:");
+  }
+  @Test void unresolvedDismissedWrongTenantOrUnboundDecisionsCannotResume(){
+    for(String invalid:List.of("OPEN","DISMISSED","TENANT","SUBJECT","AUTHORIZATION","TIME","BASELINE")){
+      String handoff="invalid-"+invalid;UUID job=fixture(handoff),issue=confirmedCreateNew(job,handoff);
+      if(Set.of("OPEN","DISMISSED").contains(invalid))db.sql("update ouf_udp.resolution_issue set state=:state where issue_id=:id").param("state",invalid).param("id",issue).update();
+      if("TENANT".equals(invalid))db.sql("update ouf_udp.resolution_issue set tenant_id='other' where issue_id=:id").param("id",issue).update();
+      if("SUBJECT".equals(invalid))db.sql("update ouf_udp.resolution_issue set resolved_by_subject='different' where issue_id=:id").param("id",issue).update();
+      if("AUTHORIZATION".equals(invalid))db.sql("update ouf_udp.resolution_issue set authorization_decision_ref='different' where issue_id=:id").param("id",issue).update();
+      if("TIME".equals(invalid))db.sql("update ouf_udp.resolution_issue set resolved_at=resolved_at+interval '1 second' where issue_id=:id").param("id",issue).update();
+      if("BASELINE".equals(invalid))db.sql("update ouf_udp.materialization_job set integrity_baseline_hash=null where job_id=:id").param("id",job).update();
+      var review=recovery.review(job,human(),scope->{});assertThat(review.retryEligible()).as(invalid).isFalse();
+      assertConflict(()->recovery.retry(job,request(review,UUID.randomUUID()),human(),scope->{}));assertThat(state(job)).isEqualTo("QUARANTINED");
+    }
+    assertThat(events()).isZero();
+  }
+  @Test void approvedIdentityDoesNotBypassMissingOrDriftingReferences(){
+    UUID job=fixture("approved-reference");confirmedCreateNew(job,"approved-reference");
+    when(catalog.resolve(anyMap())).thenReturn(new HistoricalContractCatalog.Resolution(List.of(),List.of(HASH),null));
+    var missing=recovery.review(job,human(),s->{});assertThat(missing.retryEligible()).isTrue();assertThat(missing.contractReady()).isFalse();
+    assertConflict(()->recovery.retry(job,request(missing,UUID.randomUUID()),human(),s->{}));
+    when(catalog.resolve(anyMap())).thenReturn(ready("sha256:"+"b".repeat(64)));
+    var drift=recovery.review(job,human(),s->{});assertConflict(()->recovery.retry(job,request(drift,UUID.randomUUID()),human(),s->{}));
+    assertThat(state(job)).isEqualTo("QUARANTINED");assertThat(events()).isZero();
+  }
+  @Test void changingApprovedEvidenceInvalidatesRetrySnapshot(){
+    UUID job=fixture("approved-stale");UUID issue=confirmedCreateNew(job,"approved-stale");
+    var review=recovery.review(job,human(),s->{});
+    db.sql("update ouf_udp.resolution_issue set evidence_refs='[{\"complete\":true,\"tenantId\":\"tenant\",\"coverageRef\":\"changed\"}]' where issue_id=:id").param("id",issue).update();
+    assertConflict(()->recovery.retry(job,request(review,UUID.randomUUID()),human(),s->{}));assertThat(events()).isZero();
+  }
+  @Test void anyExistingSourceBindingBlocksApprovedNewIdentityRetry(){
+    UUID job=fixture("approved-bound");confirmedCreateNew(job,"approved-bound");
+    UUID object=UUID.randomUUID();
+    db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type)values(:id,'tenant','ROAD')").param("id",object).update();
+    db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id)values('roads','ROAD','approved-bound',:id,'approved-bound')").param("id",object).update();
+    var review=recovery.review(job,human(),s->{});assertThat(review.retryEligible()).isFalse();
+    assertConflict(()->recovery.retry(job,request(review,UUID.randomUUID()),human(),s->{}));assertThat(events()).isZero();
+  }
+  private UUID confirmedCreateNew(UUID job,String handoff){
+    UUID decision=UUID.randomUUID(),issue=UUID.randomUUID();
+    db.sql("insert into ouf_udp.resolution_decision(resolution_decision_id,handoff_id,candidate_ref,outcome,strategy_id,strategy_version,evidence_refs,decided_by,policy_ref)values(:id,:h,'coverage','REVIEW_REQUIRED','GOVERNED_IDENTITY','1','[]','SERVICE_IDENTITY','policy')").param("id",decision).param("h",handoff).update();
+    db.sql("insert into ouf_udp.resolution_issue(issue_id,resolution_decision_id,handoff_id,reason_code,candidate_refs,evidence_refs,state,tenant_id,version,resolved_at,resolved_by_subject,authorization_decision_ref)values(:id,:decision,:h,'UNRESOLVED_IDENTITY','[]','[{\"complete\":true,\"tenantId\":\"tenant\"}]','RESOLVED','tenant',1,'2026-10-01T10:00:00Z','operator','approved-human')")
+        .param("id",issue).param("decision",decision).param("h",handoff).update();
+    db.sql("insert into ouf_udp.human_resolution_decision(decision_id,issue_id,action,actor_subject,authorization_decision_ref,reason,evidence_hash,decided_at)values(gen_random_uuid(),:id,'CREATE_NEW','operator','approved-human','','hash','2026-10-01T10:00:00Z')").param("id",issue).update();
+    db.sql("update ouf_udp.materialization_job set safe_failure_code='UDP_REFERENCE_INTEGRITY_MISSING',integrity_attempts=5,integrity_baseline_hash=:hash where job_id=:id").param("hash",HASH).param("id",job).update();return issue;
+  }
+  private String humanDecision(UUID issue){return db.sql("select to_jsonb(hd)::text from ouf_udp.human_resolution_decision hd where issue_id=:id").param("id",issue).query(String.class).single();}
   private UUID fixture(String handoff){
     UUID raw=UUID.randomUUID(),job=UUID.randomUUID();
     db.sql("insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,media_type,"
@@ -298,3 +361,4 @@ class MaterializationRecoveryRuntimeTest {
       ResponseStatusException.class,e->assertThat(e.getStatusCode().value()).isEqualTo(409));}
   private static String required(String name){String value=System.getenv(name);if(value==null)throw new IllegalStateException(name+" required");return value;}
 }
+

@@ -213,6 +213,74 @@ class IdentityGovernanceRuntimeTest {
     assertThat(governance.getPlan(plan.planId()).state()).isEqualTo("DRAFT");
     assertThat(db.sql("select count(*) from ouf_udp.object_identity_history").query(Long.class).single()).isZero();
   }
+  @Test void reviewComparisonShowsIncomingAndCurrentCandidateFieldsWithoutDecisions(){
+    UUID selected=seedCandidate("comparison-A","same");seedCandidate("comparison-B","same");
+    var seed=handoff("comparison-seed","seed","Teatro destinazione");intake.accept(seed);
+    var mapping=new UdpPorts.MaterializationProfile("authority://comparison",List.of(
+        new UdpPorts.PropertyRule("identity","identity","string","OPEN",List.of()),
+        new UdpPorts.PropertyRule("name","name","string","OPEN",List.of())));
+    materializer.materialize("comparison-seed",selected,seed,mapping);
+    var incoming=handoff("comparison-incoming","source-row-2","same");
+    var fields=new LinkedHashMap<>(Map.of("identity","source-row-2","name","same","capacity",0));
+    fields.put("optional",null);incoming.put("canonicalPayload",fields);intake.accept(incoming);
+    resolution.resolve("comparison-incoming",incoming,new UdpPorts.ResolutionProfile(
+        "ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name"));
+    var actor=new TrustedHumanContext("HUMAN","reviewer","default",
+        Set.of("resolution.issue.read","resolution.match.approve"),"authz://comparison","comparison");
+    var card=packages.prepare(actor).issues().getFirst();
+    assertThat(card.incomingObject().sourceObjectId()).isEqualTo("source-row-2");
+    assertThat(card.incomingObject().fields()).containsEntry("name","same").containsEntry("capacity",0).containsEntry("optional",null);
+    var candidate=card.candidateObjects().get(selected.toString());
+    assertThat(candidate.available()).isTrue();
+    assertThat(candidate.fields()).containsEntry("name","Teatro destinazione");
+    assertThat(candidate.revision()).isEqualTo(1);
+    assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision").query(Long.class).single()).isZero();
+    assertThat(db.sql("select count(*) from ouf_udp.resolution_review_package_confirmation").query(Long.class).single()).isZero();
+  }
+
+  @Test void comparisonChangesInvalidateConfirmationAndForeignCandidateFieldsAreNeverExposed(){
+    UUID selected=seedCandidate("comparison-A","same");seedCandidate("comparison-B","same");
+    var seed=handoff("comparison-seed","seed","Teatro destinazione");intake.accept(seed);
+    materializer.materialize("comparison-seed",selected,seed,new UdpPorts.MaterializationProfile(
+        "authority://comparison",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of()))));
+    var incoming=handoff("comparison-incoming","source-row-2","same");intake.accept(incoming);
+    resolution.resolve("comparison-incoming",incoming,new UdpPorts.ResolutionProfile(
+        "ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name"));
+    var actor=new TrustedHumanContext("HUMAN","reviewer","default",
+        Set.of("resolution.issue.read","resolution.match.approve"),"authz://comparison","comparison");
+    var stale=packages.prepare(actor);
+    db.sql("update ouf_udp.urban_object_current_state set canonical_payload=jsonb_set(canonical_payload,'{name}','\"Changed\"'::jsonb) where urban_object_id=:id").param("id",selected).update();
+    var choice=new ResolutionReviewPackageService.Choice(stale.issues().getFirst().issueId(),0,"DISMISS","reviewed",null);
+    assertThatThrownBy(()->packages.confirm(stale.snapshotHash(),List.of(choice),actor)).hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
+    db.sql("update ouf_udp.urban_object set tenant_id='foreign' where urban_object_id=:id").param("id",selected).update();
+    var fresh=packages.prepare(actor);var hidden=fresh.issues().getFirst().candidateObjects().get(selected.toString());
+    assertThat(hidden.available()).isFalse();assertThat(hidden.fields()).isEmpty();assertThat(hidden.type()).isNull();
+    assertThat(packages.confirm(fresh.snapshotHash(),List.of(choice),actor).issueCount()).isOne();
+  }
+
+  @Test void selectiveConfirmationAdvancesOnlyReviewedCasesAndLeavesOthersQuarantined(){
+    UUID selected=seedCandidate("partial-A","same");seedCandidate("partial-B","same");
+    var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");
+    for(String id:List.of("partial-1","partial-2")){
+      var payload=handoff(id,id,"same");intake.accept(payload);resolution.resolve(id,payload,profile);
+      db.sql("update ouf_udp.materialization_job set state='QUARANTINED',safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED' where handoff_id=:h").param("h",id).update();
+    }
+    var actor=new TrustedHumanContext("HUMAN","reviewer","default",Set.of("resolution.issue.read","resolution.match.approve"),"authz://partial","partial");
+    var view=packages.prepare(actor);var chosen=view.issues().getFirst();var deferred=view.issues().getLast();
+    db.sql("update ouf_udp.resolution_issue set version=version+1 where issue_id=:id").param("id",deferred.issueId()).update();
+    var bad=new ResolutionReviewPackageService.Choice(chosen.issueId(),chosen.version(),"APPROVE","reviewed",selected,"sha256:"+"0".repeat(64));
+    assertThatThrownBy(()->packages.confirm(view.snapshotHash(),List.of(bad),actor)).hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
+    var choice=new ResolutionReviewPackageService.Choice(chosen.issueId(),chosen.version(),"APPROVE",null,selected,chosen.reviewHash());
+    assertThat(packages.confirm(view.snapshotHash(),List.of(choice),actor).issueCount()).isOne();
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",chosen.issueId()).query(String.class).single()).isEqualTo("RESOLVED");
+    assertThat(db.sql("select reason from ouf_udp.human_resolution_decision where issue_id=:id").param("id",chosen.issueId()).query(String.class).single()).isEmpty();
+    assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i on i.handoff_id=j.handoff_id where i.issue_id=:id").param("id",chosen.issueId()).query(String.class).single()).isEqualTo("READY");
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",deferred.issueId()).query(String.class).single()).isEqualTo("OPEN");
+    assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i on i.handoff_id=j.handoff_id where i.issue_id=:id").param("id",deferred.issueId()).query(String.class).single()).isEqualTo("QUARANTINED");
+    assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision where issue_id=:id").param("id",deferred.issueId()).query(Long.class).single()).isZero();
+    assertThatThrownBy(()->packages.confirm(view.snapshotHash(),List.of(choice),actor)).hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
+  }
+
   private UUID reviewIssue(){
     Map<String,Object> payload=handoff("review-h","incoming","same");intake.accept(payload);
     var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");
