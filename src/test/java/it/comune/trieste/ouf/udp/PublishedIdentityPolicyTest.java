@@ -26,6 +26,22 @@ class PublishedIdentityPolicyTest {
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
   }
 
+  @Test @SuppressWarnings("unchecked") void distinctRulesAreExplicitMultiSignalAndFingerprintBound() {
+    var resolution=proposal();var policy=(Map<String,Object>)resolution.get("governedIdentity");
+    var signals=(List<Map<String,Object>>)policy.get("signals");
+    signals.add(new LinkedHashMap<>(Map.of("id","urn:address","semanticRef","urn:address@set-1","comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","assertion://address")));
+    var mapped=Set.of("urn:key","urn:address");
+    var legacy=PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped);
+    policy.put("distinctRules",List.of(Map.of("id","different-key-and-address","signalIds",List.of("urn:key","urn:address"),"assertionRef","assertion://distinct")));
+    var changed=PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped);
+    assertThat(changed.distinctRules()).hasSize(1);
+    assertThat(ScopedIdentityCandidateRepository.fingerprint(changed)).isNotEqualTo(ScopedIdentityCandidateRepository.fingerprint(legacy));
+    policy.put("distinctRules",List.of());
+    assertThat(ScopedIdentityCandidateRepository.fingerprint(PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped))).isEqualTo(ScopedIdentityCandidateRepository.fingerprint(legacy));
+    policy.put("distinctRules",List.of(Map.of("id","weak","signalIds",List.of("urn:key"),"assertionRef","assertion://weak")));
+    assertThatThrownBy(()->PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped)).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+  }
+
   @Test void aDeclaredUniqueSignalWithoutItsAssertionIsInvalid() throws Exception {
     var resolution=proposal();
     @SuppressWarnings("unchecked") var policy=(Map<String,Object>)resolution.get("governedIdentity");
