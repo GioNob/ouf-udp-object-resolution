@@ -12,7 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-/** Governed retry of the original durable job, before any canonical decision. */
+/** Governed retry of the original durable job, without canonical effects, preserving approved CREATE_NEW decisions. */
 @Service
 public class MaterializationRecoveryService {
   public static final String CAPABILITY="udp.materialization.retry";
@@ -87,6 +87,8 @@ public class MaterializationRecoveryService {
     detail.put("correlationId",actor.correlationId());detail.put("reason",request.reason());
     detail.put("snapshotHash",current.snapshotHash());detail.put("verifiedBaselineHash",current.verifiedBaselineHash());
     detail.put("requestHash",requestHash);
+    detail.put("preservesApprovedNewIdentity",approvedNewIdentity(row));
+    detail.put("identityReviewSnapshotHash",digest(row.get("identity_review_snapshot")));
     db.sql("insert into ouf_udp.handoff_event(event_id,handoff_id,event_type,safe_detail) "
         +"values(:id,:handoff,'MATERIALIZATION_RETRY_AUTHORIZED',cast(:detail as jsonb))")
         .param("id",request.operationId()).param("handoff",row.get("handoff_id"))
@@ -100,11 +102,18 @@ public class MaterializationRecoveryService {
         +"j.integrity_attempts,j.integrity_baseline_hash,j.safe_failure_code,j.claimed_by,j.lease_until,"
         +"h.state intake_state,h.ingestion_run_id,h.source_id,h.type_code,h.content_hash,h.payload_json::text payload,"
         +"l.lake_object_id,l.state lake_state,l.state_version lake_version,l.access_label,"
-        +"(exists(select 1 from ouf_udp.resolution_decision d where d.handoff_id=h.handoff_id) "
-        +"or exists(select 1 from ouf_udp.materialization_observation o where o.handoff_id=h.handoff_id) "
+        +"l.tenant_id,"
+        +"(exists(select 1 from ouf_udp.resolution_decision d where d.handoff_id=h.handoff_id)) decision_present,"
+        +"(exists(select 1 from ouf_udp.materialization_observation o where o.handoff_id=h.handoff_id) "
         +"or exists(select 1 from ouf_udp.object_revision r where r.source_handoff_id=h.handoff_id) "
         +"or exists(select 1 from ouf_udp.property_contribution p where p.handoff_id=h.handoff_id) "
-        +"or exists(select 1 from ouf_udp.source_binding b where b.first_handoff_id=h.handoff_id)) decision_present "
+        +"or exists(select 1 from ouf_udp.source_binding b where b.first_handoff_id=h.handoff_id "
+        +"or(b.source_id=h.source_id and b.type_code=h.type_code and b.source_object_id=h.source_object_id))) canonical_effect_present,"
+        +"coalesce((select jsonb_agg(jsonb_build_object('decision',to_jsonb(d),'issue',to_jsonb(i),'human',to_jsonb(hd)) "
+        +"order by d.resolution_decision_id,i.issue_id) from ouf_udp.resolution_decision d "
+        +"left join ouf_udp.resolution_issue i on i.resolution_decision_id=d.resolution_decision_id and i.handoff_id=h.handoff_id "
+        +"left join lateral(select * from ouf_udp.human_resolution_decision hd where hd.issue_id=i.issue_id "
+        +"order by hd.decided_at desc,hd.decision_id desc limit 1) hd on true where d.handoff_id=h.handoff_id),'[]'::jsonb)::text identity_review_snapshot "
         +"from ouf_udp.materialization_job j join ouf_udp.handoff_intake h on h.handoff_id=j.handoff_id "
         +"join ouf_udp.lake_object l on l.lake_object_id=h.raw_lake_object_id "
         +"where j.job_id=:id and l.tenant_id=:tenant and l.tier='RAW' "
@@ -118,7 +127,8 @@ public class MaterializationRecoveryService {
     boolean eligible="QUARANTINED".equals(row.get("state"))&&"DURABLE".equals(row.get("intake_state"))
         &&TECHNICAL_CODES.contains(Objects.toString(row.get("safe_failure_code"),""))
         &&row.get("claimed_by")==null&&row.get("lease_until")==null
-        &&!Boolean.TRUE.equals(row.get("decision_present"))
+        &&!Boolean.TRUE.equals(row.get("canonical_effect_present"))
+        &&(!Boolean.TRUE.equals(row.get("decision_present"))||approvedNewIdentity(row))
         &&Set.of("VERIFIED","COMPACTED","COLD").contains(row.get("lake_state"));
     String baseline=null;String check="NOT_ELIGIBLE";
     if(eligible){
@@ -133,7 +143,7 @@ public class MaterializationRecoveryService {
     for(String key:List.of("job_id","handoff_id","state","state_version","attempts","integrity_attempts",
         "integrity_baseline_hash","safe_failure_code","intake_state","ingestion_run_id","source_id",
         "type_code","content_hash","payload","lake_object_id","lake_state","lake_version","access_label",
-        "decision_present"))snapshot.put(key,row.get(key));
+        "decision_present","canonical_effect_present","identity_review_snapshot"))snapshot.put(key,row.get(key));
     snapshot.put("verifiedBaselineHash",baseline);snapshot.put("contractCheck",check);
     return new Review((UUID)row.get("job_id"),String.valueOf(row.get("handoff_id")),
         String.valueOf(row.get("ingestion_run_id")),String.valueOf(row.get("source_id")),
@@ -141,6 +151,35 @@ public class MaterializationRecoveryService {
         Objects.toString(row.get("safe_failure_code"),null),eligible,"READY".equals(check),check,
         baseline,digest(snapshot),((Number)row.get("attempts")).intValue(),
         ((Number)row.get("integrity_attempts")).intValue());
+  }
+  /** A confirmed identity review is not a materialized canonical object.
+   * Requeue only its original job: no new identity decision, binding or counter reset.
+   * The normal governed identity engine must still verify coverage before creation.
+   */
+  private boolean approvedNewIdentity(Map<String,Object> row){
+    if(row.get("integrity_baseline_hash")==null)return false;
+    try{
+      var snapshot=json.readTree(String.valueOf(row.get("identity_review_snapshot")));
+      if(!snapshot.isArray()||snapshot.size()!=1)return false;
+      var entry=snapshot.get(0);var decision=entry.path("decision");
+      var issue=entry.path("issue");var human=entry.path("human");
+      var evidence=issue.path("evidence_refs");
+      return "GOVERNED_IDENTITY".equals(decision.path("strategy_id").asText())
+          &&"REVIEW_REQUIRED".equals(decision.path("outcome").asText())
+          &&decision.path("target_urban_object_id").isNull()
+          &&"RESOLVED".equals(issue.path("state").asText())
+          &&Objects.equals(row.get("tenant_id"),issue.path("tenant_id").asText())
+          &&evidence.isArray()&&!evidence.isEmpty()&&evidence.get(0).path("complete").asBoolean(false)
+          &&Objects.equals(row.get("tenant_id"),evidence.get(0).path("tenantId").asText())
+          &&"CREATE_NEW".equals(human.path("action").asText())
+          &&human.path("target_urban_object_id").isNull()
+          &&!human.path("actor_subject").asText().isBlank()
+          &&human.path("actor_subject").asText().equals(issue.path("resolved_by_subject").asText())
+          &&!human.path("authorization_decision_ref").asText().isBlank()
+          &&human.path("authorization_decision_ref").asText().equals(issue.path("authorization_decision_ref").asText())
+          &&!human.path("decided_at").asText().isBlank()
+          &&human.path("decided_at").equals(issue.path("resolved_at"));
+    }catch(Exception invalid){return false;}
   }
   private static ResourceContext resource(Map<String,Object> row,String tenant){
     return new ResourceContext("materialization-job",String.valueOf(row.get("job_id")),tenant,
@@ -164,3 +203,4 @@ public class MaterializationRecoveryService {
       String verifiedBaselineHash,String snapshotHash,int attempts,int integrityAttempts){}
   public record Receipt(UUID operationId,UUID jobId,String handoffId,long acceptedVersion,String state,boolean repeated){}
 }
+
