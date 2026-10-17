@@ -205,6 +205,18 @@ class GovernedIdentityEngineTest {
     assertThat(engine.decide(policy,incoming,retrieved.apply(candidate)).outcome()).isEqualTo(Outcome.NEW_OBJECT);
     var legacy=new Policy(policy.ref(),policy.version(),"tenant","Place","source",10,true,extended,POLICY.sufficientRules());
     assertThat(engine.decide(legacy,incoming,retrieved.apply(candidate)).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    var stableSignals=new ArrayList<>(extended);
+    stableSignals.add(new Signal("registry-id","urn:registry-id@set-1",ComparatorKind.TEXT_V1,false,false,"assertion://registry-id"));
+    var stableLeft=new HashMap<>(left);var stableRight=new HashMap<>(right);
+    var stable=new Value("urn:registry-id@set-1","stable-123","fixture://registry");
+    stableLeft.put("registry-id",stable);stableRight.put("registry-id",stable);
+    var stablePolicy=new Policy(policy.ref(),policy.version(),"tenant","Place","source",10,true,stableSignals,
+        List.of(new SufficientRule("stable-id",Set.of("registry-id"),"assertion://registry-id-sufficient")),List.of(distinct));
+    var stableIncoming=new Subject("tenant","Place","source",stableLeft);
+    var stableCandidate=new Candidate(UUID.randomUUID(),"tenant","Place",stableRight);
+    var stableRows=new Candidates(policy.ref(),policy.version(),"tenant","Place","index://snapshot",true,List.of(stableCandidate));
+    assertThat(engine.decide(stablePolicy,stableIncoming,stableRows).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
+    assertThat(engine.decide(stablePolicy,stableIncoming,stableRows).assessments().getFirst().excluded()).isFalse();
     right.remove("address");
     assertThat(engine.decide(policy,incoming,retrieved.apply(new Candidate(UUID.randomUUID(),"tenant","Place",right))).outcome()).isEqualTo(Outcome.REVIEW_REQUIRED);
     right.put("address",left.get("address"));

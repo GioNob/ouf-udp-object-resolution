@@ -166,7 +166,8 @@ public final class GovernedIdentityEngine {
       Set<String> disagreeing = new HashSet<>();
       evidence.stream().filter(e -> e.kind() == EvidenceKind.DISAGREE)
           .forEach(e -> disagreeing.add(e.signalId()));
-      if (policy.distinctRules().stream().anyMatch(rule -> disagreeing.containsAll(rule.signalIds())))
+      boolean identitySupported = policy.sufficientRules().stream().anyMatch(rule -> agreeing.containsAll(rule.signalIds()));
+      if (!identitySupported && policy.distinctRules().stream().anyMatch(rule -> disagreeing.containsAll(rule.signalIds())))
         distinct = true;
       for (SufficientRule rule : policy.sufficientRules())
         if (nested && !shared.isEmpty() && shared.containsAll(rule.signalIds())
