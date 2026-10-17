@@ -56,9 +56,10 @@ public class PublicationDependencyRecovery {
       .param("j",claim.jobId()).update();
   }
   private Map<String,Object> lock(ResolutionRepository.Claim claim){
-    return db.sql("select *,transaction_timestamp() observed_at from ouf_udp.materialization_job where job_id=:j and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>transaction_timestamp() for update")
-      .param("j",claim.jobId()).param("w",claim.worker()).param("v",claim.stateVersion()).query().optionalRow()
-      .orElseThrow(()->new IllegalStateException("UDP_RESOLUTION_LEASE_LOST"));
+    var rows=db.sql("select *,transaction_timestamp() observed_at from ouf_udp.materialization_job where job_id=:j and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>transaction_timestamp() for update")
+      .param("j",claim.jobId()).param("w",claim.worker()).param("v",claim.stateVersion()).query().listOfRows();
+    if(rows.size()!=1)throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
+    return rows.getFirst();
   }
   private void stop(ResolutionRepository.Claim claim,String code,int attempts){
     db.sql("update ouf_udp.materialization_job set state='QUARANTINED',state_version=state_version+1,claimed_by=null,lease_until=null,next_integrity_check_at=null,safe_failure_code=:code,updated_at=transaction_timestamp() where job_id=:j")
