@@ -15,6 +15,20 @@ class LinkedPropertyRuntimeTest {
   @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;@Autowired PropertyGovernanceService governance;@Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   final UdpPorts.ResolutionProfile identity=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","code","code");
   @Autowired GovernedServingService serving;
+  @Test void xsdStringProfileSurvivesPinningPreviewAndMaterialization() throws Exception {
+    var rule=new UdpPorts.PropertyRule("name","name","http://www.w3.org/2001/XMLSchema#string","OPEN",List.of(),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"SOURCE_INTERVAL",null,null));
+    var p=profile(rule);UUID object=accept(handoff("xsd-a","api","a",Map.of("name","Name")),p);
+    var incoming=handoff("xsd-b","file","b",Map.of("name","Name"));intake.accept(incoming);
+    LinkedPropertyPreview.remember(db,"xsd-b","ouf:Asset","bundle://asset/1",p);
+    var preview=LinkedPropertyPreview.prepare(db,json,"xsd-b",object.toString(),"default");
+    assertThat(preview.get("available")).isEqualTo(true);
+    assertThat(json.writeValueAsString(preview)).contains("Name");
+    assertThat(resolution.resolve("xsd-b",incoming,identity).targetUrbanObjectId()).isEqualTo(object);
+    materializer.materialize("xsd-b",object,incoming,p);
+    assertThat(current()).contains("Name");assertThat(count("property_contribution")).isEqualTo(2);
+    assertThat(count("property_conflict")).isZero();
+    assertThat(db.sql("select reconciliation_evidence::text from ouf_udp.property_value where revision_id=(select current_revision_id from ouf_udp.urban_object)").query(String.class).single()).contains("lineage-xsd-a","lineage-xsd-b","http://www.w3.org/2001/XMLSchema#string");
+  }
   @Test void unionCannotExposeRestrictedMemberThroughAnOpenRepresentative(){
     var open=rule("phone","MULTI");var restricted=new UdpPorts.PropertyRule(open.sourceField(),open.propertyIri(),open.datatype(),"RESTRICTED",open.authorityOrder(),open.reconciliation());
     UUID object=accept(handoff("a","restricted-api","a",Map.of("phone","private")),profile(restricted));

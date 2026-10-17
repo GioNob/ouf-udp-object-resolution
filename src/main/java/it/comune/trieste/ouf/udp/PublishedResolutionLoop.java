@@ -28,9 +28,11 @@ public class PublishedResolutionLoop {
       if(!gate.verify(claim))return;
       var refs=HandoffIntakeService.object(claim.payload(),"contractRefs");
       var profiles=configuration.resolve(HandoffIntakeService.text(refs,"bundleRef"),claim.typeCode());
+      gate.profilesReady(claim);
       tx.executeWithoutResult(status->{
         if(db.sql("select 1 from ouf_udp.materialization_job where job_id=:j and state='RUNNING' and claimed_by=:w and lease_until>transaction_timestamp() for update").param("j",claim.jobId()).param("w",worker).query(Integer.class).optional().isEmpty())throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
         db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))").param("key","resolution:"+profiles.canonicalType()).query().singleRow();
+        materializer.rememberProfile(claim.handoffId(),profiles.canonicalType(),HandoffIntakeService.text(refs,"bundleRef"),profiles.materialization());
         GovernedCrsTransform.Result geometry=null;
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
         var identity=profiles.identity();
@@ -56,6 +58,7 @@ public class PublishedResolutionLoop {
         }
         jobs.complete(claim);
       });
+    }catch(PublicationAccessFailure failure){gate.transportFailure(claim,failure);
     }catch(RuntimeException failure){if(!"UDP_RESOLUTION_LEASE_LOST".equals(failure.getMessage()))jobs.fail(claim,failure.getMessage());LOG.warn("UDP_AUTOMATIC_RESOLUTION_INCOMPLETE");}
   }
 }
