@@ -32,7 +32,7 @@ class PublicationDependencyRecoveryRuntimeTest {
   assertThat(state()).isEqualTo("PAUSED");assertThat(attempts()).isEqualTo(1);
   assertThat(jobs.claim("early-worker",Duration.ofMinutes(2))).isEmpty();
   due();var second=claim("worker-after-restart");
-  when(catalog.resolve(anyMap())).thenReturn(ready());
+  doReturn(ready()).when(catalog).resolve(anyMap());
   assertThat(gate.verify(second)).isTrue();gate.profilesReady(second);
   assertThat(attempts()).isZero();
   assertThat(db.sql("select dependency_cumulative_attempts from ouf_udp.materialization_job").query(Long.class).single()).isEqualTo(2);
