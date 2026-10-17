@@ -27,7 +27,10 @@ public final class LinkedPropertyReconciler {
   public record Member(Object value,List<Map<String,Object>> contributions){}
   public record Result(String status,Object value,boolean determined,boolean deleted,
                        List<Member> members,List<Map<String,Object>> candidates,String evidenceHash){}
+  // Preserve published datatype IRIs; resolve only the exact supported string alias for comparison.
+  static String comparisonDatatype(String datatype){return "http://www.w3.org/2001/XMLSchema#string".equals(datatype)?"string":datatype;}
   static void validate(String datatype,Rule rule,List<String> order){
+    datatype=comparisonDatatype(datatype);
     if(!Set.of("string","number","integer","boolean","object").contains(Objects.toString(datatype,""))
         ||"NFC_TRIM".equals(rule.normalizerRef())&&!"string".equals(datatype)
         ||rule.deletionField()!=null&&order.isEmpty()||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(String::isBlank))throw invalid();
@@ -51,7 +54,7 @@ public final class LinkedPropertyReconciler {
   static String write(Object value){try{return JSON.writeValueAsString(value);}catch(Exception e){throw invalidValue();}}
   static Object normalize(Object value,UdpPorts.PropertyRule rule){
     if(absent(value))return null;
-    return switch(rule.datatype()){
+    return switch(comparisonDatatype(rule.datatype())){
       case "string" -> {if(!(value instanceof String s))throw invalidValue();yield "NFC_TRIM".equals(rule.reconciliation().normalizerRef())?Normalizer.normalize(s.strip(),Normalizer.Form.NFC):s;}
       case "number","integer" -> {if(!(value instanceof Number))throw invalidValue();BigDecimal n;try{n=new BigDecimal(value.toString()).stripTrailingZeros();}catch(NumberFormatException e){throw invalidValue();}if("integer".equals(rule.datatype())&&n.scale()>0)throw invalidValue();yield n;}
       case "boolean" -> {if(!(value instanceof Boolean))throw invalidValue();yield value;}

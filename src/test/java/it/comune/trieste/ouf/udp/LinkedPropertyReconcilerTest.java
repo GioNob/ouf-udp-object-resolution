@@ -6,6 +6,22 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class LinkedPropertyReconcilerTest {
+  @Test void publishedXsdStringRetainsItsContractAndRejectsNonStringValues() throws Exception {
+    String iri="http://www.w3.org/2001/XMLSchema#string";
+    for(String normalizer:List.of("EXACT_TYPED","NFC_TRIM")){
+      var r=new UdpPorts.PropertyRule("name","name",iri,"RESTRICTED",List.of(),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE",normalizer,1,"SOURCE_INTERVAL",null,null));
+      var json=new com.fasterxml.jackson.databind.ObjectMapper();
+      var restored=json.readValue(json.writeValueAsBytes(r),UdpPorts.PropertyRule.class);
+      assertThat(restored.datatype()).isEqualTo(iri);
+      var merged=result(restored,null,row("api","a","Name",restored),row("file","b","Name",restored));
+      assertThat(merged.value()).isEqualTo("Name");assertThat(merged.members().getFirst().contributions()).hasSize(2);
+      assertThat(result(restored,"old",row("source","a","A",restored),row("source","b","B",restored)).status()).isEqualTo("CONFLICT");
+      assertThat(LinkedPropertyReconciler.normalize(" A ",restored)).isEqualTo(normalizer.equals("EXACT_TYPED")?" A ":"A");
+      assertThatThrownBy(()->LinkedPropertyReconciler.normalize(42,restored)).hasMessage("UDP_PROPERTY_CONTRIBUTION_INVALID");
+    }
+    for(String invalid:List.of("xsd:string","https://www.w3.org/2001/XMLSchema#string","http://www.w3.org/2001/XMLSchema#date"))
+      assertThatThrownBy(()->new UdpPorts.PropertyRule("name","name",invalid,"OPEN",List.of(),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null))).hasMessage("UDP_PROPERTY_RECONCILIATION_PROFILE_UNSUPPORTED");
+  }
   static final OffsetDateTime NOW=OffsetDateTime.parse("2026-10-17T12:00:00Z");
   @Test @SuppressWarnings("unchecked") void expiredRevisionNeverResurrectsSupersededValueAndFutureRevisionWaits(){
     var r=rule("SINGLE","EXACT_TYPED",List.of(),"revision",null);
