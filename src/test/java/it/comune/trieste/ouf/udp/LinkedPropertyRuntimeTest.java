@@ -23,6 +23,7 @@ class LinkedPropertyRuntimeTest {
     var preview=LinkedPropertyPreview.prepare(db,json,"xsd-b",object.toString(),"default");
     assertThat(preview.get("available")).isEqualTo(true);
     assertThat(json.writeValueAsString(preview)).contains("Name");
+    assertThat(resolution.resolve("xsd-b",incoming,identity).targetUrbanObjectId()).isEqualTo(object);
     materializer.materialize("xsd-b",object,incoming,p);
     assertThat(current()).contains("Name");assertThat(count("property_contribution")).isEqualTo(2);
     assertThat(count("property_conflict")).isZero();
