@@ -14,6 +14,17 @@ class LinkedPropertyRuntimeTest {
   @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
   @Autowired HandoffIntakeService intake;@Autowired ObjectResolutionService resolution;@Autowired CanonicalMaterializer materializer;@Autowired JdbcClient db;@Autowired PropertyGovernanceService governance;@Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   final UdpPorts.ResolutionProfile identity=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1","ouf:Asset","code","code");
+  @Autowired GovernedServingService serving;
+  @Test void unionCannotExposeRestrictedMemberThroughAnOpenRepresentative(){
+    var open=rule("phone","MULTI");var restricted=new UdpPorts.PropertyRule(open.sourceField(),open.propertyIri(),open.datatype(),"RESTRICTED",open.authorityOrder(),open.reconciliation());
+    UUID object=accept(handoff("a","restricted-api","a",Map.of("phone","private")),profile(restricted));
+    accept(handoff("b","public-layer","b",Map.of("phone","public")),profile(open));
+    var caps=Set.of("urban.object.read");
+    var publicReader=new ServingAuthorizationContext("HUMAN","reader","default",caps,Set.of("OPEN"),"auth","c");
+    var fullReader=new ServingAuthorizationContext("HUMAN","reader","default",caps,Set.of("OPEN","RESTRICTED"),"auth","c");
+    assertThat(((Map<?,?>)serving.current(object,publicReader).get("properties")).containsKey("phone")).isFalse();
+    assertThat(String.valueOf(serving.current(object,fullReader).get("properties"))).contains("private","public");
+  }
   @Test @SuppressWarnings("unchecked") void temporalIntervalComesFromWinningValueNotLastIncomingSource(){
     var r=new UdpPorts.PropertyRule("name","name","string","OPEN",List.of("registry","survey"),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"SOURCE_INTERVAL",null,null));
     var p=new UdpPorts.MaterializationProfile(LinkedPropertyReconciler.POLICY,List.of(r),Set.of("name"),1);
