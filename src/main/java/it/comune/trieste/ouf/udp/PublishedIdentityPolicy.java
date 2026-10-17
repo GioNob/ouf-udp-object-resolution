@@ -18,7 +18,9 @@ public final class PublishedIdentityPolicy {
       String tenant, String source, String canonicalClass, Set<String> mappedProperties) {
     if(json==null || resolution==null || !resolution.keySet().equals(RESOLUTION)
         || !"GOVERNED_IDENTITY".equals(resolution.get("strategyId")))throw invalid();
-    Map<?,?> raw=map(resolution.get("governedIdentity"),POLICY);
+    Set<String> fields=new HashSet<>(POLICY);
+    if(resolution.get("governedIdentity") instanceof Map<?,?> candidate&&candidate.containsKey("distinctRules"))fields.add("distinctRules");
+    Map<?,?> raw=map(resolution.get("governedIdentity"),fields);
     if(!Objects.equals(raw.get("ref"),resolution.get("policyRef"))
         || !Objects.equals(raw.get("version"),resolution.get("strategyVersion"))
         || !Objects.equals(raw.get("tenantId"),tenant)
@@ -41,6 +43,11 @@ public final class PublishedIdentityPolicy {
       Map<?,?> rule=map(item,RULE);
       if(!(rule.get("signalIds") instanceof List<?> ids) || ids.isEmpty()
           || !compared.containsAll(ids) || new HashSet<>(ids).size()!=ids.size())throw invalid();
+    }
+    if(raw.containsKey("distinctRules"))for(Object item:list(raw.get("distinctRules"),0,32)){
+      Map<?,?> rule=map(item,RULE);
+      if(!(rule.get("signalIds") instanceof List<?> ids)||ids.size()<2
+          ||!compared.containsAll(ids)||new HashSet<>(ids).size()!=ids.size())throw invalid();
     }
     try{return json.copy().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,true)
         .convertValue(raw,GovernedIdentityEngine.Policy.class);

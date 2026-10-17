@@ -33,7 +33,7 @@ public class ResolutionReviewPackageService {
     if(expectedHash==null||expectedHash.isBlank()||choices==null)throw invalid();
     Map<UUID,Choice> selected=new HashMap<>();
     for(Choice choice:choices){
-      if(choice==null||choice.issueId()==null||choice.reason()==null||choice.reason().isBlank()
+      if(choice==null||choice.issueId()==null||(choice.reason()!=null&&choice.reason().length()>1000)
           ||selected.putIfAbsent(choice.issueId(),choice)!=null)throw invalid();
     }
     if(selected.isEmpty())throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_PACKAGE_STALE");

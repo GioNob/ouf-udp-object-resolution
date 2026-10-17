@@ -270,9 +270,10 @@ class IdentityGovernanceRuntimeTest {
     db.sql("update ouf_udp.resolution_issue set version=version+1 where issue_id=:id").param("id",deferred.issueId()).update();
     var bad=new ResolutionReviewPackageService.Choice(chosen.issueId(),chosen.version(),"APPROVE","reviewed",selected,"sha256:"+"0".repeat(64));
     assertThatThrownBy(()->packages.confirm(view.snapshotHash(),List.of(bad),actor)).hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
-    var choice=new ResolutionReviewPackageService.Choice(chosen.issueId(),chosen.version(),"APPROVE","reviewed only this case",selected,chosen.reviewHash());
+    var choice=new ResolutionReviewPackageService.Choice(chosen.issueId(),chosen.version(),"APPROVE",null,selected,chosen.reviewHash());
     assertThat(packages.confirm(view.snapshotHash(),List.of(choice),actor).issueCount()).isOne();
     assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",chosen.issueId()).query(String.class).single()).isEqualTo("RESOLVED");
+    assertThat(db.sql("select reason from ouf_udp.human_resolution_decision where issue_id=:id").param("id",chosen.issueId()).query(String.class).single()).isEmpty();
     assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i on i.handoff_id=j.handoff_id where i.issue_id=:id").param("id",chosen.issueId()).query(String.class).single()).isEqualTo("READY");
     assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",deferred.issueId()).query(String.class).single()).isEqualTo("OPEN");
     assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i on i.handoff_id=j.handoff_id where i.issue_id=:id").param("id",deferred.issueId()).query(String.class).single()).isEqualTo("QUARANTINED");

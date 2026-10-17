@@ -28,13 +28,18 @@ public final class GovernedIdentityEngine {
   }
   public record Policy(String ref, String version, String tenantId, String canonicalClass,
                        String sourceId, int maxCandidates, boolean allowAutoNew,
-                       List<Signal> signals, List<SufficientRule> sufficientRules) {
+                       List<Signal> signals, List<SufficientRule> sufficientRules, List<SufficientRule> distinctRules) {
+    public Policy(String ref,String version,String tenantId,String canonicalClass,String sourceId,
+        int maxCandidates,boolean allowAutoNew,List<Signal> signals,List<SufficientRule> sufficientRules){
+      this(ref,version,tenantId,canonicalClass,sourceId,maxCandidates,allowAutoNew,signals,sufficientRules,List.of());
+    }
     public Policy {
       if (blank(ref) || blank(version) || blank(tenantId) || blank(canonicalClass)
           || blank(sourceId) || maxCandidates < 1 || maxCandidates > 1000
           || signals == null || signals.isEmpty() || sufficientRules == null || sufficientRules.isEmpty()) throw invalid();
       signals = List.copyOf(signals);
       sufficientRules = List.copyOf(sufficientRules);
+      distinctRules = distinctRules == null ? List.of() : List.copyOf(distinctRules);
       Set<String> ids = new HashSet<>();
       for (Signal signal : signals) {
         if (!ids.add(signal.id()) || signal.uniqueWithinScope() || signal.excludesOnDisagreement()) throw invalid();
@@ -42,6 +47,9 @@ public final class GovernedIdentityEngine {
       Set<String> rules = new HashSet<>();
       for (SufficientRule rule : sufficientRules) {
         if (!rules.add(rule.id()) || !ids.containsAll(rule.signalIds())) throw invalid();
+      }
+      for (SufficientRule rule : distinctRules) {
+        if (!rules.add(rule.id()) || rule.signalIds().size()<2 || !ids.containsAll(rule.signalIds())) throw invalid();
       }
     }
   }
@@ -153,6 +161,13 @@ public final class GovernedIdentityEngine {
       boolean distinct = !shared.isEmpty() && shared.stream().allMatch(property ->
           evidence.stream().anyMatch(item -> item.signalId().equals(property)
               && item.kind() == EvidenceKind.DISAGREE));
+      // Only explicitly published multi-signal rules can establish distinction
+      // despite shared context. Missing/unsupported signals never count as disagreement.
+      Set<String> disagreeing = new HashSet<>();
+      evidence.stream().filter(e -> e.kind() == EvidenceKind.DISAGREE)
+          .forEach(e -> disagreeing.add(e.signalId()));
+      if (policy.distinctRules().stream().anyMatch(rule -> disagreeing.containsAll(rule.signalIds())))
+        distinct = true;
       for (SufficientRule rule : policy.sufficientRules())
         if (nested && !shared.isEmpty() && shared.containsAll(rule.signalIds())
             && agreeing.containsAll(shared)) satisfied.add(rule.id());
