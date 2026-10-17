@@ -23,7 +23,7 @@ class ResolutionPackageHttpContractTest {
     assertThat(choice.targetUrbanObjectId()).isNull();assertThat(choice.expectedReviewHash()).isEqualTo(hash);
     return new ResolutionReviewPackageService.Confirmation(UUID.randomUUID(),hash,1);
   });
-  var mvc=MockMvcBuilders.standaloneSetup(new TrustedHumanApi(mock(IdentityGovernanceService.class),packages,mock(GovernedIdentityPreflight.class))).build();
+  var mvc=MockMvcBuilders.standaloneSetup(new TrustedHumanApi(mock(IdentityGovernanceService.class),packages,mock(GovernedIdentityPreflight.class))).setControllerAdvice(new ResolutionRequestErrors()).build();
   String body="{\"snapshotHash\":\""+hash+"\",\"choices\":[{\"issueId\":\""+id+"\",\"expectedVersion\":0,\"action\":\"CREATE_NEW\",\"reason\":\"\",\"targetUrbanObjectId\":null,\"expectedReviewHash\":\""+hash+"\"}]}";
   mvc.perform(post("/api/udp/v1/governance/resolution/issues/package/confirm")
       .contentType(MediaType.APPLICATION_JSON).content(body).with(request->{
@@ -31,4 +31,14 @@ class ResolutionPackageHttpContractTest {
       })).andExpect(status().isOk()).andExpect(jsonPath("$.issueCount").value(1));
   verify(packages).confirm(anyString(),anyList(),any());
  }
+ @Test void malformedBrowserJsonIsRejectedBeforeAnyDecisionAndReturnsOnlyStableCode()throws Exception{
+  var packages=mock(ResolutionReviewPackageService.class);
+  var mvc=MockMvcBuilders.standaloneSetup(new TrustedHumanApi(mock(IdentityGovernanceService.class),packages,mock(GovernedIdentityPreflight.class)))
+      .setControllerAdvice(new ResolutionRequestErrors()).build();
+  mvc.perform(post("/api/udp/v1/governance/resolution/issues/package/confirm").contentType(MediaType.APPLICATION_JSON)
+      .content("{\"choices\":[{\"issueId\":\"private-invalid-input\"}]}"))
+      .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("UDP_REVIEW_REQUEST_INVALID"));
+  verifyNoInteractions(packages);
+ }
+
 }

@@ -30,7 +30,14 @@ public class TrustedHumanApi {
   @PostMapping("/internal/resolution/issues/package") ResolutionReviewPackageService.PackageView delegatedReviewPackage(HttpServletRequest request){
     return packages.prepare(resolutionPackageActor(request,"resolution.issue.read"));
   }
-  @PostMapping("/resolution/issues/package/confirm") ResolutionReviewPackageService.Confirmation confirmReviewPackage(@RequestBody PackageConfirmationRequest body,HttpServletRequest request){return packages.confirm(body.snapshotHash(),body.choices(),resolutionPackageActor(request,"resolution.match.approve"));}
+  @PostMapping("/resolution/issues/package/confirm") ResolutionReviewPackageService.Confirmation confirmReviewPackage(@RequestBody PackageConfirmationRequest body,HttpServletRequest request){
+    try{return packages.confirm(body.snapshotHash(),body.choices(),resolutionPackageActor(request,"resolution.match.approve"));}
+    catch(IllegalArgumentException error){
+      String code=Set.of("UDP_REVIEW_PACKAGE_INVALID","UDP_REASON_TOO_LONG","UDP_ISSUE_ACTION_INVALID",
+          "UDP_TARGET_NOT_A_CANDIDATE","UDP_NEW_IDENTITY_DECISION_INVALID").contains(error.getMessage())
+          ?error.getMessage():"UDP_REVIEW_REQUEST_INVALID";
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST,code);
+    }}
   @GetMapping("/objects/{id}/identity") Map<String,Object> identity(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("urban.object.read");return service.resolveIdentity(id);}
   @GetMapping("/plans/{id}") IdentityGovernanceService.Plan plan(@PathVariable UUID id,HttpServletRequest request){TrustedHumanContext actor=trusted(request);actor.require("resolution.issue.read");return service.getPlan(id);}
   @PostMapping("/identity/preflight") GovernedIdentityPreflight.Attestation prepareIdentity(
