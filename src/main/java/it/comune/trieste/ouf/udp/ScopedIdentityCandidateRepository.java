@@ -147,7 +147,11 @@ public class ScopedIdentityCandidateRepository {
     List<String> rules=policy.sufficientRules().stream()
         .map(rule->rule.id()+"\u0000"+rule.assertionRef()+"\u0000"
             +String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();
-    return hash(policy.allowAutoNew()+"\u0002"+String.join("\u0001",parts)
-        +"\u0002"+String.join("\u0001",rules));
+    String legacy=policy.allowAutoNew()+"\u0002"+String.join("\u0001",parts)
+        +"\u0002"+String.join("\u0001",rules);
+    if(policy.distinctRules().isEmpty())return hash(legacy);
+    List<String> distinct=policy.distinctRules().stream().map(rule->rule.id()+"\u0000"+rule.assertionRef()
+        +"\u0000"+String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();
+    return hash(legacy+"\u0002distinct-rules-v1\u0002"+String.join("\u0001",distinct));
   }
 }
