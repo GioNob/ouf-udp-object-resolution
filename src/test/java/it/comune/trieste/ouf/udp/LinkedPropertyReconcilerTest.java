@@ -19,9 +19,35 @@ class LinkedPropertyReconcilerTest {
       assertThat(LinkedPropertyReconciler.normalize(" A ",restored)).isEqualTo(normalizer.equals("EXACT_TYPED")?" A ":"A");
       assertThatThrownBy(()->LinkedPropertyReconciler.normalize(42,restored)).hasMessage("UDP_PROPERTY_CONTRIBUTION_INVALID");
     }
-    for(String invalid:List.of("xsd:string","https://www.w3.org/2001/XMLSchema#string","http://www.w3.org/2001/XMLSchema#date"))
+    for(String invalid:List.of("xsd:string","https://www.w3.org/2001/XMLSchema#string","http://www.w3.org/2001/XMLSchema#dateTime"))
       assertThatThrownBy(()->new UdpPorts.PropertyRule("name","name",invalid,"OPEN",List.of(),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null))).hasMessage("UDP_PROPERTY_RECONCILIATION_PROFILE_UNSUPPORTED");
   }
+
+  @Test void publishedDecimalComparesNumericValuesAndRetainsThePublishedDatatype() throws Exception {
+    String iri="http://www.w3.org/2001/XMLSchema#decimal";
+    var r=new UdpPorts.PropertyRule("name","name",iri,"RESTRICTED",List.of(),
+      new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null));
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    var restored=json.readValue(json.writeValueAsBytes(r),UdpPorts.PropertyRule.class);
+    assertThat(restored.datatype()).isEqualTo(iri);
+    assertThat(LinkedPropertyReconciler.normalize(new java.math.BigDecimal("12.3400"),restored)).isEqualTo(new java.math.BigDecimal("12.34"));
+    var merged=result(restored,null,row("api","a",new java.math.BigDecimal("12.34"),restored),row("file","b",new java.math.BigDecimal("12.3400"),restored));
+    assertThat(merged.members()).hasSize(1);assertThat(merged.members().getFirst().contributions()).hasSize(2);
+    assertThatThrownBy(()->LinkedPropertyReconciler.normalize("12.34",restored)).hasMessage("UDP_PROPERTY_CONTRIBUTION_INVALID");
+  }
+  @Test void publishedDateRequiresCanonicalCalendarValueAndDoesNotNormalizeTimezones() {
+    String iri="http://www.w3.org/2001/XMLSchema#date";
+    var r=new UdpPorts.PropertyRule("name","name",iri,"RESTRICTED",List.of(),
+      new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null));
+    assertThat(LinkedPropertyReconciler.normalize("2024-02-29",r)).isEqualTo("2024-02-29");
+    assertThat(result(r,null,row("api","a","2024-02-29",r),row("file","b","2024-02-29",r)).members()).hasSize(1);
+    for(String value:List.of("2023-02-29","2024-04-31","2024-2-29","2024-02-29Z","29/02/2024","0000-01-01"))
+      assertThatThrownBy(()->LinkedPropertyReconciler.normalize(value,r)).hasMessage("UDP_PROPERTY_CONTRIBUTION_INVALID");
+    assertThatThrownBy(()->new UdpPorts.PropertyRule("name","name",iri,"OPEN",List.of(),
+      new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","NFC_TRIM",1,"UNBOUNDED",null,null)))
+      .hasMessage("UDP_PROPERTY_RECONCILIATION_PROFILE_UNSUPPORTED");
+  }
+
   static final OffsetDateTime NOW=OffsetDateTime.parse("2026-10-17T12:00:00Z");
   @Test @SuppressWarnings("unchecked") void expiredRevisionNeverResurrectsSupersededValueAndFutureRevisionWaits(){
     var r=rule("SINGLE","EXACT_TYPED",List.of(),"revision",null);
