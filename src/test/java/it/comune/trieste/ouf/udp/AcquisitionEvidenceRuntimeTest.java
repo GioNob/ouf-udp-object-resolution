@@ -28,6 +28,36 @@ class AcquisitionEvidenceRuntimeTest {
     return ServingApi.context(request);
   }
   AcquisitionEvidenceApi.Query query(Fixture f){return new AcquisitionEvidenceApi.Query(f.source(),f.run(),50,null);}
+  @Test void separateReadApplicationUsesRealHttpWithNoExecutionBeansOrWritableConnections()throws Exception{
+    Fixture f=fixture("tenant-a","OPEN",true);var directory=java.nio.file.Files.createTempDirectory("udp-evidence-http-");
+    var key=directory.resolve("key");java.nio.file.Files.writeString(key,"ab".repeat(32));
+    var engine=TestAuthorization.runtime("reader","HUMAN",AcquisitionEvidenceService.CAPABILITIES);var old=engine.currentSnapshot().bundle();
+    var grants=old.grants().stream().map(g->new Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),new GrantConstraints("ALLOW",null,null,null,Map.of("module","UDP"),Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+    var policy=new PolicyBundle("fixture",2,old.publishedAt(),old.capabilities(),grants);
+    byte[] bytes=new ObjectMapper().registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).writeValueAsBytes(policy);var file=directory.resolve("policy.json");java.nio.file.Files.write(file,bytes);
+    String sha=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+    try(var context=it.comune.trieste.ouf.evidence.UdpAcquisitionReadApplication.application().run(
+      "--server.port=0","--spring.jmx.enabled=false","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.udp.execution.enabled=true","--ouf.udp.lake.tenant-id=tenant-a",
+      "--ouf.udp.search.tenant-id=tenant-a","--ouf.udp.search.issuer=https://auth.test/realms/ouf","--ouf.udp.search.audience=gateway","--ouf.udp.search.workload=workload","--ouf.udp.search.owner-key-file="+key,
+      "--ouf.authorization.bundle-file="+file,"--ouf.authorization.bundle-id=fixture","--ouf.authorization.bundle-version=2","--ouf.authorization.bundle-sha256="+sha)){
+      assertThat(context.getBeansOfType(ResolutionWorker.class)).isEmpty();assertThat(context.getBeansOfType(LakeMaintenanceWorker.class)).isEmpty();assertThat(context.getBeansOfType(LakeShadowRebuildWorker.class)).isEmpty();
+      assertThat(context.getBeansOfType(org.flywaydb.core.Flyway.class)).isEmpty();
+      var ds=context.getBean(com.zaxxer.hikari.HikariDataSource.class);assertThat(ds.getMaximumPoolSize()).isEqualTo(2);assertThat(ds.getMinimumIdle()).isZero();
+      try(var connection=ds.getConnection()){
+        assertThat(connection.isReadOnly()).isTrue();assertThat(connection.getAutoCommit()).isFalse();
+        assertThatThrownBy(()->connection.createStatement().execute("create table ouf_udp.evidence_forbidden_write(id int)")).hasMessageContaining("read-only");connection.rollback();
+      }
+      int port=context.getEnvironment().getRequiredProperty("local.server.port",Integer.class);
+      byte[] body=("{\"sourceId\":\""+f.source()+"\",\"runId\":\""+f.run()+"\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      var signer=new AcquisitionReceiptFilterTest();var p=signer.payload();long now=java.time.Instant.now().getEpochSecond();p.put("iat",now);p.put("exp",now+30);p.put("bodyHash",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body)));
+      var request=java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+port+ObjectSearchReceiptFilter.ACQUISITION_PATH)).header("Content-Type","application/json")
+        .header(ObjectSearchReceiptFilter.ACQUISITION_HEADER,signer.sign(p,"ouf-udp-acquisition-owner-v1.")).POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body)).build();
+      var client=java.net.http.HttpClient.newHttpClient();var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(response.statusCode()).isEqualTo(200);assertThat(new ObjectMapper().readTree(response.body()).path("items").get(0).path("read_only_snapshot").asBoolean()).isTrue();
+      var denied=client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+port+"/api/udp/v1/governance/properties/conflicts/arbitrary/decisions")).POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(denied.statusCode()).isIn(401,403);
+    }
+  }
   @Test void exactRunReadsDurableIntakeAndObservedRevisionWithoutReturningRawData()throws Exception{
     Fixture f=fixture("tenant-a","OPEN",true);long before=count();
     var report=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES,f.source()));
