@@ -1,0 +1,13 @@
+# Minimized acquisition evidence read
+
+The dedicated `POST /api/udp/v1/operations/acquisition` reads an existing source/run only. Closed input: `sourceId`, UUID `runId`, optional `limit`1–100/default50 and opaque `afterHandoffId`. It is separate from both object search and the existing protected lineage APIs; those contracts remain unchanged.
+
+All of `urban.object.read`, `lineage.object.read` and `lineage.property.read` must authorize the exact source/run at TENANT_OPERATIONAL, with OPEN for metadata admission and each actual access label for rows/properties. Installation tenant must match the authenticated owner principal. Historical intake rows lack a tenant column: each projected row additionally needs retained RAW lake ownership and/or the observed urban object's tenant, with no conflicting tenant. An unbound historical row is redacted, never attributed by source/run text or installation configuration alone. Missing/unknown labels, unauthorized properties and hidden rows set partiality. Hidden handoff IDs are never returned as cursors.
+
+One bounded read-only repeatable-read snapshot returns intake/job/resolution state, opaque handoff/lineage/observation/object/revision IDs, current revision number, source-binding match, safe receipt digest, per-contribution property IRIs/labels/hash/value-state and retained lineage/run/bundle references. It does not select raw payload values, source-object keys, source credentials or RAW paths. Intake receipt and materialization observation are distinct. The caller must compare the receipt digest against Ingestion's stored downstream ACK digest and join exact handoff/lineage/run references; this owner never claims `ingestionAckProven`.
+
+Properties are capped at200 per handoff and pages at100 handoffs; truncation and redaction cannot become a full success. Contributions from the requested handoff are evidence, not a claim that every current property originated there or that all20 fields exist. Current and observed selection flags are separate. Cross-page snapshots and historical overwritten state are not inferred as atomic evidence.
+
+A distinct receipt purpose/header/HMAC domain binds this path and `urban.acquisition.read` to all three scopes. Existing search authority cannot be replayed here. It reuses the installation's existing mediated-read key through a separate domain, without changing search semantics or generating credentials.
+
+Candidate only: no migration, worker mutation, acquisition, permission publication, target deployment or E2E acceptance. Disposable PostgreSQL17/SDK/receipt tests contain synthetic private data and are not VPS proof. Gateway/MCP composition and a qualified delivery/review remain required before use on the retained Teatri runs.

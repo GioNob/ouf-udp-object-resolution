@@ -1,0 +1,90 @@
+package it.comune.trieste.ouf.udp;
+
+import static org.assertj.core.api.Assertions.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import it.comune.trieste.ouf.authorization.*;
+import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
+import java.util.*;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.test.context.*;
+
+@SpringBootTest
+class AcquisitionEvidenceRuntimeTest {
+  @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));r.add("ouf.udp.lake.tenant-id",()->"tenant-a");}
+  @Autowired JdbcClient db;@Autowired AcquisitionEvidenceService service;
+  record Fixture(UUID run,String source,String handoff,UUID object){}
+  @SuppressWarnings("unchecked") static List<Map<String,Object>> rows(Object value){return (List<Map<String,Object>>)value;}
+  ServingAuthorizationContext actor(Set<String> caps){return actor(caps,null);}
+  ServingAuthorizationContext actor(Set<String> caps,String source){
+    var request=new MockHttpServletRequest();TestAuthorization.bind(request,"reader","HUMAN",caps);
+    var engine=(LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();
+    var attrs=source==null?Map.of("module","UDP"):Map.of("module","UDP","sourceRef",source);
+    var grants=old.grants().stream().map(g->new Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),g.servicePrincipalId(),g.organizationId(),g.validFrom(),g.validUntil(),new GrantConstraints("ALLOW",null,null,null,attrs,Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+    try{TestAuthorization.install(engine,new PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}catch(Exception failure){throw new IllegalStateException(failure);}
+    return ServingApi.context(request);
+  }
+  AcquisitionEvidenceApi.Query query(Fixture f){return new AcquisitionEvidenceApi.Query(f.source(),f.run(),50,null);}
+  @Test void exactRunReadsDurableIntakeAndObservedRevisionWithoutReturningRawData()throws Exception{
+    Fixture f=fixture("tenant-a","OPEN",true);long before=count();
+    var report=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES,f.source()));
+    assertThat(report).containsEntry("authorization","AUTHORIZED").containsEntry("partial",false).containsEntry("ingestionAckProven",false);
+    assertThat(rows(report.get("items"))).singleElement().satisfies(i->{
+      assertThat(i).containsEntry("handoff_id",f.handoff()).containsEntry("urban_object_id",f.object()).containsEntry("read_only_snapshot",true)
+        .containsEntry("durableIntakeRecorded",true).containsEntry("receiptHash",AcquisitionEvidenceService.hash("udp://handoffs/"+f.handoff()));
+      assertThat(rows(i.get("properties"))).singleElement().satisfies(p->assertThat(p).containsEntry("property_iri","ouf:name").containsEntry("selected_in_observed_revision",true).containsEntry("selected_in_current_revision",true));
+    });
+    String serialized=new ObjectMapper().writeValueAsString(report);
+    for(String secret:List.of("private-source-key","private-raw-path","private-property-value"))assertThat(serialized).doesNotContain(secret);
+    assertThat(count()).isEqualTo(before);
+    var otherRun=new AcquisitionEvidenceApi.Query(f.source(),UUID.randomUUID(),50,null);
+    assertThat(rows(service.read(otherRun,actor(AcquisitionEvidenceService.CAPABILITIES)).get("items"))).isEmpty();
+  }
+  @Test void unrelatedTenantOrUnprovenHistoricalTenantBindingCannotBecomeSuccess(){
+    Fixture foreign=fixture("tenant-b","OPEN",true);var hidden=service.read(query(foreign),actor(AcquisitionEvidenceService.CAPABILITIES));
+    assertThat(hidden).containsEntry("authorization","REDACTED").containsEntry("partial",true);assertThat(rows(hidden.get("items"))).isEmpty();
+    Fixture unbound=fixture("tenant-a","OPEN",false);var unknown=service.read(query(unbound),actor(AcquisitionEvidenceService.CAPABILITIES));
+    assertThat(unknown).containsEntry("partial",true);assertThat(rows(unknown.get("items"))).isEmpty();
+  }
+  @Test void everyReadPermissionAndTheExactSourceConstraintRemainRequired(){
+    Fixture f=fixture("tenant-a","OPEN",true);
+    for(String missing:AcquisitionEvidenceService.CAPABILITIES){var caps=new HashSet<>(AcquisitionEvidenceService.CAPABILITIES);caps.remove(missing);assertThatThrownBy(()->service.read(query(f),actor(caps))).hasMessageContaining("403");}
+    assertThatThrownBy(()->service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES,"another-source"))).hasMessageContaining("403");
+  }
+  @Test void accessLabelDenialRedactsRatherThanReturningAPropertyOrFalseEmptySuccess(){
+    Fixture f=fixture("tenant-a","SENSITIVE",true);var hidden=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES));
+    assertThat(hidden).containsEntry("partial",true).containsEntry("authorization","REDACTED");assertThat(rows(hidden.get("items"))).isEmpty();
+  }
+  @Test void acknowledgedIntakeWithNoObservationDoesNotProveMaterialization(){
+    Fixture f=fixture("tenant-a","OPEN",true);
+    // A second retained intake on the same source/run is durable but has no observation or RAW tenant pin.
+    String pending="z-"+UUID.randomUUID();insertHandoff(pending,f.run(),f.source(),"OPEN");
+    var report=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES));
+    assertThat(report).containsEntry("partial",true).containsEntry("authorization","REDACTED");
+    assertThat(rows(report.get("items"))).hasSize(1);
+  }
+  long count(){return db.sql("select (select count(*) from ouf_udp.handoff_intake)+(select count(*) from ouf_udp.property_contribution)+(select count(*) from ouf_udp.materialization_observation)").query(Long.class).single();}
+  Fixture fixture(String tenant,String label,boolean observe){
+    UUID run=UUID.randomUUID(),object=UUID.randomUUID(),revision=UUID.randomUUID(),contribution=UUID.randomUUID();String source="evidence-"+run,handoff=UUID.randomUUID().toString();
+    insertHandoff(handoff,run,source,label);
+    db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,tenant_id) values(:o,'ouf:Asset',:t)").param("o",object).param("t",tenant).update();
+    if(observe){
+      db.sql("insert into ouf_udp.object_revision(revision_id,urban_object_id,revision_no,canonical_hash,authority_hash,authority_state,canonical_payload,access_labels,source_handoff_id,bundle_ref,semantic_publication_ref) values(:v,:o,1,'sha256:canonical','sha256:authority','{}','{}','{}',:h,'bundle:1:sha256:pinned','semantic:1')").param("v",revision).param("o",object).param("h",handoff).update();
+      db.sql("update ouf_udp.urban_object set current_revision_id=:v where urban_object_id=:o").param("v",revision).param("o",object).update();
+      db.sql("insert into ouf_udp.materialization_observation(observation_id,handoff_id,urban_object_id,revision_id,material_change,canonical_hash) values(:i,:h,:o,:v,true,'sha256:canonical')").param("i",UUID.randomUUID()).param("h",handoff).param("o",object).param("v",revision).update();
+      db.sql("insert into ouf_udp.property_contribution(contribution_id,urban_object_id,handoff_id,property_iri,value_json,value_hash,access_label,source_id,authority_rank,provenance_json) values(:c,:o,:h,'ouf:name','\"private-property-value\"','sha256:value',:label,:s,0,jsonb_build_object('lineageRef',cast(:l as text),'ingestionRunId',cast(:r as text),'rawObjectRef','private-raw-path','contractRefs',jsonb_build_object('bundleRef','bundle:1:sha256:pinned')))")
+        .param("c",contribution).param("o",object).param("h",handoff).param("label",label).param("s",source).param("l",UUID.randomUUID().toString()).param("r",run.toString()).update();
+      db.sql("insert into ouf_udp.property_value(property_value_id,revision_id,property_iri,value_json,datatype,access_label,contribution_id) values(:i,:v,'ouf:name','\"private-property-value\"','string',:label,:c)").param("i",UUID.randomUUID()).param("v",revision).param("label",label).param("c",contribution).update();
+    }
+    return new Fixture(run,source,handoff,object);
+  }
+  void insertHandoff(String handoff,UUID run,String source,String label){
+    db.sql("insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,content_hash,payload_json,receipt_ref,state) values(:h,:r,:i,:s,'asset','private-source-key','sha256:content',cast(:p as jsonb),:receipt,'PROCESSED')")
+      .param("h",handoff).param("r",run.toString()).param("i",UUID.randomUUID().toString()).param("s",source).param("receipt","udp://handoffs/"+handoff)
+      .param("p","{\"lineageId\":\""+UUID.randomUUID()+"\",\"dataAccessLabels\":[{\"labelId\":\""+label+"\"}],\"canonicalPayload\":{\"name\":\"private-property-value\"}}").update();
+  }
+  static String required(String name){return Objects.requireNonNull(System.getenv(name),name);}
+}
