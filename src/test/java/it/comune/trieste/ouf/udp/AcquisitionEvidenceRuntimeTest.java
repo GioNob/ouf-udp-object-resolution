@@ -37,7 +37,7 @@ class AcquisitionEvidenceRuntimeTest {
     byte[] bytes=new ObjectMapper().registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).writeValueAsBytes(policy);var file=directory.resolve("policy.json");java.nio.file.Files.write(file,bytes);
     String sha=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
     try(var context=it.comune.trieste.ouf.evidence.UdpAcquisitionReadApplication.application().run(
-      "--server.port=0","--spring.jmx.enabled=false","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.udp.execution.enabled=true","--ouf.udp.lake.tenant-id=tenant-a",
+      "--server.port=0","--spring.jmx.enabled=false","--spring.main.sources=it.comune.trieste.ouf.udp.UdpApplication","--spring.main.web-application-type=none","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.udp.execution.enabled=true","--ouf.udp.lake.tenant-id=tenant-a",
       "--ouf.udp.search.tenant-id=tenant-a","--ouf.udp.search.issuer=https://auth.test/realms/ouf","--ouf.udp.search.audience=gateway","--ouf.udp.search.workload=workload","--ouf.udp.search.owner-key-file="+key,
       "--ouf.authorization.bundle-file="+file,"--ouf.authorization.bundle-id=fixture","--ouf.authorization.bundle-version=2","--ouf.authorization.bundle-sha256="+sha)){
       assertThat(context.getBeansOfType(ResolutionWorker.class)).isEmpty();assertThat(context.getBeansOfType(LakeMaintenanceWorker.class)).isEmpty();assertThat(context.getBeansOfType(LakeShadowRebuildWorker.class)).isEmpty();

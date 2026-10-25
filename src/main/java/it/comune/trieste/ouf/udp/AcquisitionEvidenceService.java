@@ -26,7 +26,7 @@ public class AcquisitionEvidenceService {
         h.receipt_ref _receipt,h.payload_json->>'lineageId' lineage_id,
         h.payload_json->'dataAccessLabels' _labels,j.state job_state,j.attempts job_attempts,
         d.outcome resolution_outcome,d.resolution_decision_id,
-        o.observation_id,o.urban_object_id,o.revision_id,o.material_change,o.canonical_hash,
+        o.observation_id,o.urban_object_id,o.revision_id,o.material_change,
         u.revision current_revision,u.status object_status,
         u.tenant_id _object_tenant,raw.tenant_id _raw_tenant,
         exists(select 1 from ouf_udp.source_binding b where b.source_id=h.source_id and b.type_code=h.type_code
