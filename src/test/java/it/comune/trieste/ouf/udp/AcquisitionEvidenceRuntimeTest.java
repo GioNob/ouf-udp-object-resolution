@@ -28,6 +28,31 @@ class AcquisitionEvidenceRuntimeTest {
     return ServingApi.context(request);
   }
   AcquisitionEvidenceApi.Query query(Fixture f){return new AcquisitionEvidenceApi.Query(f.source(),f.run(),50,null);}
+  @Test @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named="EVIDENCE_READ_IMAGE",matches=".+")
+  void packagedImageUsesSignedHttpReadAndDeniesMutation()throws Exception{
+    Fixture f=fixture("tenant-a","OPEN",true);long before=count();
+    var directory=java.nio.file.Files.createTempDirectory("udp-packaged-read-");var key=directory.resolve("key");java.nio.file.Files.writeString(key,"ab".repeat(32));
+    var engine=TestAuthorization.runtime("reader","HUMAN",AcquisitionEvidenceService.CAPABILITIES);var old=engine.currentSnapshot().bundle();
+    var grants=old.grants().stream().map(g->new Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),new GrantConstraints("ALLOW",null,null,null,Map.of("module","UDP"),Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+    var policy=new PolicyBundle("fixture",2,old.publishedAt(),old.capabilities(),grants);byte[] bytes=new ObjectMapper().registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule()).writeValueAsBytes(policy);var file=directory.resolve("policy.json");java.nio.file.Files.write(file,bytes);String sha=HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+    var args=List.of("--spring.main.sources=it.comune.trieste.ouf.udp.UdpApplication","--spring.main.web-application-type=none","--spring.flyway.enabled=true","--spring.sql.init.mode=always","--ouf.udp.execution.enabled=true","--ouf.udp.lake.tenant-id=tenant-a",
+      "--ouf.udp.search.tenant-id=tenant-a","--ouf.udp.search.issuer=https://auth.test/realms/ouf","--ouf.udp.search.audience=gateway","--ouf.udp.search.workload=workload","--ouf.udp.search.owner-key-file="+key,
+      "--ouf.authorization.bundle-file="+file,"--ouf.authorization.bundle-id=fixture","--ouf.authorization.bundle-version=2","--ouf.authorization.bundle-sha256="+sha);
+    try(var container=new PackagedReadProcess(directory,args,"OUF_UDP_DB_")){
+      container.ready();byte[] body=("{\"sourceId\":\""+f.source()+"\",\"runId\":\""+f.run()+"\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      var signer=new AcquisitionReceiptFilterTest();var receipt=signer.payload();long now=java.time.Instant.now().getEpochSecond();receipt.put("iat",now);receipt.put("exp",now+30);receipt.put("bodyHash",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body)));
+      var uri=java.net.URI.create("http://127.0.0.1:"+container.port+ObjectSearchReceiptFilter.ACQUISITION_PATH);
+      var request=java.net.http.HttpRequest.newBuilder(uri).timeout(java.time.Duration.ofSeconds(5)).header("Content-Type","application/json")
+        .header(ObjectSearchReceiptFilter.ACQUISITION_HEADER,signer.sign(receipt,"ouf-udp-acquisition-owner-v1.")).header("X-Correlation-ID","corr").header("X-Tool-Attempt-ID","11111111-1111-4111-8111-111111111111").header("Idempotency-Key","idem")
+        .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(body)).build();
+      var client=container.client();var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+      assertThat(new ObjectMapper().readTree(response.body()).path("authorization").asText()).isEqualTo("AUTHORIZED");
+      var denied=client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+container.port+"/api/udp/v1/governance/properties/conflicts/arbitrary/decisions")).timeout(java.time.Duration.ofSeconds(5)).POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertThat(denied.statusCode()).isIn(401,403);
+    }
+    assertThat(count()).isEqualTo(before);
+  }
   @Test void separateReadApplicationUsesRealHttpWithNoExecutionBeansOrWritableConnections()throws Exception{
     Fixture f=fixture("tenant-a","OPEN",true);var directory=java.nio.file.Files.createTempDirectory("udp-evidence-http-");
     var key=directory.resolve("key");java.nio.file.Files.writeString(key,"ab".repeat(32));
