@@ -17,19 +17,22 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Only a short-lived, body-bound gateway receipt may install the UDP search principal. */
+/** Only a short-lived, body-bound gateway receipt may install a mediated read principal. */
 @Component
 public final class ObjectSearchReceiptFilter extends OncePerRequestFilter {
   static final String PATH="/api/udp/v1/objects/search", HEADER="X-OUF-UDP-Search-Receipt";
+  static final String ACQUISITION_PATH="/api/udp/v1/operations/acquisition",ACQUISITION_HEADER="X-OUF-UDP-Acquisition-Receipt";
   private final Environment env;
   private final Clock clock;
   private final ObjectMapper json=new ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
   @org.springframework.beans.factory.annotation.Autowired
   public ObjectSearchReceiptFilter(Environment env){this(env,Clock.systemUTC());}
   ObjectSearchReceiptFilter(Environment env,Clock clock){this.env=env;this.clock=clock;}
-  @Override protected boolean shouldNotFilter(HttpServletRequest req){return !PATH.equals(req.getRequestURI());}
+  @Override protected boolean shouldNotFilter(HttpServletRequest req){return !PATH.equals(req.getRequestURI())&&!ACQUISITION_PATH.equals(req.getRequestURI());}
   @Override protected void doFilterInternal(HttpServletRequest req,HttpServletResponse res,FilterChain chain)throws IOException,ServletException{
     if(!"POST".equals(req.getMethod())){res.sendError(405);return;}
+    boolean acquisition=ACQUISITION_PATH.equals(req.getRequestURI());
+    if(acquisition&&(req.getQueryString()!=null||req.getContentType()==null||!req.getContentType().split(";",2)[0].trim().equalsIgnoreCase("application/json"))){res.sendError(400);return;}
     String tenant=env.getProperty("ouf.udp.search.tenant-id","");
     String issuer=env.getProperty("ouf.udp.search.issuer","");
     String audience=env.getProperty("ouf.udp.search.audience","");
@@ -46,22 +49,28 @@ public final class ObjectSearchReceiptFilter extends OncePerRequestFilter {
     if(body.length>65536){res.sendError(413);return;}
     HttpServletRequest wrapped;
     try{
-      String signed=req.getHeader(HEADER);
+      String signed=req.getHeader(acquisition?ACQUISITION_HEADER:HEADER);
       if(signed==null||signed.length()>16384)throw new SecurityException();
+      if(acquisition){var headers=req.getHeaders(ACQUISITION_HEADER);if(headers==null||!headers.hasMoreElements())throw new SecurityException();headers.nextElement();if(headers.hasMoreElements()||req.getHeader("Authorization")!=null)throw new SecurityException();}
       String[] parts=signed.split("\\.",-1);
       if(parts.length!=2||!parts[0].matches("[A-Za-z0-9_-]+")||!parts[1].matches("[A-Za-z0-9_-]+"))throw new SecurityException();
       Mac mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(key,"HmacSHA256"));
-      if(!MessageDigest.isEqual(mac.doFinal(("ouf-udp-search-owner-v1."+parts[0]).getBytes(StandardCharsets.US_ASCII)),Base64.getUrlDecoder().decode(parts[1])))throw new SecurityException();
+      if(!MessageDigest.isEqual(mac.doFinal(((acquisition?"ouf-udp-acquisition-owner-v1.":"ouf-udp-search-owner-v1.")+parts[0]).getBytes(StandardCharsets.US_ASCII)),Base64.getUrlDecoder().decode(parts[1])))throw new SecurityException();
       JsonNode receipt=json.readTree(Base64.getUrlDecoder().decode(parts[0]));
+      if(acquisition){
+        var known=Set.of("v","purpose","method","path","bodyHash","capability","iat","exp","issuer","audience","workload","subject","tenant","client","acr","roles","scope","requestHash","correlationId");
+        for(var names=receipt.fieldNames();names.hasNext();)if(!known.contains(names.next()))throw new SecurityException();
+        var encoder=Base64.getUrlEncoder().withoutPadding();for(String part:parts)if(!encoder.encodeToString(Base64.getUrlDecoder().decode(part)).equals(part))throw new SecurityException();
+      }
       long now=clock.instant().getEpochSecond();
       if(!receipt.isObject()||!receipt.path("v").isIntegralNumber()||receipt.path("v").asInt()!=1||!receipt.path("iat").isIntegralNumber()||!receipt.path("exp").isIntegralNumber())throw new SecurityException();
       long issued=receipt.path("iat").asLong(),expires=receipt.path("exp").asLong();
       if(issued>now||expires<=now||expires<=issued||expires-issued>30)throw new SecurityException();
-      Map<String,String> expected=Map.of("purpose","udp-object-search-owner","method","POST","path",PATH,"capability","urban.object.search","tenant",tenant,"issuer",issuer,"audience",audience,"workload",workload);
+      Map<String,String> expected=Map.of("purpose",acquisition?"udp-acquisition-owner":"udp-object-search-owner","method","POST","path",acquisition?ACQUISITION_PATH:PATH,"capability",acquisition?"urban.acquisition.read":"urban.object.search","tenant",tenant,"issuer",issuer,"audience",audience,"workload",workload);
       for(var e:expected.entrySet())if(!e.getValue().equals(text(receipt,e.getKey())))throw new SecurityException();
       if(!HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body)).equals(text(receipt,"bodyHash")))throw new SecurityException();
       Set<String> scopes=words(receipt,"scope",false),roles=words(receipt,"roles",true);
-      if(roles.size()>32||!scopes.contains("urban.object.search"))throw new SecurityException();
+      if(roles.size()>32||!scopes.containsAll(acquisition?AcquisitionEvidenceService.CAPABILITIES:Set.of("urban.object.search")))throw new SecurityException();
       String subject=text(receipt,"subject"),client=text(receipt,"client"),acr=text(receipt,"acr"),correlation=text(receipt,"correlationId");
       text(receipt,"requestHash");
       var principal=new TrustedPrincipal(new PrincipalContext(subject,tenant,PrincipalContext.ActorType.HUMAN,client,acr,issuer,audience,scopes,new PrincipalContext.IdentityClaims(roles,acr,Set.of(),null)));
@@ -73,7 +82,9 @@ public final class ObjectSearchReceiptFilter extends OncePerRequestFilter {
       };
       wrapped.setAttribute("ouf.correlationId",correlation);
       // Admission is owner policy, not a gateway assertion. Per-object/property decisions run in ServingApi.
-      OwnerAuthorization.bind(wrapped).require("urban.object.search",new ResourceContext("capability",null,tenant,null,Map.of()));
+      var owner=OwnerAuthorization.bind(wrapped);
+      if(acquisition){if(!owner.candidates().containsAll(AcquisitionEvidenceService.CAPABILITIES))throw new SecurityException();}
+      else owner.require("urban.object.search",new ResourceContext("capability",null,tenant,null,Map.of()));
     }catch(Exception e){res.sendError(403,"INVALID_UDP_SEARCH_RECEIPT_OR_POLICY");return;}
     chain.doFilter(wrapped,res);
   }
