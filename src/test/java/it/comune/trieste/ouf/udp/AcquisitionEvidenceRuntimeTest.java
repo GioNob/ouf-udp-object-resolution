@@ -19,11 +19,12 @@ class AcquisitionEvidenceRuntimeTest {
   record Fixture(UUID run,String source,String handoff,UUID object){}
   @SuppressWarnings("unchecked") static List<Map<String,Object>> rows(Object value){return (List<Map<String,Object>>)value;}
   ServingAuthorizationContext actor(Set<String> caps){return actor(caps,null);}
-  ServingAuthorizationContext actor(Set<String> caps,String source){
+  ServingAuthorizationContext actor(Set<String> caps,String source){return actor(caps,source,null);}
+  ServingAuthorizationContext actor(Set<String> caps,String source,String resourceType){
     var request=new MockHttpServletRequest();TestAuthorization.bind(request,"reader","HUMAN",caps);
     var engine=(LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();
     var attrs=source==null?Map.of("module","UDP"):Map.of("module","UDP","sourceRef",source);
-    var grants=old.grants().stream().map(g->new Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),g.servicePrincipalId(),g.organizationId(),g.validFrom(),g.validUntil(),new GrantConstraints("ALLOW",null,null,null,attrs,Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
+    var grants=old.grants().stream().map(g->new Grant(g.grantId(),g.capabilityId(),g.tenantId(),g.subjectId(),g.servicePrincipalId(),g.organizationId(),g.validFrom(),g.validUntil(),new GrantConstraints("ALLOW",null,resourceType,null,attrs,Set.of("OPEN"),Set.of("TENANT_OPERATIONAL"),null,Set.of(),null))).toList();
     try{TestAuthorization.install(engine,new PolicyBundle(old.bundleId(),2,old.publishedAt(),old.capabilities(),grants));}catch(Exception failure){throw new IllegalStateException(failure);}
     return ServingApi.context(request);
   }
@@ -48,6 +49,7 @@ class AcquisitionEvidenceRuntimeTest {
       var client=container.client();var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
       assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
       assertThat(new ObjectMapper().readTree(response.body()).path("authorization").asText()).isEqualTo("AUTHORIZED");
+      assertThat(new ObjectMapper().readTree(response.body()).path("redactionReasons").isEmpty()).isTrue();
       var denied=client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://127.0.0.1:"+container.port+"/api/udp/v1/governance/properties/conflicts/arbitrary/decisions")).timeout(java.time.Duration.ofSeconds(5)).POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build(),java.net.http.HttpResponse.BodyHandlers.ofString());
       assertThat(denied.statusCode()).isIn(401,403);
     }
@@ -86,7 +88,7 @@ class AcquisitionEvidenceRuntimeTest {
   @Test void exactRunReadsDurableIntakeAndObservedRevisionWithoutReturningRawData()throws Exception{
     Fixture f=fixture("tenant-a","OPEN",true);long before=count();
     var report=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES,f.source()));
-    assertThat(report).containsEntry("authorization","AUTHORIZED").containsEntry("partial",false).containsEntry("ingestionAckProven",false);
+    assertThat(report).containsEntry("authorization","AUTHORIZED").containsEntry("partial",false).containsEntry("redactionReasons",List.of()).containsEntry("ingestionAckProven",false);
     assertThat(rows(report.get("items"))).singleElement().satisfies(i->{
       assertThat(i).containsEntry("handoff_id",f.handoff()).containsEntry("urban_object_id",f.object()).containsEntry("read_only_snapshot",true)
         .containsEntry("durableIntakeRecorded",true).containsEntry("receiptHash",AcquisitionEvidenceService.hash("udp://handoffs/"+f.handoff()));
@@ -121,6 +123,43 @@ class AcquisitionEvidenceRuntimeTest {
     assertThat(report).containsEntry("partial",true).containsEntry("authorization","REDACTED");
     assertThat(rows(report.get("items"))).hasSize(1);
   }
+
+  @Test void redactionReasonsAreCoarseAndTenantFailureDoesNotExposeLabelDetails()throws Exception{
+    var a=actor(AcquisitionEvidenceService.CAPABILITIES);
+    Fixture foreign=fixture("tenant-b","SENSITIVE",true);
+    var hidden=service.read(query(foreign),a);
+    assertThat(hidden).containsEntry("redactionReasons",List.of("RETAINED_TENANT_NOT_VERIFIED"));
+    Fixture f=fixture("tenant-a","OPEN",true);long before=count();
+    for(String labels:List.of("[]","{}","[{}]","[{\"labelId\":\"UNKNOWN_PRIVATE_LABEL\"}]")){
+      db.sql("update ouf_udp.handoff_intake set payload_json=jsonb_set(payload_json,'{dataAccessLabels}',cast(:j as jsonb)) where handoff_id=:h")
+        .param("j",labels).param("h",f.handoff()).update();
+      hidden=service.read(query(f),a);
+      assertThat(hidden).containsEntry("authorization","REDACTED").containsEntry("partial",true)
+        .containsEntry("redactionReasons",List.of("DATA_LABEL_METADATA_INVALID")).containsEntry("nextHandoffId",null);
+      assertThat(rows(hidden.get("items"))).isEmpty();
+      assertThat(new ObjectMapper().writeValueAsString(hidden)).doesNotContain(f.handoff(),f.object().toString(),"UNKNOWN_PRIVATE_LABEL");
+    }
+    db.sql("update ouf_udp.handoff_intake set payload_json=payload_json-'dataAccessLabels' where handoff_id=:h").param("h",f.handoff()).update();
+    assertThat(service.read(query(f),a)).containsEntry("redactionReasons",List.of("DATA_LABEL_METADATA_INVALID"));
+    db.sql("update ouf_udp.handoff_intake set payload_json=jsonb_set(payload_json,'{dataAccessLabels}','[{\"labelId\":\"RESTRICTED\"}]'::jsonb) where handoff_id=:h")
+      .param("h",f.handoff()).update();
+    hidden=service.read(query(f),a);
+    assertThat(hidden).containsEntry("redactionReasons",List.of("DATA_LABEL_NOT_AUTHORIZED"));
+    assertThat(new ObjectMapper().writeValueAsString(hidden)).doesNotContain("RESTRICTED",f.handoff(),f.object().toString());
+    assertThat(count()).isEqualTo(before);
+  }
+  @Test void objectAndPropertyDenialsHaveDistinctReasonsAndKeepTheirDataHidden(){
+    Fixture f=fixture("tenant-a","OPEN",true);
+    var objectHidden=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES,f.source(),"operational"));
+    assertThat(objectHidden).containsEntry("redactionReasons",List.of("OBJECT_NOT_AUTHORIZED"));
+    assertThat(rows(objectHidden.get("items"))).isEmpty();
+    db.sql("update ouf_udp.property_contribution set access_label='SENSITIVE' where handoff_id=:h").param("h",f.handoff()).update();
+    var propertyHidden=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES));
+    assertThat(propertyHidden).containsEntry("partial",true).containsEntry("authorization","REDACTED")
+      .containsEntry("redactionReasons",List.of("PROPERTY_NOT_AUTHORIZED"));
+    assertThat(rows(propertyHidden.get("items"))).singleElement().satisfies(i->assertThat(rows(i.get("properties"))).isEmpty());
+  }
+
   long count(){return db.sql("select (select count(*) from ouf_udp.handoff_intake)+(select count(*) from ouf_udp.property_contribution)+(select count(*) from ouf_udp.materialization_observation)").query(Long.class).single();}
   Fixture fixture(String tenant,String label,boolean observe){
     UUID run=UUID.randomUUID(),object=UUID.randomUUID(),revision=UUID.randomUUID(),contribution=UUID.randomUUID();String source="evidence-"+run,handoff=UUID.randomUUID().toString();

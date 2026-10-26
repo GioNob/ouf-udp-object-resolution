@@ -43,14 +43,19 @@ public class AcquisitionEvidenceService {
       """).param("s",q.sourceId()).param("r",q.runId().toString()).param("a",q.afterHandoffId(),Types.VARCHAR).param("n",q.limit()+1).query().listOfRows();
     boolean more=rows.size()>q.limit();if(more)rows=rows.subList(0,q.limit());
     var items=new ArrayList<Map<String,Object>>();boolean redacted=false,propertiesTruncated=false;
+    var redactionReasons=new TreeSet<String>();
     for(var row:rows){
       // Historical intake has no tenant column. Use retained RAW ownership and/or the observed object,
       // reject disagreement, and never treat installation configuration alone as row ownership.
       Object rawTenant=row.get("_raw_tenant"),objectTenant=row.get("_object_tenant");
       if(rawTenant==null&&objectTenant==null||rawTenant!=null&&!actor.tenantId().equals(rawTenant)
-          ||objectTenant!=null&&!actor.tenantId().equals(objectTenant)||!labelsVisible(q,actor,row)){redacted=true;continue;}
+          ||objectTenant!=null&&!actor.tenantId().equals(objectTenant)){
+        redacted=true;redactionReasons.add("RETAINED_TENANT_NOT_VERIFIED");continue;
+      }
+      String hidden=labelRedactionReason(q,actor,row);
+      if(hidden!=null){redacted=true;redactionReasons.add(hidden);continue;}
       UUID object=(UUID)row.get("urban_object_id");
-      if(object!=null&&!permitted(q,actor,object,"OPEN",Map.of())){redacted=true;continue;}
+      if(object!=null&&!permitted(q,actor,object,"OPEN",Map.of())){redacted=true;redactionReasons.add("OBJECT_NOT_AUTHORIZED");continue;}
       var item=new LinkedHashMap<>(row);item.remove("_labels");item.remove("_object_tenant");item.remove("_raw_tenant");
       Object receipt=item.remove("_receipt");if(receipt instanceof String s&&!s.isBlank()&&s.length()<=4096)item.put("receiptHash",hash(s));
       item.put("durableIntakeRecorded",receipt instanceof String s&&!s.isBlank());
@@ -72,20 +77,30 @@ public class AcquisitionEvidenceService {
         .param("object",object,Types.OTHER).param("revision",row.get("revision_id"),Types.OTHER).query().listOfRows();
       boolean truncated=properties.size()>200;if(truncated){properties=properties.subList(0,200);propertiesTruncated=true;}
       var visible=new ArrayList<Map<String,Object>>();
-      for(var p:properties){if(permitted(q,actor,object,String.valueOf(p.get("access_label")),Map.of("propertyIri",String.valueOf(p.get("property_iri")))))visible.add(p);else redacted=true;}
+      for(var p:properties){if(permitted(q,actor,object,String.valueOf(p.get("access_label")),Map.of("propertyIri",String.valueOf(p.get("property_iri")))))visible.add(p);else {redacted=true;redactionReasons.add("PROPERTY_NOT_AUTHORIZED");}}
       item.put("properties",visible);item.put("propertiesTruncated",truncated);items.add(item);
     }
     require(q,actor,null,"OPEN",Map.of());
     var out=new LinkedHashMap<String,Object>();out.put("schema","ouf.udp.acquisition-evidence.v1");out.put("sourceId",q.sourceId());out.put("runId",q.runId());out.put("items",items);
     // Never return a hidden handoff ID as the page token.
     out.put("nextHandoffId",more&&!redacted?rows.getLast().get("handoff_id"):null);
+    out.put("redactionReasons",List.copyOf(redactionReasons));
     out.put("partial",more||redacted||propertiesTruncated);out.put("authorization",redacted?"REDACTED":"AUTHORIZED");
     out.put("authorizationDecisionRef",actor.owner().decisionRef());out.put("ingestionAckProven",false);return out;
   }
-  private boolean labelsVisible(AcquisitionEvidenceApi.Query q,ServingAuthorizationContext actor,Map<String,Object> row){
-    Object raw=row.get("_labels");if(raw==null)return false;
-    try{Object parsed=new ObjectMapper().readValue(raw.toString(),Object.class);if(!(parsed instanceof List<?> list)||list.isEmpty())return false;
-      for(Object e:list){if(!(e instanceof Map<?,?> m)||!(m.get("labelId") instanceof String label)||!permitted(q,actor,null,label,Map.of()))return false;}return true;
+  // Fixed diagnostic categories only: never serialize denied labels, row IDs or counts.
+  private String labelRedactionReason(AcquisitionEvidenceApi.Query q,ServingAuthorizationContext actor,Map<String,Object> row){
+    Object raw=row.get("_labels");if(raw==null)return "DATA_LABEL_METADATA_INVALID";
+    try{
+      Object parsed=new ObjectMapper().readValue(raw.toString(),Object.class);
+      if(!(parsed instanceof List<?> list)||list.isEmpty())return "DATA_LABEL_METADATA_INVALID";
+      for(Object entry:list){
+        if(!(entry instanceof Map<?,?> m)||!(m.get("labelId") instanceof String label)
+            ||!Set.of("OPEN","ANONYMOUS","PERSONAL","SENSITIVE","RESTRICTED").contains(label))
+          return "DATA_LABEL_METADATA_INVALID";
+        if(!permitted(q,actor,null,label,Map.of()))return "DATA_LABEL_NOT_AUTHORIZED";
+      }
+      return null;
     }catch(java.io.IOException bad){throw new IllegalStateException("UDP_ACQUISITION_METADATA_INVALID");}
   }
   private void require(AcquisitionEvidenceApi.Query q,ServingAuthorizationContext actor,UUID object,String label,Map<String,String> extra){if(!permitted(q,actor,object,label,extra))throw denied();}
