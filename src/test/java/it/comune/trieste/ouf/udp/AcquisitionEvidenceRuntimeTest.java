@@ -153,15 +153,16 @@ class AcquisitionEvidenceRuntimeTest {
     var objectHidden=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES,f.source(),"operational"));
     assertThat(objectHidden).containsEntry("redactionReasons",List.of("OBJECT_NOT_AUTHORIZED"));
     assertThat(rows(objectHidden.get("items"))).isEmpty();
-    db.sql("update ouf_udp.property_contribution set access_label='SENSITIVE' where handoff_id=:h").param("h",f.handoff()).update();
-    var propertyHidden=service.read(query(f),actor(AcquisitionEvidenceService.CAPABILITIES));
+    Fixture propertyFixture=fixture("tenant-a","OPEN",true,"SENSITIVE");
+    var propertyHidden=service.read(query(propertyFixture),actor(AcquisitionEvidenceService.CAPABILITIES));
     assertThat(propertyHidden).containsEntry("partial",true).containsEntry("authorization","REDACTED")
       .containsEntry("redactionReasons",List.of("PROPERTY_NOT_AUTHORIZED"));
     assertThat(rows(propertyHidden.get("items"))).singleElement().satisfies(i->assertThat(rows(i.get("properties"))).isEmpty());
   }
 
   long count(){return db.sql("select (select count(*) from ouf_udp.handoff_intake)+(select count(*) from ouf_udp.property_contribution)+(select count(*) from ouf_udp.materialization_observation)").query(Long.class).single();}
-  Fixture fixture(String tenant,String label,boolean observe){
+  Fixture fixture(String tenant,String label,boolean observe){return fixture(tenant,label,observe,label);}
+  Fixture fixture(String tenant,String label,boolean observe,String propertyLabel){
     UUID run=UUID.randomUUID(),object=UUID.randomUUID(),revision=UUID.randomUUID(),contribution=UUID.randomUUID();String source="evidence-"+run,handoff=UUID.randomUUID().toString();
     insertHandoff(handoff,run,source,label);
     db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,tenant_id) values(:o,'ouf:Asset',:t)").param("o",object).param("t",tenant).update();
@@ -170,8 +171,8 @@ class AcquisitionEvidenceRuntimeTest {
       db.sql("update ouf_udp.urban_object set current_revision_id=:v where urban_object_id=:o").param("v",revision).param("o",object).update();
       db.sql("insert into ouf_udp.materialization_observation(observation_id,handoff_id,urban_object_id,revision_id,material_change,canonical_hash) values(:i,:h,:o,:v,true,'sha256:canonical')").param("i",UUID.randomUUID()).param("h",handoff).param("o",object).param("v",revision).update();
       db.sql("insert into ouf_udp.property_contribution(contribution_id,urban_object_id,handoff_id,property_iri,value_json,value_hash,access_label,source_id,authority_rank,provenance_json) values(:c,:o,:h,'ouf:name','\"private-property-value\"','sha256:value',:label,:s,0,jsonb_build_object('lineageRef',cast(:l as text),'ingestionRunId',cast(:r as text),'rawObjectRef','private-raw-path','contractRefs',jsonb_build_object('bundleRef','bundle:1:sha256:pinned')))")
-        .param("c",contribution).param("o",object).param("h",handoff).param("label",label).param("s",source).param("l",UUID.randomUUID().toString()).param("r",run.toString()).update();
-      db.sql("insert into ouf_udp.property_value(property_value_id,revision_id,property_iri,value_json,datatype,access_label,contribution_id) values(:i,:v,'ouf:name','\"private-property-value\"','string',:label,:c)").param("i",UUID.randomUUID()).param("v",revision).param("label",label).param("c",contribution).update();
+        .param("c",contribution).param("o",object).param("h",handoff).param("label",propertyLabel).param("s",source).param("l",UUID.randomUUID().toString()).param("r",run.toString()).update();
+      db.sql("insert into ouf_udp.property_value(property_value_id,revision_id,property_iri,value_json,datatype,access_label,contribution_id) values(:i,:v,'ouf:name','\"private-property-value\"','string',:label,:c)").param("i",UUID.randomUUID()).param("v",revision).param("label",propertyLabel).param("c",contribution).update();
     }
     return new Fixture(run,source,handoff,object);
   }
