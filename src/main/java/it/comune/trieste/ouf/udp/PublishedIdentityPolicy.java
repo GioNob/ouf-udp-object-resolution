@@ -28,7 +28,7 @@ public final class PublishedIdentityPolicy {
         || !Objects.equals(raw.get("canonicalClass"),canonicalClass)
         || !(raw.get("maxCandidates") instanceof Number max) || max.doubleValue()!=max.intValue()
         || !(raw.get("allowAutoNew") instanceof Boolean))throw invalid();
-    List<?> signals=list(raw.get("signals"),1,32),rules=list(raw.get("sufficientRules"),1,32);
+    List<?> signals=list(raw.get("signals"),1,1024),rules=list(raw.get("sufficientRules"),1,32);
     Set<String> compared=new HashSet<>();
     for(Object item:signals){
       Map<?,?> signal=map(item,SIGNAL);
