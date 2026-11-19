@@ -26,6 +26,22 @@ class PublishedIdentityPolicyTest {
         .hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
   }
 
+  @Test @SuppressWarnings("unchecked") void distinctRulesAreExplicitMultiSignalAndFingerprintBound() throws Exception {
+    var resolution=proposal();var policy=(Map<String,Object>)resolution.get("governedIdentity");
+    var signals=(List<Map<String,Object>>)policy.get("signals");
+    signals.add(new LinkedHashMap<>(Map.of("id","urn:address","semanticRef","urn:address@set-1","comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","assertion://address")));
+    var mapped=Set.of("urn:key","urn:address");
+    var legacy=PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped);
+    policy.put("distinctRules",List.of(Map.of("id","different-key-and-address","signalIds",List.of("urn:key","urn:address"),"assertionRef","assertion://distinct")));
+    var changed=PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped);
+    assertThat(changed.distinctRules()).hasSize(1);
+    assertThat(ScopedIdentityCandidateRepository.fingerprint(changed)).isNotEqualTo(ScopedIdentityCandidateRepository.fingerprint(legacy));
+    policy.put("distinctRules",List.of());
+    assertThat(ScopedIdentityCandidateRepository.fingerprint(PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped))).isEqualTo(ScopedIdentityCandidateRepository.fingerprint(legacy));
+    policy.put("distinctRules",List.of(Map.of("id","weak","signalIds",List.of("urn:key"),"assertionRef","assertion://weak")));
+    assertThatThrownBy(()->PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped)).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+  }
+
   @Test void aDeclaredUniqueSignalWithoutItsAssertionIsInvalid() throws Exception {
     var resolution=proposal();
     @SuppressWarnings("unchecked") var policy=(Map<String,Object>)resolution.get("governedIdentity");
@@ -52,9 +68,38 @@ class PublishedIdentityPolicyTest {
         Set.of("urn:key","urn:address"))).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
   }
 
+  @Test @SuppressWarnings("unchecked") void widePolicyKeepsAllSignalsAndResolvesOneLogicalObject() throws Exception {
+    for(int count:List.of(300,400,1024,1025)){
+      var resolution=proposal();var raw=(Map<String,Object>)resolution.get("governedIdentity");
+      var signals=new ArrayList<Map<String,Object>>();var mapped=new HashSet<String>();
+      var values=new HashMap<String,GovernedIdentityEngine.Value>();
+      for(int n=0;n<count;n++){
+        String id=n==0?"urn:key":"urn:property:"+n;String ref=id+"@set-1";mapped.add(id);
+        signals.add(Map.of("id",id,"semanticRef",ref,"comparator","TEXT_V1","excludesOnDisagreement",false,"uniqueWithinScope",false,"assertionRef","assertion://wide/"+n));
+        values.put(id,new GovernedIdentityEngine.Value(ref,"value-"+n,"fixture://wide"));
+      }
+      raw.put("signals",signals);
+      if(count==1025){
+        assertThatThrownBy(()->PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped)).hasMessage("UDP_GOVERNED_IDENTITY_PROFILE_INVALID");
+        continue;
+      }
+      var policy=PublishedIdentityPolicy.decode(json,resolution,"tenant-a","s","urn:T",mapped);
+      assertThat(policy.signals()).hasSize(count);
+      UUID object=UUID.randomUUID();
+      var candidate=new GovernedIdentityEngine.Candidate(object,"tenant-a","urn:T",values);
+      var subject=new GovernedIdentityEngine.Subject("tenant-a","urn:T","s",values);
+      var candidates=new GovernedIdentityEngine.Candidates(policy.ref(),policy.version(),"tenant-a","urn:T","fixture://coverage",true,List.of(candidate));
+      var decision=new GovernedIdentityEngine().decide(policy,subject,candidates);
+      assertThat(decision.outcome()).isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+      assertThat(decision.objectId()).isEqualTo(object);
+      assertThat(decision.assessments()).singleElement().satisfies(a->assertThat(a.evidence()).hasSize(count));
+    }
+  }
+
   @SuppressWarnings("unchecked") private Map<String,Object> proposal() throws Exception {
     try(var input=getClass().getResourceAsStream("/identity-governed-proposal-v1.json")) {
       return json.readValue(input,Map.class);
     }
   }
 }
+

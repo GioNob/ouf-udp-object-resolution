@@ -25,6 +25,7 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
   @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
   @Autowired GovernedIdentityResolutionService governed;
   @Autowired IdentityGovernanceService governance;
+  @Autowired ResolutionReviewPackageService packages;
   @Autowired ResolutionRepository jobs;
   @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired JdbcClient db;
@@ -450,6 +451,91 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
           .query(UUID.class).single()).isEqualTo(original);
       assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
     }
+  }
+
+
+  @Test void approvedExistingObjectContinuesThroughPinnedPropertiesToCommit(){
+    propertyContinuation("APPROVE");
+  }
+  @Test void approvedNewObjectContinuesThroughPinnedPropertiesToCommit(){
+    propertyContinuation("CREATE_NEW");
+  }
+  private void propertyContinuation(String action){
+    clearObjects();
+    UUID existing=materializeWithAddress("property-seed","Alpha","Original address");
+    db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-property-seed'").update();
+    db.sql("update ouf_udp.handoff_intake set state='PROCESSED' where handoff_id='candidate-property-seed'").update();
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/property-continuation","1","default",
+        "ouf:Road","registry",5,true,List.of(
+        new GovernedIdentityEngine.Signal("ouf:name","ouf:name@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://name/1"),
+        new GovernedIdentityEngine.Signal("ouf:address","ouf:address@semantic://publication/1",
+            GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://address/1")),
+        List.of(new GovernedIdentityEngine.SufficientRule("both",Set.of("ouf:name","ouf:address"),
+            "assertion://both/1")));
+    backfill.rebuild(policy);
+    var rule=new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",
+        1,"SOURCE_INTERVAL",null,null);
+    var mapping=new UdpPorts.MaterializationProfile(LinkedPropertyReconciler.POLICY,List.of(
+        new UdpPorts.PropertyRule("name","ouf:name","http://www.w3.org/2001/XMLSchema#string","OPEN",List.of("registry"),rule),
+        new UdpPorts.PropertyRule("address","ouf:address","http://www.w3.org/2001/XMLSchema#string","OPEN",List.of("registry"),rule),
+        new UdpPorts.PropertyRule("note","ouf:note","http://www.w3.org/2001/XMLSchema#string","OPEN",List.of("registry"),rule)));
+    String record="property-"+action.toLowerCase(Locale.ROOT),handoff="candidate-"+record;
+    var incoming=envelope(record,"Alpha");
+    incoming.put("canonicalPayload",Map.of("code",record,"name","Alpha","address","Incoming address","note","Complementary fact"));
+    var configuration=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    org.mockito.Mockito.when(configuration.resolve("bundle://road/1","ROAD"))
+        .thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),null,mapping,null,null,policy));
+    var loop=new PublishedResolutionLoop(jobs,configuration,gate,resolver,materializer,null,db,
+        new org.springframework.transaction.support.TransactionTemplate(transactions),null,governed,backfill);
+    intake.accept(incoming);
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id=:h").param("h",handoff)
+        .query(String.class).single()).isEqualTo("QUARANTINED");
+    assertThat(db.sql("select count(*) from ouf_udp.handoff_property_profile where handoff_id=:h").param("h",handoff)
+        .query(Long.class).single()).isOne();
+    var human=new TrustedHumanContext("HUMAN_USER","reviewer","default",
+        Set.of("resolution.issue.read","resolution.match.approve"),"authz://property-continuation","property-continuation");
+    var view=packages.prepare(human);
+    assertThat(view.issues()).hasSize(1);
+    var card=view.issues().getFirst();
+    assertThat(card.propertyPreviews().get(existing.toString())).isInstanceOf(Map.class);
+    assertThat(((Map<?,?>)card.propertyPreviews().get(existing.toString())).get("available")).isEqualTo(true);
+    var choice=new ResolutionReviewPackageService.Choice(card.issueId(),card.version(),action,
+        "Reviewed identity and property evidence","APPROVE".equals(action)?existing:null,card.reviewHash());
+    packages.confirm(view.snapshotHash(),List.of(choice),human);
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id=:h").param("h",handoff)
+        .query(String.class).single()).isEqualTo("READY");
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id=:h").param("h",handoff)
+        .query(Long.class).single()).isZero();
+    loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id=:h").param("h",handoff)
+        .query(String.class).single()).isEqualTo("SUCCEEDED");
+    assertThat(db.sql("select state from ouf_udp.handoff_intake where handoff_id=:h").param("h",handoff)
+        .query(String.class).single()).isEqualTo("PROCESSED");
+    UUID target=db.sql("select urban_object_id from ouf_udp.source_binding where source_id='registry' and source_object_id=:id")
+        .param("id",record).query(UUID.class).single();
+    if("APPROVE".equals(action))assertThat(target).isEqualTo(existing);
+    else assertThat(target).isNotEqualTo(existing);
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation o join ouf_udp.object_revision r on r.revision_id=o.revision_id and r.urban_object_id=o.urban_object_id where o.handoff_id=:h and o.urban_object_id=:u")
+        .param("h",handoff).param("u",target).query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_udp.property_contribution where handoff_id=:h and urban_object_id=:u")
+        .param("h",handoff).param("u",target).query(Long.class).single()).isEqualTo(3);
+    assertThat(db.sql("select canonical_payload::text from ouf_udp.urban_object_current_state where urban_object_id=:u")
+        .param("u",target).query(String.class).single()).contains("Complementary fact");
+    if("APPROVE".equals(action)){
+      assertThat(db.sql("select count(*) from ouf_udp.property_conflict where urban_object_id=:u and property_iri='ouf:address'")
+          .param("u",target).query(Long.class).single()).isOne();
+      assertThat(db.sql("select count(*) from ouf_udp.property_contribution where urban_object_id=:u and property_iri='ouf:address'")
+          .param("u",target).query(Long.class).single()).isEqualTo(2);
+    }
+    loop.tick();
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id=:h")
+        .param("h",handoff).query(Long.class).single()).isOne();
+    assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision where issue_id=:i")
+        .param("i",card.issueId()).query(Long.class).single()).isOne();
   }
 
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}

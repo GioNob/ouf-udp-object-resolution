@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 final class PropertyEvidence {
   private PropertyEvidence() {}
   static List<Map<String,Object>> top(JdbcClient db, UUID object, UdpPorts.PropertyRule rule) {
+    if(rule.reconciliation()!=null)return LinkedPropertyReconciler.top(LinkedPropertyReconciler.eligible(all(db,object,rule),rule,now(db)),rule);
     var rows=db.sql("select distinct on (source_id) contribution_id,value_json::text value_json,value_hash,access_label,source_id,authority_rank,provenance_json::text provenance, ((provenance_json->'sourceIdentity')-'observedAt')::text source_identity from ouf_udp.property_contribution where urban_object_id=:u and property_iri=:p order by source_id,observed_at desc nulls last,created_at desc,contribution_id")
         .param("u",object).param("p",rule.propertyIri()).query().listOfRows();
     for(var row:rows){int rank=rule.authorityOrder().indexOf(String.valueOf(row.get("source_id")));row.put("authority_rank",rank<0?10000:rank);}
@@ -20,7 +21,10 @@ final class PropertyEvidence {
     // PostgreSQL jsonb provides a stable serialized identity independent of input key order.
     return hash(new TreeMap<>(Map.of("source",row.get("source_id"),"identity",row.get("source_identity"),"value",row.get("value_hash"),"label",row.get("access_label"))));
   }
-  static String set(List<Map<String,Object>> rows,UdpPorts.PropertyRule rule){return hash(Map.of("rule",rule,"contributions",rows.stream().map(PropertyEvidence::item).sorted().toList()));}
+  static List<Map<String,Object>> all(JdbcClient db,UUID object,UdpPorts.PropertyRule rule){var rows=db.sql("select contribution_id,value_json::text value_json,value_hash,access_label,source_id,authority_rank,provenance_json::text provenance,((provenance_json->'sourceIdentity')-'observedAt')::text source_identity from ouf_udp.property_contribution where urban_object_id=:u and property_iri=:p order by contribution_id limit 10001").param("u",object).param("p",rule.propertyIri()).query().listOfRows();if(rows.size()>10000)throw new IllegalStateException("UDP_PROPERTY_EVIDENCE_LIMIT");return rows;}
+  static java.time.OffsetDateTime now(JdbcClient db){return db.sql("select transaction_timestamp()").query(java.time.OffsetDateTime.class).single();}
+  static String set(List<Map<String,Object>> rows,UdpPorts.PropertyRule rule){return hash(Map.of("rule",rule,"contributions",rows.stream().map(r->rule.reconciliation()==null?item(r):LinkedPropertyReconciler.hash(Map.of("item",item(r),"provenance",LinkedPropertyReconciler.provenance(r)))).distinct().sorted().toList()));}
   static String policy(UdpPorts.PropertyRule rule){return hash(rule);}
   private static String hash(Object value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(new ObjectMapper().writeValueAsString(value).getBytes(StandardCharsets.UTF_8)));}catch(Exception e){throw new IllegalStateException(e);}}
 }
+

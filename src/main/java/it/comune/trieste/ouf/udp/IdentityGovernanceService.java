@@ -38,7 +38,8 @@ public class IdentityGovernanceService {
 
   @Transactional public void decideResolutionIssue(UUID issueId,long expectedVersion,String action,String reason,UUID target,TrustedHumanContext actor){
     actor.require("resolution.match.approve");
-    if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_REASON_REQUIRED");
+    if(reason!=null&&reason.length()>1000)throw new IllegalArgumentException("UDP_REASON_TOO_LONG");
+    reason=reason==null?"":reason.strip();
     boolean approve="APPROVE".equals(action),create="CREATE_NEW".equals(action);
     if(!approve&&!create&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
     Map<String,Object> issue=db.sql("select i.handoff_id,i.tenant_id,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,d.evidence_refs::text legacy_evidence,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
