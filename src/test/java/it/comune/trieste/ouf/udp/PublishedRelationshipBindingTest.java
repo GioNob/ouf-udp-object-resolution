@@ -43,6 +43,21 @@ class PublishedRelationshipBindingTest {
       assertThatThrownBy(()->resolve(b)).hasMessage("UDP_PINNED_PROFILE_INVALID");
     }
   }
+  @Test void publishedRuntimeReadsCategoryOnlyFromTheCanonicalTarget()throws Exception{
+    var b=bundle();
+    var mapping=map(b,"semanticMapping");
+    var category=Map.of("schemeIri","urn:example:scheme","conceptIri","urn:example:camera");
+    var other=Map.of("classIri","Cabinet","category",category);
+    var plain=Map.of("classIri","Camera");
+    var target=Map.of("classIri","Camera","category",category);
+    mapping.put("targetClasses",List.of(other,plain));
+    assertThat(resolve(b).resolution().categoryIri()).isNull();
+    mapping.put("targetClasses",List.of(other,target,target));
+    assertThat(resolve(b).resolution().categoryIri()).isEqualTo(category.get("conceptIri"));
+    mapping.put("targetClasses",List.of(plain,target));
+    assertThatThrownBy(()->resolve(b)).hasMessage("UDP_IDENTITY_CATEGORY_CONFLICT");
+  }
+
   @Test void cannotConvertAmbiguousMatchingIntoAnAutomaticFirstMatch()throws Exception{
     var b=bundle();map(((List<Map<String,Object>>)b.get("relationshipMappings")).getFirst(),"resolution").put("onMultipleMatches","FIRST");
     assertThatThrownBy(()->resolve(b)).hasMessage("UDP_PINNED_PROFILE_INVALID");

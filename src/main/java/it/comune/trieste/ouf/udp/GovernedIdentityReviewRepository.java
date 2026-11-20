@@ -44,6 +44,7 @@ public class GovernedIdentityReviewRepository {
     evidence.put("policyVersion",decision.policyVersion());
     evidence.put("tenantId",retrieved.tenantId());
     evidence.put("canonicalClass",retrieved.canonicalClass());
+    if(retrieved.categoryIri()!=null)evidence.put("categoryIri",retrieved.categoryIri());
     evidence.put("coverageRef",coverage);
     evidence.put("complete",retrieved.complete());
     evidence.put("outcome",decision.outcome().name());

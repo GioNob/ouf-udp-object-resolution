@@ -17,6 +17,7 @@ public class MaterializationReferenceGate {
     }catch(PublicationAccessFailure failure){
       if(failure.retryable())dependencies.defer(claim,failure);else jobs.quarantine(claim,failure.getMessage());
       return false;
+    }catch(IdentityCategory.Rejected e){jobs.quarantine(claim,e.getMessage());return false;
     }catch(IllegalArgumentException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CONTRACT_INVALID",ReferenceFailureEvidence.detail(e));return false;}catch(IllegalStateException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CATALOG_INVALID",ReferenceFailureEvidence.detail(e));return false;}
     if(!result.ready()){jobs.pause(claim,result.missingRefHashes(),delay(claim.integrityAttempts()),maxAttempts);return false;}
     if(claim.integrityBaselineHash()!=null&&!claim.integrityBaselineHash().equals(result.baselineHash())){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_DRIFT");return false;}

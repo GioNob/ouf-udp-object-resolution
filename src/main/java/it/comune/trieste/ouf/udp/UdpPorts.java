@@ -8,7 +8,11 @@ public final class UdpPorts {
   public interface MaterializationConfigurationPort {MaterializationProfile resolve(String bundleRef,String typeCode);}
   public interface RelationshipConfigurationPort {RelationshipProfile resolve(String bundleRef,String typeCode);}
   public interface SpatialConfigurationPort {SpatialProfile resolve(String bundleRef,String typeCode);}
-  public record ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty,WeightedIdentity.Policy weighted){
+  public record ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty,WeightedIdentity.Policy weighted,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String categoryIri){
+    public ResolutionProfile {if(categoryIri!=null)IdentityCategory.requireAbsolute(categoryIri);}
+    public ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty,WeightedIdentity.Policy weighted){this(strategyId,strategyVersion,policyRef,canonicalType,canonicalKeyProperty,matchProperty,weighted,null);}
+    ResolutionProfile withCategory(IdentityCategory category){return new ResolutionProfile(strategyId,strategyVersion,policyRef,canonicalType,canonicalKeyProperty,matchProperty,weighted,category==null?null:category.conceptIri());}
     public ResolutionProfile(String strategyId,String strategyVersion,String policyRef,String canonicalType,String canonicalKeyProperty,String matchProperty){this(strategyId,strategyVersion,policyRef,canonicalType,canonicalKeyProperty,matchProperty,null);}
   }
   public record PropertyRule(String sourceField,String propertyIri,String datatype,String accessLabel,List<String> authorityOrder,@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) LinkedPropertyReconciler.Rule reconciliation) {

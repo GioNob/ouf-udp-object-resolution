@@ -47,10 +47,10 @@ public class GovernedIdentityPreflight {
         ||classes.stream().noneMatch(c->c instanceof Map<?,?> target
             &&canonicalClass.equals(target.get("classIri"))))throw invalid("CLASS");
     var policy=PublishedIdentityPolicy.decode(json,resolution,actor.tenantId(),sourceId,
-        canonicalClass,mapped);
+        canonicalClass,mapped,IdentityCategory.forClass(classes,canonicalClass));
     // Serialize with existing scope materialization/rebuild writers. Repeated delivery of
     // the same immutable review reconciles its live proof instead of replacing coverage.
-    locks.acquire(policy.tenantId(),policy.canonicalClass());
+    locks.acquire(policy.tenantId(),policy.canonicalClass(),policy.categoryIri());
     String fingerprint=ScopedIdentityCandidateRepository.fingerprint(policy);
     var retained=db.sql("select attestation_id from ouf_udp.identity_preactivation_attestation where configuration_hash=:hash and source_id=:source and tenant_id=:tenant order by created_at desc,attestation_id desc limit 1")
         .param("hash",configurationHash).param("source",sourceId).param("tenant",actor.tenantId()).query(UUID.class).list();
@@ -60,9 +60,9 @@ public class GovernedIdentityPreflight {
     }
     var rebuilt=index.rebuild(policy);
     UUID id=UUID.randomUUID();
-    db.sql("insert into ouf_udp.identity_preactivation_attestation(attestation_id,configuration_hash,tenant_id,source_id,canonical_class,policy_ref,policy_version,policy_fingerprint,coverage_ref,indexed_objects,actor_subject) values(:id,:hash,:tenant,:source,:class,:policy,:version,:fingerprint,:coverage,:count,:actor)")
+    db.sql("insert into ouf_udp.identity_preactivation_attestation(attestation_id,configuration_hash,tenant_id,source_id,canonical_class,category_iri,policy_ref,policy_version,policy_fingerprint,coverage_ref,indexed_objects,actor_subject) values(:id,:hash,:tenant,:source,:class,:category,:policy,:version,:fingerprint,:coverage,:count,:actor)")
         .param("id",id).param("hash",configurationHash).param("tenant",actor.tenantId())
-        .param("source",sourceId).param("class",canonicalClass).param("policy",policy.ref())
+        .param("source",sourceId).param("class",canonicalClass).param("category",policy.categoryIri(),java.sql.Types.VARCHAR).param("policy",policy.ref())
         .param("version",policy.version()).param("fingerprint",fingerprint)
         .param("coverage",rebuilt.coverageRef()).param("count",rebuilt.indexedObjects())
         .param("actor",actor.subject()).update();
@@ -83,7 +83,7 @@ public class GovernedIdentityPreflight {
     return read(id,tenantId);
   }
   private Attestation read(UUID id,String tenantId){
-    var row=db.sql("select a.attestation_id,a.configuration_hash,a.tenant_id,a.source_id,a.canonical_class,a.policy_ref,a.policy_version,a.policy_fingerprint,a.coverage_ref,a.indexed_objects, c.complete and c.coverage_ref=a.coverage_ref and c.policy_fingerprint=a.policy_fingerprint and c.field_set_hash is not null valid from ouf_udp.identity_preactivation_attestation a left join ouf_udp.identity_lookup_coverage c on c.tenant_id=a.tenant_id and c.canonical_class=a.canonical_class and c.policy_ref=a.policy_ref and c.policy_version=a.policy_version where a.attestation_id=:id and a.tenant_id=:tenant")
+    var row=db.sql("select a.attestation_id,a.configuration_hash,a.tenant_id,a.source_id,a.canonical_class,a.category_iri,a.policy_ref,a.policy_version,a.policy_fingerprint,a.coverage_ref,a.indexed_objects, c.complete and c.coverage_ref=a.coverage_ref and c.policy_fingerprint=a.policy_fingerprint and c.field_set_hash is not null valid from ouf_udp.identity_preactivation_attestation a left join ouf_udp.identity_lookup_coverage c on c.tenant_id=a.tenant_id and c.canonical_class=a.canonical_class and c.category_iri is not distinct from a.category_iri and c.policy_ref=a.policy_ref and c.policy_version=a.policy_version where a.attestation_id=:id and a.tenant_id=:tenant")
         .param("id",id).param("tenant",tenantId).query().listOfRows().stream()
         .findFirst().orElseThrow(()->invalid("NOT_FOUND"));
     return new Attestation((UUID)row.get("attestation_id"),String.valueOf(row.get("configuration_hash")),
@@ -91,7 +91,7 @@ public class GovernedIdentityPreflight {
         String.valueOf(row.get("canonical_class")),String.valueOf(row.get("policy_ref")),
         String.valueOf(row.get("policy_version")),String.valueOf(row.get("policy_fingerprint")),
         String.valueOf(row.get("coverage_ref")),((Number)row.get("indexed_objects")).longValue(),
-        Boolean.TRUE.equals(row.get("valid")));
+        Boolean.TRUE.equals(row.get("valid")),(String)row.get("category_iri"));
   }
   private String hash(Object value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
       .digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true)
@@ -105,5 +105,6 @@ public class GovernedIdentityPreflight {
   }
   public record Attestation(UUID attestationId,String configurationHash,String tenantId,String sourceId,
       String canonicalClass,String policyRef,String policyVersion,String policyFingerprint,
-      String coverageRef,long indexedObjects,boolean valid){}
+      String coverageRef,long indexedObjects,boolean valid,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String categoryIri){}
 }

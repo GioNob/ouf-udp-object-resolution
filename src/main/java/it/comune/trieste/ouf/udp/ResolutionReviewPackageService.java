@@ -89,21 +89,20 @@ public class ResolutionReviewPackageService {
       String candidates=String.valueOf(row.get("candidates"));
       String evidence=String.valueOf(row.get("evidence"));
       List<String> refs=readCandidates(candidates);
+      Object decodedEvidence=readEvidence(evidence);
+      var scope=reviewScope(tenant,decodedEvidence);
+      String category=scope==null?null:scope.categoryIri();
+      refs=eligibleReferences(refs,tenant,category);
       UUID suggested=null;
       if(refs.size()==1)try{suggested=UUID.fromString(refs.getFirst());}
         catch(IllegalArgumentException ignored){/* No automatic selection. */}
-      Object decodedEvidence=readEvidence(evidence);
-      String expectedType=null;
-      if(decodedEvidence instanceof List<?> items&&!items.isEmpty()
-          &&items.getFirst() instanceof Map<?,?> first&&first.get("canonicalClass") instanceof String type)
-        expectedType=type;
       ReviewObject incoming=new ReviewObject("handoff://"+row.get("handoff_id"),
           String.valueOf(row.get("source_id")),String.valueOf(row.get("source_object_id")),
           String.valueOf(row.get("type_code")),null,null,row.get("incoming_fields")!=null,
           fields(row.get("incoming_fields")));
       Map<String,ReviewObject> objects=new LinkedHashMap<>();
       Map<String,Object> previews=new LinkedHashMap<>();
-      for(String ref:refs){objects.put(ref,candidate(ref,tenant,expectedType,lock));previews.put(ref,LinkedPropertyPreview.prepare(db,json,String.valueOf(row.get("handoff_id")),ref,tenant));}
+      for(String ref:refs){objects.put(ref,candidate(ref,tenant,scope,lock));previews.put(ref,LinkedPropertyPreview.prepare(db,json,String.valueOf(row.get("handoff_id")),ref,tenant,category));}
       Map<String,Object> item=new LinkedHashMap<>();
       item.put("id",id);item.put("version",version);item.put("reason",reason);
       item.put("candidates",candidates);item.put("evidence",evidence);
@@ -119,28 +118,48 @@ public class ResolutionReviewPackageService {
     var query=db.sql("select candidate_refs::text candidates,evidence_refs::text evidence from ouf_udp.resolution_issue where tenant_id=:tenant and state='OPEN'"
         +(selected==null?"":" and issue_id in (:selected)")).param("tenant",tenant);
     if(selected!=null)query.param("selected",selected);
-    Set<String> classes=new TreeSet<>();Set<UUID> objects=new HashSet<>();
+    Set<GovernedIdentityScopeLock.Scope> scopes=new HashSet<>();Set<UUID> objects=new HashSet<>();
     for(var row:query.query().listOfRows()){
       for(String ref:readCandidates(String.valueOf(row.get("candidates"))))
         try{objects.add(UUID.fromString(ref));}catch(IllegalArgumentException ignored){/* unavailable reference */}
       Object decoded=readEvidence(String.valueOf(row.get("evidence")));
-      if(decoded instanceof List<?> items&&!items.isEmpty()&&items.getFirst() instanceof Map<?,?> first
-          &&first.get("canonicalClass") instanceof String type&&!type.isBlank())classes.add(type);
+      var scope=reviewScope(tenant,decoded);
+      if(scope!=null)scopes.add(scope);
     }
-    if(!objects.isEmpty())classes.addAll(db.sql("select distinct canonical_type from ouf_udp.urban_object where tenant_id=:tenant and urban_object_id in (:objects)")
-        .param("tenant",tenant).param("objects",objects).query(String.class).list());
-    for(String type:classes)identityScope.acquire(tenant,type);
+    if(!objects.isEmpty())db.sql("select distinct tenant_id,canonical_type,category_iri from ouf_udp.urban_object where tenant_id=:tenant and urban_object_id in (:objects)")
+        .param("tenant",tenant).param("objects",objects).query().listOfRows().forEach(row->scopes.add(GovernedIdentityScopeLock.Scope.object(row)));
+    identityScope.acquireAll(scopes);
   }
 
-  private ReviewObject candidate(String ref,String tenant,String expectedType,boolean lock){
+  private static GovernedIdentityScopeLock.Scope reviewScope(String tenant,Object decoded){
+    if(!(decoded instanceof List<?> items)||items.isEmpty())return null;
+    if(items.getFirst() instanceof Map<?,?> first && first.get("canonicalClass") instanceof String type)
+      return new GovernedIdentityScopeLock.Scope(tenant,type,(String)first.get("categoryIri"));
+    String type=IdentityCategory.legacyField(items,"scope:canonical-type:");
+    return type==null?null:new GovernedIdentityScopeLock.Scope(tenant,type,IdentityCategory.legacyField(items,"scope:category:"));
+  }
+
+  private List<String> eligibleReferences(List<String> refs,String tenant,String category){
+    List<UUID> ids=new ArrayList<>();
+    for(String ref:refs)try{ids.add(UUID.fromString(ref));}catch(IllegalArgumentException ignored){/* Historical reference. */}
+    if(ids.isEmpty())return refs;
+    var stale=db.sql("select urban_object_id from ouf_udp.urban_object where tenant_id=:tenant and urban_object_id in (:ids) and category_iri is distinct from :category")
+        .param("tenant",tenant).param("ids",ids).param("category",category,java.sql.Types.VARCHAR)
+        .query(UUID.class).list().stream().map(UUID::toString).collect(java.util.stream.Collectors.toSet());
+    return refs.stream().filter(ref->!stale.contains(ref)).toList();
+  }
+
+  private ReviewObject candidate(String ref,String tenant,GovernedIdentityScopeLock.Scope scope,boolean lock){
+    String expectedType=scope==null?null:scope.canonicalClass();
     UUID id;
     try{id=UUID.fromString(ref);}catch(IllegalArgumentException failure){return unavailable(ref);}
     String sql="select o.canonical_type,o.revision,s.revision_id,s.canonical_payload::text fields "
         +"from ouf_udp.urban_object o left join ouf_udp.urban_object_current_state s "
         +"on s.urban_object_id=o.urban_object_id and s.revision_id=o.current_revision_id "
-        +"where o.urban_object_id=:id and o.tenant_id=:tenant and o.status='ACTIVE'"
+        +"where o.urban_object_id=:id and o.tenant_id=:tenant and o.category_iri is not distinct from :category and o.status='ACTIVE'"
         +(expectedType==null?"":" and o.canonical_type=:type")+(lock?" for share of o":"");
-    var query=db.sql(sql).param("id",id).param("tenant",tenant);
+    var query=db.sql(sql).param("id",id).param("tenant",tenant)
+        .param("category",scope==null?null:scope.categoryIri(),java.sql.Types.VARCHAR);
     if(expectedType!=null)query.param("type",expectedType);
     var matches=query.query().listOfRows();
     if(matches.isEmpty())return unavailable(ref);

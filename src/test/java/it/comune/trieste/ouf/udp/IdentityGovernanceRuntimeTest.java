@@ -80,6 +80,10 @@ class IdentityGovernanceRuntimeTest {
     assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",issue)
         .query(String.class).single()).isEqualTo("OPEN");
     db.sql("update ouf_udp.urban_object set tenant_id='default' where urban_object_id=:id").param("id",selected).update();
+    setCategory(selected,"urn:example:pharmacy");
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","changed category",selected,human))
+        .hasMessage("UDP_IDENTITY_CATEGORY_MISMATCH");
+    setCategory(selected,null);
     governance.decideResolutionIssue(issue,0,"APPROVE","checked current object",selected,human);
     assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'")
         .query(UUID.class).single()).isEqualTo(selected);
@@ -168,6 +172,29 @@ class IdentityGovernanceRuntimeTest {
     db.sql("update ouf_udp.urban_object set canonical_type='ouf:PostalAddress' where urban_object_id=:i").param("i",target).update();
     assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_RESOLUTION_TARGET_SCOPE_MISMATCH");assertReviewUntouched(issue);
   }
+  @Test void reviewAndMergeRecheckCategoryBeforeAnyEffects(){
+    UUID first=seedCandidate("A","same"),second=seedCandidate("B","same");
+    UUID issue=reviewIssue();
+    var merge=governance.planMerge(first,second,human);
+    setCategory(second,"urn:example:pharmacy");
+    assertThatThrownBy(()->governance.executeMerge(merge.planId(),0,"reviewed","merge-category",human))
+        .hasMessage("UDP_IDENTITY_CATEGORY_MISMATCH");
+    assertThat(governance.getPlan(merge.planId()).state()).isEqualTo("DRAFT");
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","reviewed",second,human))
+        .hasMessage("UDP_IDENTITY_CATEGORY_MISMATCH");
+    assertReviewUntouched(issue);
+    var reader=new TrustedHumanContext("HUMAN_USER","reader",human.tenantId(),Set.of("resolution.issue.read"),
+        "urn:example:decision","category-review");
+    var card=packages.prepare(reader).issues().getFirst();
+    assertThat(card.candidateRefs()).containsExactly(first.toString());
+    assertThat(card.propertyPreviews()).doesNotContainKey(second.toString());
+  }
+
+  private void setCategory(UUID object,String category){
+    db.sql("update ouf_udp.urban_object set category_iri=:category where urban_object_id=:id")
+        .param("category",category,java.sql.Types.VARCHAR).param("id",object).update();
+  }
+
   @Test void humanApprovalRejectsForeignTenantAndInactiveCandidate(){
     UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID issue=reviewIssue();
     db.sql("update ouf_udp.urban_object set tenant_id='foreign' where urban_object_id=:i").param("i",target).update();

@@ -256,13 +256,34 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
       assertThat(first.get(10,java.util.concurrent.TimeUnit.SECONDS).attestationId()).isEqualTo(attestation.attestationId());
       assertThat(second.get(10,java.util.concurrent.TimeUnit.SECONDS).coverageRef()).isEqualTo(attestation.coverageRef());
     }
+    String concept="urn:example:kiosk:"+UUID.randomUUID();
+    var categorized=new LinkedHashMap<>(configuration);
+    var semantic=new LinkedHashMap<>(PublishedRuntimeConfiguration.object(configuration,"semanticMapping"));
+    semantic.put("targetClasses",List.of(Map.of("classIri",policy.canonicalClass(),"category",
+        Map.of("schemeIri","urn:example:scheme","conceptIri",concept))));
+    categorized.put("semanticMapping",semantic);
+    String changedHash="sha256:"+java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+        .digest(json.copy().configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true)
+            .writeValueAsBytes(categorized)));
+    assertThatThrownBy(()->preflight.latest(changedHash,"registry",admin.tenantId())).hasMessage("UDP_IDENTITY_PREFLIGHT_NOT_FOUND");
+    var separate=preflight.prepare("registry",changedHash,categorized,admin);
+    assertThat(separate.valid()).isTrue();
+    assertThat(separate.categoryIri()).isEqualTo(concept);
+    assertThat(separate.indexedObjects()).isZero();
+    assertThat(separate.coverageRef()).isNotEqualTo(attestation.coverageRef());
+    assertThat(separate.policyFingerprint()).isNotEqualTo(attestation.policyFingerprint());
     db.sql("update ouf_udp.urban_object_current_state set updated_at=transaction_timestamp()")
         .update();
     assertThat(preflight.status(attestation.attestationId(),admin).valid()).isFalse();
+    assertThat(preflight.status(separate.attestationId(),admin).valid()).isTrue();
     var refreshed=preflight.prepare("registry",hash,configuration,admin);
     assertThat(refreshed.valid()).isTrue();
     assertThat(refreshed.attestationId()).isNotEqualTo(attestation.attestationId());
     assertThat(refreshed.coverageRef()).isNotEqualTo(attestation.coverageRef());
+    db.sql("update ouf_udp.urban_object set category_iri=:category where canonical_type=:type")
+        .param("category",concept).param("type",policy.canonicalClass()).update();
+    assertThat(preflight.status(refreshed.attestationId(),admin).valid()).isFalse();
+    assertThat(preflight.status(separate.attestationId(),admin).valid()).isFalse();
   }
   @Test void indexedSeedFindsOnlyMatchingCurrentObjectAndMutationInvalidatesCoverage(){
     clearObjects();
@@ -536,6 +557,120 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .param("h",handoff).query(Long.class).single()).isOne();
     assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision where issue_id=:i")
         .param("i",card.issueId()).query(Long.class).single()).isOne();
+  }
+
+  @Test void writerLockBlocksOnlyTheSameScopeOnAnotherConnection(){
+    var policy=categoryPolicy("registry","urn:example:kiosk");
+    var second=new org.springframework.transaction.support.TransactionTemplate(transactions);
+    second.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    tx.executeWithoutResult(outer->{
+      db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type,category_iri) values(gen_random_uuid(),:tenant,:type,:category)")
+          .param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).param("category",policy.categoryIri()).update();
+      second.executeWithoutResult(inner->{
+        for(String category:Arrays.asList(policy.categoryIri(),null,"urn:example:pharmacy")){
+          boolean acquired=db.sql("select pg_try_advisory_xact_lock(ouf_udp.identity_scope_lock_id(:tenant,:type,:category))")
+              .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
+              .param("category",category,java.sql.Types.VARCHAR).query(Boolean.class).single();
+          assertThat(acquired).isEqualTo(!Objects.equals(category,policy.categoryIri()));
+        }
+      });
+      outer.setRollbackOnly();
+    });
+  }
+
+  @Test void governedCreationAndIncrementalRefreshStayInTheObservedCategory(){
+    clearObjects();
+    var kiosk=categoryPolicy("registry","urn:example:kiosk");
+    var legacy=policy();
+    var mapping=new UdpPorts.MaterializationProfile("urn:example:authority",List.of(
+        new UdpPorts.PropertyRule("ouf:name","ouf:name","string","OPEN",List.of("registry"))));
+    backfill.rebuild(legacy);
+    backfill.rebuild(kiosk);
+    var record=identityRecord("created","registry","created");
+    tx.executeWithoutResult(status->{
+      var created=governed.resolve("candidate-created",record,mapping,kiosk);
+      assertThat(created.outcome()).isEqualTo("NEW_OBJECT");
+      materializer.materialize("candidate-created",created.targetUrbanObjectId(),record,mapping);
+      backfill.refreshOne(kiosk,created.targetUrbanObjectId(),created.coverageRef());
+      var subject=new GovernedIdentitySubjectMapper().map("candidate-created",record,mapping,kiosk);
+      assertThat(candidates.retrieve(kiosk,subject).rows()).extracting(GovernedIdentityEngine.Candidate::objectId)
+          .containsExactly(created.targetUrbanObjectId());
+      assertThatThrownBy(()->candidates.retrieve(legacy,subject)).hasMessage("UDP_IDENTITY_SCOPE_INVALID");
+      var legacyRows=candidates.retrieve(legacy,subject("Shared name"));
+      assertThat(legacyRows.complete()).isTrue();
+      assertThat(legacyRows.rows()).isEmpty();
+    });
+  }
+
+  @Test void equalValuesAcrossSourcesConvergeOnlyWithinTheirCategory(){
+    clearObjects();
+    var base=policy();
+    var mapping=new UdpPorts.MaterializationProfile("urn:example:authority",List.of(
+        new UdpPorts.PropertyRule("ouf:name","ouf:name","string","OPEN",List.of("registry","survey"))));
+    var weighted=new WeightedIdentity.Policy(List.of(new WeightedIdentity.Signal("ouf:name","EXACT",1,null)),
+        List.of("ouf:name"),null,1,0.9,0.5,0.1,false);
+    List<String> categories=Arrays.asList(null,"urn:example:kiosk","urn:example:pharmacy");
+    List<UUID> ids=new ArrayList<>();
+    for(int n=0;n<categories.size();n++){
+      String id="seed-"+n;
+      var seed=identityRecord(id,"registry",id);
+      // The direct lookup and canonical uniqueness both see the same key in every scope.
+      var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1",base.ref(),base.canonicalClass(),
+          "ouf:name","ouf:name",null,categories.get(n));
+      var result=resolver.resolve("candidate-"+id,seed,profile);
+      assertThat(result.outcome()).isEqualTo("NEW_OBJECT");
+      ids.add(result.targetUrbanObjectId());
+      materializer.materialize("candidate-"+id,ids.get(n),seed,mapping);
+    }
+    assertThat(ids).doesNotHaveDuplicates();
+    for(int n=0;n<categories.size();n++){
+      var policy=categoryPolicy("survey",categories.get(n));
+      var incoming=identityRecord("governed-"+n,"survey","g-"+n);
+      var subject=new GovernedIdentitySubjectMapper().map("candidate-governed-"+n,incoming,mapping,policy);
+      // All categories reuse the same policy ref/version. Another scope cannot vouch for this one.
+      assertThat(candidates.retrieve(policy,subject).complete()).isFalse();
+      assertThat(backfill.rebuild(policy).indexedObjects()).isOne();
+      var retrieved=candidates.retrieve(policy,subject);
+      assertThat(retrieved.complete()).isTrue();
+      assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(ids.get(n));
+      var match=governed.resolve("candidate-governed-"+n,incoming,mapping,policy);
+      assertThat(match.outcome()).isEqualTo("MATCH");
+      assertThat(match.targetUrbanObjectId()).isEqualTo(ids.get(n));
+
+      // No direct match key. The JSON blocking query must isolate the scope before LIMIT 2.
+      var profile=new UdpPorts.ResolutionProfile("WEIGHTED","1",base.ref(),base.canonicalClass(),
+          "key","missing",weighted,categories.get(n));
+      var other=identityRecord("weighted-"+n,"survey","w-"+n);
+      var scored=resolver.resolve("candidate-weighted-"+n,other,profile);
+      assertThat(scored.outcome()).isEqualTo("MATCH");
+      assertThat(scored.targetUrbanObjectId()).isEqualTo(ids.get(n));
+    }
+    assertThat(db.sql("select count(*) from ouf_udp.identity_lookup_coverage where complete").query(Long.class).single()).isEqualTo(3);
+    var changed=identityRecord("changed","survey","g-1");
+    assertThatThrownBy(()->governed.resolve("candidate-changed",changed,mapping,categoryPolicy("survey",categories.get(2))))
+        .hasMessage("UDP_IDENTITY_CATEGORY_DRIFT");
+    var uncategorized=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1",base.ref(),base.canonicalClass(),"key","ouf:name");
+    assertThatThrownBy(()->resolver.resolve("candidate-changed",changed,uncategorized)).hasMessage("UDP_IDENTITY_CATEGORY_DRIFT");
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='g-1'").query(UUID.class).single())
+        .isEqualTo(ids.get(1));
+    assertThat(db.sql("select category_iri from ouf_udp.urban_object where urban_object_id=:id")
+        .param("id",ids.get(1)).query(String.class).single()).isEqualTo(categories.get(1));
+  }
+
+  private Map<String,Object> identityRecord(String id,String source,String sourceObject){
+    var record=envelope(id,"Shared name");
+    record.put("sourceIdentity",Map.of("sourceId",source,"typeCode","ROAD","sourceObjectId",sourceObject,
+        "observedAt","2026-09-12T00:00:00Z"));
+    record.put("canonicalPayload",Map.of("ouf:name","Shared name"));
+    intake.accept(record);
+    return record;
+  }
+
+  private GovernedIdentityEngine.Policy categoryPolicy(String source,String concept){
+    var base=policy();
+    var category=concept==null?null:new IdentityCategory("urn:example:scheme",concept);
+    return new GovernedIdentityEngine.Policy(base.ref(),base.version(),base.tenantId(),base.canonicalClass(),
+        source,base.maxCandidates(),base.allowAutoNew(),base.signals(),base.sufficientRules(),base.distinctRules(),category);
   }
 
   private void clearObjects(){db.sql("truncate table ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
