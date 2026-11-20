@@ -186,8 +186,17 @@ class IdentityGovernanceRuntimeTest {
     var reader=new TrustedHumanContext("HUMAN_USER","reader",human.tenantId(),Set.of("resolution.issue.read"),
         "urn:example:decision","category-review");
     var card=packages.prepare(reader).issues().getFirst();
-    assertThat(card.candidateRefs()).containsExactly(first.toString());
+    assertThat(card.candidateRefs()).containsExactlyInAnyOrder(first.toString(),second.toString());
+    assertThat(card.suggestedTargetUrbanObjectId()).isNull();
+    assertThat(card.candidateObjects().get(first.toString()).unavailableReason()).isNull();
+    var excluded=card.candidateObjects().get(second.toString());
+    assertThat(excluded.available()).isFalse();
+    assertThat(excluded.unavailableReason()).isEqualTo("UDP_IDENTITY_CATEGORY_MISMATCH");
+    assertThat(excluded.fields()).isEmpty();
     assertThat(card.propertyPreviews()).doesNotContainKey(second.toString());
+    governance.decideResolutionIssue(issue,0,"APPROVE","confirmed eligible candidate",first,human);
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'")
+        .query(UUID.class).single()).isEqualTo(first);
   }
 
   private void setCategory(UUID object,String category){
@@ -207,14 +216,40 @@ class IdentityGovernanceRuntimeTest {
     var other=new TrustedHumanContext("HUMAN","other","foreign",human.capabilities(),"authz://other","corr-other");
     assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,other)).isInstanceOf(SecurityException.class).hasMessage("UDP_REVIEW_TENANT_REQUIRED");assertReviewUntouched(issue);
   }
-  @Test void changedBindingCannotBeFalselyReportedAsApproved(){
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.NullSource
+  @org.junit.jupiter.params.provider.ValueSource(strings="urn:example:other")
+  void changedBindingCannotBeFalselyReportedAsApproved(String otherCategory){
     UUID target=seedCandidate("A","same"),other=seedCandidate("B","same");UUID issue=reviewIssue();
+    setCategory(other,otherCategory);
     db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values('roads','ROAD','incoming',:u,'review-h')").param("u",other).update();
     assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","review",target,human)).hasMessageContaining("UDP_BINDING_CONFLICT");
     assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:i").param("i",issue).query(String.class).single()).isEqualTo("OPEN");
     assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision").query(Long.class).single()).isZero();
     assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'").query(UUID.class).single()).isEqualTo(other);
   }
+  @Test void unresolvedBindingCanBeReallocatedAndRetiredBindingKeepsItsConflict(){
+    UUID target=seedCandidate("A","same"),previous=seedCandidate("B","same");
+    UUID issue=reviewIssue();
+    setCategory(previous,"urn:example:previous");
+    binding("old","roads","ROAD","incoming",previous);
+    db.sql("update ouf_udp.source_binding set state='RETIRED' where urban_object_id=:u").param("u",previous).update();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","reviewed",target,human))
+        .hasMessage("UDP_BINDING_CONFLICT");
+    var next=handoff("new-observation","incoming","same");
+    intake.accept(next);
+    var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","urn:example:policy","ouf:Road","identity","name");
+    assertThatThrownBy(()->resolution.resolve("new-observation",next,profile))
+        .hasMessage("UDP_SOURCE_BINDING_CHANGED_DURING_RESOLUTION");
+    db.sql("update ouf_udp.source_binding set state='UNRESOLVED' where urban_object_id=:u").param("u",previous).update();
+    governance.decideResolutionIssue(issue,0,"APPROVE","reviewed",target,human);
+    assertThat(resolution.resolve("review-h",handoff("review-h","incoming","same"),profile).targetUrbanObjectId())
+        .isEqualTo(target);
+    db.sql("update ouf_udp.source_binding set state='UNRESOLVED',urban_object_id=:u where source_object_id='incoming'")
+        .param("u",previous).update();
+    assertThat(resolution.resolve("new-observation",next,profile).targetUrbanObjectId()).isEqualTo(target);
+  }
+
   @Test void legacyIssueWithoutFrozenScopeCannotBeApprovedByGuessing(){
     UUID target=seedCandidate("A","same");seedCandidate("B","same");UUID original=reviewIssue();
     intake.accept(handoff("legacy-h","legacy-row","same"));
@@ -306,6 +341,51 @@ class IdentityGovernanceRuntimeTest {
     assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i on i.handoff_id=j.handoff_id where i.issue_id=:id").param("id",deferred.issueId()).query(String.class).single()).isEqualTo("QUARANTINED");
     assertThat(db.sql("select count(*) from ouf_udp.human_resolution_decision where issue_id=:id").param("id",deferred.issueId()).query(Long.class).single()).isZero();
     assertThatThrownBy(()->packages.confirm(view.snapshotHash(),List.of(choice),actor)).hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
+  }
+
+  @Test void malformedScopesStayVisibleWhileTheOtherIssueCanBeConfirmed() throws Exception{
+    UUID target=seedCandidate("A","same");
+    seedCandidate("B","same");
+    UUID valid=reviewIssue();
+    var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","urn:example:policy","ouf:Road","identity","name");
+    record BadScope(boolean governed,List<?> evidence) {}
+    String tenant="scope:tenant:"+human.tenantId(),type="scope:canonical-type:"+profile.canonicalType();
+    var invalidEvidence=List.of(
+        new BadScope(false,List.of(tenant,type,"scope:category:")),
+        new BadScope(false,List.of(tenant,tenant,type)),
+        new BadScope(true,List.of(Map.of("tenantId",human.tenantId(),"canonicalClass",profile.canonicalType(),
+            "policyRef","p","policyVersion","1","categoryIri",7))),
+        new BadScope(true,List.of(Map.of("tenantId",human.tenantId(),"canonicalClass"," ",
+            "policyRef","p","policyVersion","1"))));
+    var json=new com.fasterxml.jackson.databind.ObjectMapper();
+    for(var bad:invalidEvidence){
+      String id=UUID.randomUUID().toString();
+      var payload=handoff(id,id,"same");
+      intake.accept(payload);
+      if(bad.governed()){
+        var coverage=new GovernedIdentityEngine.Candidates("p","1",human.tenantId(),profile.canonicalType(),
+            null,false,List.of());
+        var decision=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,
+            null,"CANDIDATE_COVERAGE_UNVERIFIED","p","1",List.of());
+        governedReviews.record(id,decision,coverage);
+      }else resolution.resolve(id,payload,profile);
+      db.sql("update ouf_udp.resolution_issue set evidence_refs=cast(:e as jsonb) where handoff_id=:h")
+          .param("e",json.writeValueAsString(bad.evidence())).param("h",id).update();
+    }
+    var actor=new TrustedHumanContext("HUMAN_USER","reader",human.tenantId(),
+        Set.of("resolution.issue.read","resolution.match.approve"),"urn:example:decision","scope-review");
+    var view=packages.prepare(actor);
+    assertThat(view.issues()).filteredOn(ResolutionReviewPackageService.IssueCard::available)
+        .extracting(ResolutionReviewPackageService.IssueCard::issueId).containsExactly(valid);
+    assertThat(view.issues()).filteredOn(card->!card.available()).hasSize(invalidEvidence.size()).allSatisfy(card->{
+      assertThat(card.unavailableReason()).isEqualTo("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");
+      assertThat(card.suggestedTargetUrbanObjectId()).isNull();
+      assertThat(card.propertyPreviews()).isEmpty();
+    });
+    var choice=new ResolutionReviewPackageService.Choice(valid,0,"APPROVE","checked",target);
+    assertThat(packages.confirm(view.snapshotHash(),List.of(choice),actor).issueCount()).isOne();
+    assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id<>:id").param("id",valid)
+        .query(String.class).list()).hasSize(invalidEvidence.size()).containsOnly("OPEN");
   }
 
   private UUID reviewIssue(){

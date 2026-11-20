@@ -37,8 +37,6 @@ public class GovernedIdentityResolutionService {
     List<Map<String,Object>> binding=db.sql("select b.urban_object_id,b.state,o.tenant_id,o.canonical_type,o.category_iri,o.status object_status from ouf_udp.source_binding b join ouf_udp.urban_object o on o.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b")
         .param("s",policy.sourceId()).param("t",type).param("o",sourceObject).query().listOfRows();
     UUID bound=binding.isEmpty()?null:(UUID)binding.getFirst().get("urban_object_id");
-    if(bound!=null && !Objects.equals(policy.categoryIri(),binding.getFirst().get("category_iri")))
-      throw IdentityCategory.drift();
     boolean healthy=bound!=null&&"ACTIVE".equals(binding.getFirst().get("state"))
         &&"ACTIVE".equals(binding.getFirst().get("object_status"))
         &&policy.tenantId().equals(binding.getFirst().get("tenant_id"))
@@ -77,6 +75,7 @@ public class GovernedIdentityResolutionService {
         if("CREATE_NEW".equals(old.get("human_action"))&&!materialized)
           throw new IllegalStateException("UDP_NEW_IDENTITY_BINDING_CONFLICT");
         if(materialized)return new Result("MATCH",bound,true);
+        if(!Objects.equals(policy.categoryIri(),binding.getFirst().get("category_iri")))throw IdentityCategory.drift();
         var coverage=candidates.retrieve(policy,subject);
         return new Result("MATCH",bound,false,coverage.complete()?coverage.coverageRef():null);
       }
@@ -86,6 +85,7 @@ public class GovernedIdentityResolutionService {
     // An ACTIVE source binding is continuity evidence in its own right. A changed
     // observation may change properties without changing the canonical identity.
     if(healthy){
+      if(!Objects.equals(policy.categoryIri(),binding.getFirst().get("category_iri")))throw IdentityCategory.drift();
       var coverage=candidates.retrieve(policy,subject);
       String bindingRef="source-binding://"+policy.sourceId()+"/"+type+"/"+sourceObject;
       Map<String,Object> evidence=new LinkedHashMap<>();

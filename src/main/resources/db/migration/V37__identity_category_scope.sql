@@ -44,7 +44,7 @@ create index identity_lookup_shape_idx on ouf_udp.identity_lookup_shape
 
 -- One encoding for both application and trigger locks.
 create function ouf_udp.identity_scope_lock_id(tenant text, class_iri text, category text)
-returns bigint language sql immutable as $$
+returns bigint language sql stable as $$
   select hashtextextended('identity:' || jsonb_build_array(tenant,class_iri,category)::text,0)
 $$;
 

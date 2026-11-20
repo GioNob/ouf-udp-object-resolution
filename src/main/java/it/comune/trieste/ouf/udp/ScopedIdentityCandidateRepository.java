@@ -83,7 +83,7 @@ public class ScopedIdentityCandidateRepository {
             union all select urban_object_id from shape_hits
           ) selected order by urban_object_id limit :candidateLimit
         ), snapshot as (select pg_current_snapshot()::text snapshot_ref,txid_current()::text tx_ref)
-        select coverage.coverage_ref,snapshot.snapshot_ref,snapshot.tx_ref,o.urban_object_id,
+        select coverage.coverage_ref,snapshot.snapshot_ref,snapshot.tx_ref,o.urban_object_id,o.category_iri,
                p.property_iri,p.value_json::text value_json,p.contribution_id,
                c.provenance_json #>> '{contractRefs,semanticPublicationSetRef}' publication_ref
         from snapshot left join coverage on true left join hits h on true
@@ -102,11 +102,13 @@ public class ScopedIdentityCandidateRepository {
     if(rows.isEmpty())throw new IllegalStateException("UDP_CANDIDATE_SNAPSHOT_MISSING");
     String coverage=(String)rows.getFirst().get("coverage_ref");
     if(coverage==null)return incomplete(policy);
-    Map<UUID,Map<String,GovernedIdentityEngine.Value>> values=new LinkedHashMap<>();
+    record ObjectScope(UUID id,String categoryIri) {}
+    Map<ObjectScope,Map<String,GovernedIdentityEngine.Value>> values=new LinkedHashMap<>();
     for(var row:rows){
       UUID object=(UUID)row.get("urban_object_id");
       if(object==null)continue;
-      Map<String,GovernedIdentityEngine.Value> found=values.computeIfAbsent(object,ignored->new HashMap<>());
+      Map<String,GovernedIdentityEngine.Value> found=values.computeIfAbsent(
+          new ObjectScope(object,(String)row.get("category_iri")),ignored->new HashMap<>());
       if(row.get("property_iri") instanceof String property){
         String publication=row.get("publication_ref") instanceof String ref && !ref.isBlank()?ref:"unverified";
         UUID contribution=(UUID)row.get("contribution_id");
@@ -122,8 +124,8 @@ public class ScopedIdentityCandidateRepository {
       }
     }
     List<GovernedIdentityEngine.Candidate> candidates=new ArrayList<>();
-    for(var entry:values.entrySet())candidates.add(new GovernedIdentityEngine.Candidate(entry.getKey(),
-        policy.tenantId(),policy.canonicalClass(),entry.getValue(),policy.categoryIri()));
+    for(var entry:values.entrySet())candidates.add(new GovernedIdentityEngine.Candidate(entry.getKey().id(),
+        policy.tenantId(),policy.canonicalClass(),entry.getValue(),entry.getKey().categoryIri()));
     return new GovernedIdentityEngine.Candidates(policy.ref(),policy.version(),policy.tenantId(),
         policy.canonicalClass(),"indexed-snapshot://"+coverage+"/"+rows.getFirst().get("tx_ref")
             +"/"+rows.getFirst().get("snapshot_ref"),

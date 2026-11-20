@@ -29,6 +29,17 @@ deployed = {
     24: ("V24__human_geometry_decisions.sql", -835784960),
     25: ("V25__human_property_decisions.sql", -1491487699),
     26: ("V26__geometry_roles_and_validity.sql", -369310849),
+    # V27–V36 are pinned from the installed migration sources (D-055).
+    27: ("V27__identity_scope_serialization.sql", -971238326),
+    28: ("V28__identity_value_lookup.sql", 1298756818),
+    29: ("V29__identity_field_shape_catalog.sql", 2068388741),
+    30: ("V30__resolution_review_package.sql", -419854425),
+    31: ("V31__serialize_identity_coverage_invalidation.sql", 80452861),
+    32: ("V32__governed_identity_preactivation_attestation.sql", 909978875),
+    33: ("V33__human_new_identity_decision.sql", -819055726),
+    34: ("V34__repeat_human_review_after_stale_coverage.sql", 592479726),
+    35: ("V35__linked_property_reconciliation.sql", -376865285),
+    36: ("V36__publication_dependency_recovery.sql", -1335086670),
 }
 for version, (filename, expected) in deployed.items():
     path = versions[version]
@@ -40,5 +51,5 @@ for version, (filename, expected) in deployed.items():
     if path.name != filename or signed != expected:
         raise SystemExit(f"DEPLOYED_MIGRATION_CHANGED={version}")
 
-print("LIVE_MIGRATIONS_V22_TO_V26_IMMUTABLE=PASS NEXT=V27_TO_V37")
+print("LIVE_MIGRATIONS_V22_TO_V36_IMMUTABLE=PASS NEXT=V37")
 

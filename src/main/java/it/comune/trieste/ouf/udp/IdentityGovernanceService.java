@@ -54,9 +54,8 @@ public class IdentityGovernanceService {
         throw new IllegalArgumentException("UDP_TARGET_NOT_A_CANDIDATE");
       if("GOVERNED_IDENTITY".equals(issue.get("strategy_id")))verifyGovernedReviewTarget(issue,target);
       else requireIssueScope(issue,target,actor);
-      var previous=db.sql("select b.urban_object_id,prev.category_iri is distinct from dest.category_iri drift from ouf_udp.source_binding b join ouf_udp.urban_object prev on prev.urban_object_id=b.urban_object_id join ouf_udp.urban_object dest on dest.urban_object_id=:target where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b")
-          .param("target",target).param("s",issue.get("source_id")).param("t",issue.get("type_code")).param("o",issue.get("source_object_id")).query().listOfRows();
-      if(!previous.isEmpty() && Boolean.TRUE.equals(previous.getFirst().get("drift")))throw IdentityCategory.drift();
+      var previous=db.sql("select urban_object_id from ouf_udp.source_binding where source_id=:s and type_code=:t and source_object_id=:o for update")
+          .param("s",issue.get("source_id")).param("t",issue.get("type_code")).param("o",issue.get("source_object_id")).query().listOfRows();
       int changed=db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict(source_id,type_code,source_object_id) do update set urban_object_id=excluded.urban_object_id,state='ACTIVE' where source_binding.state='UNRESOLVED' and source_binding.urban_object_id=:previous")
           .param("previous",previous.isEmpty()?null:previous.getFirst().get("urban_object_id"),Types.OTHER)
           .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
@@ -91,13 +90,10 @@ public class IdentityGovernanceService {
 
   private Map<?,?> governedReviewEvidence(Map<String,Object> issue){
     Object raw=readAny(String.valueOf(issue.get("evidence")));
-    if(!(raw instanceof List<?> list)||list.isEmpty()||!(list.getFirst() instanceof Map<?,?> evidence)
-        ||!(evidence.get("tenantId") instanceof String tenant)||tenant.isBlank()
-        ||!tenant.equals(issue.get("tenant_id"))
-        ||!(evidence.get("canonicalClass") instanceof String canonicalClass)||canonicalClass.isBlank()
-        ||!(evidence.get("policyRef") instanceof String)||!(evidence.get("policyVersion") instanceof String))
+    var scope=GovernedIdentityScopeLock.Scope.fromReviewEvidence(raw,true);
+    if(scope==null||!scope.tenant().equals(issue.get("tenant_id")))
       throw new IllegalStateException("UDP_GOVERNED_REVIEW_SCOPE_MISSING");
-    return evidence;
+    return (Map<?,?>)((List<?>)raw).getFirst();
   }
 
   private boolean currentIdentityCoverage(Map<?,?> evidence){
@@ -189,11 +185,11 @@ public class IdentityGovernanceService {
   }
   private void requireIssueScope(Map<String,Object> issue,UUID target,TrustedHumanContext actor){
     Object raw=readAny(String.valueOf(issue.get("legacy_evidence")));
-    if(!(raw instanceof List<?> evidence))throw new IllegalArgumentException("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");
-    String tenant=IdentityCategory.legacyField(evidence,"scope:tenant:");
-    String type=IdentityCategory.legacyField(evidence,"scope:canonical-type:");
-    String category=IdentityCategory.legacyField(evidence,"scope:category:");
-    if(tenant==null||type==null)throw new IllegalArgumentException("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");
+    var scope=GovernedIdentityScopeLock.Scope.fromReviewEvidence(raw,false);
+    if(scope==null||!scope.equals(GovernedIdentityScopeLock.Scope.fromReviewEvidence(
+        readAny(String.valueOf(issue.get("evidence"))),false)))
+      throw new IllegalArgumentException("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");
+    String tenant=scope.tenant(),type=scope.canonicalClass(),category=scope.categoryIri();
     if(!tenant.equals(actor.tenantId()))throw new SecurityException("UDP_IDENTITY_TENANT_MISMATCH");
     identityScope.acquire(tenant,type,category);
     db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))")

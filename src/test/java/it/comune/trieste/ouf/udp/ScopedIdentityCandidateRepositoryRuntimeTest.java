@@ -2,6 +2,11 @@ package it.comune.trieste.ouf.udp;
 
 import static org.assertj.core.api.Assertions.*;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import static org.mockito.Mockito.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -85,6 +90,47 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Long.class).single()).isOne();
   }
+  @Test void publishedJobsOfOneClassSerializeBeforeRememberingProfiles() throws Exception{
+    clearObjects();
+    var configuration=mock(PublishedRuntimeConfiguration.class);
+    var gate=mock(MaterializationReferenceGate.class);
+    when(gate.verify(any())).thenReturn(true);
+    var mapping=new UdpPorts.MaterializationProfile("urn:example:authority",List.of(
+        new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    var profile=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","urn:example:policy","ouf:Road","code","code");
+    when(configuration.resolve("bundle://road/1","ROAD"))
+        .thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),profile,mapping,null));
+    var firstBackend=new CompletableFuture<Integer>();
+    var releaseFirst=new CountDownLatch(1);
+    var observed=mock(CanonicalMaterializer.class,org.mockito.AdditionalAnswers.delegatesTo(materializer));
+    doAnswer(call->{
+      firstBackend.complete(db.sql("select pg_backend_pid()").query(Integer.class).single());
+      if(!releaseFirst.await(20,TimeUnit.SECONDS))throw new AssertionError("first job timed out");
+      materializer.rememberProfile(call.getArgument(0),call.getArgument(1),call.getArgument(2),call.getArgument(3));
+      return null;
+    }).when(observed).rememberProfile(eq("candidate-lock-1"),anyString(),anyString(),any());
+    var first=new PublishedResolutionLoop(jobs,configuration,gate,resolver,observed,null,db,tx);
+    var second=new PublishedResolutionLoop(jobs,configuration,gate,resolver,observed,null,db,tx);
+    intake.accept(envelope("lock-1","First"));
+    try(var workers=Executors.newFixedThreadPool(2)){
+      var one=workers.submit(first::tick);
+      try{
+        int holder=firstBackend.get(10,TimeUnit.SECONDS);
+        intake.accept(envelope("lock-2","Second"));
+        var two=workers.submit(second::tick);
+        org.awaitility.Awaitility.await().atMost(10,TimeUnit.SECONDS).until(()->
+            db.sql("select exists(select 1 from pg_locks where locktype='advisory' and not granted and :holder=any(pg_blocking_pids(pid)))")
+                .param("holder",holder).query(Boolean.class).single());
+        verify(observed,never()).rememberProfile(eq("candidate-lock-2"),anyString(),anyString(),any());
+        releaseFirst.countDown();
+        two.get(10,TimeUnit.SECONDS);
+        one.get(10,TimeUnit.SECONDS);
+      }finally{releaseFirst.countDown();}
+    }
+    assertThat(db.sql("select state from ouf_udp.materialization_job").query(String.class).list())
+        .hasSize(2).containsOnly("SUCCEEDED");
+  }
+
   @Test void humanApprovedReviewResumesAndMaterializesTheObservation(){
     clearObjects();
     UUID existing=materializeWithAddress("review-target","Alpha","Via Roma");
@@ -452,28 +498,58 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(decision.objectId()).isEqualTo(eligible);
   }
 
-  @Test void governedSourceBindingCannotCrossNatureOrTenantEvenWithIdenticalProperties(){
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.NullSource
+  @org.junit.jupiter.params.provider.ValueSource(strings="urn:example:foreign-category")
+  void unusableBindingKeepsBothWorkersInHumanReview(String objectCategory){
     clearObjects();
     UUID original=materialize("existing","Same address");
+    db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-existing'").update();
     var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",
         List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
-    for(String drift:List.of("nature","tenant")){
-      db.sql("update ouf_udp.urban_object set tenant_id=:tenant,canonical_type=:type where urban_object_id=:u")
-          .param("tenant",drift.equals("tenant")?"another-ente":"default")
-          .param("type",drift.equals("nature")?"ouf:PostalAddress":"ouf:Road").param("u",original).update();
-      Map<String,Object> incoming=envelope("drift-"+drift,"Same address");
-      incoming.put("sourceIdentity",Map.of("sourceId","registry","typeCode","ROAD","sourceObjectId","existing",
-          "observedAt","2026-09-12T00:00:00Z"));
-      intake.accept(incoming);
-      var result=governed.resolve("candidate-drift-"+drift,incoming,mapping,policy());
-      assertThat(result.outcome()).isEqualTo("REVIEW_REQUIRED");
-      assertThat(result.targetUrbanObjectId()).isNull();
-      assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_id='registry' and source_object_id='existing'")
-          .query(UUID.class).single()).isEqualTo(original);
-      assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+    var legacy=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","urn:example:policy","ouf:Road","code","name");
+    var configuration=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    var loop=new PublishedResolutionLoop(jobs,configuration,gate,resolver,materializer,null,db,tx,null,governed,backfill);
+    for(String drift:List.of("nature","tenant","inactive")){
+      db.sql("update ouf_udp.urban_object set tenant_id=:tenant,canonical_type=:type,status=:status,category_iri=:category where urban_object_id=:u")
+          .param("tenant",drift.equals("tenant")?"another-ente":policy().tenantId())
+          .param("type",drift.equals("nature")?"ouf:PostalAddress":policy().canonicalClass())
+          .param("status",drift.equals("inactive")?"RETIRED":"ACTIVE")
+          .param("category",objectCategory,java.sql.Types.VARCHAR).param("u",original).update();
+      for(boolean indexed:List.of(true,false)){
+        var profiles=new PublishedRuntimeConfiguration.Profiles(Map.of(),legacy,mapping,null,null,indexed?policy():null);
+        org.mockito.Mockito.when(configuration.resolve("bundle://road/1","ROAD")).thenReturn(profiles);
+        String id="drift-"+drift+"-"+indexed;
+        var incoming=envelope(id,"Same address");
+        incoming.put("sourceIdentity",Map.of("sourceId","registry","typeCode","ROAD","sourceObjectId","existing",
+            "observedAt","2026-09-12T00:00:00Z"));
+        intake.accept(incoming);
+        loop.tick();
+        String handoff="candidate-"+id;
+        assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id=:h")
+            .param("h",handoff).query(String.class).single()).isEqualTo("QUARANTINED");
+        assertThat(db.sql("select reason_code from ouf_udp.resolution_issue where handoff_id=:h and state='OPEN'")
+            .param("h",handoff).query(String.class).single())
+            .isEqualTo(indexed?"SOURCE_BINDING_CONFLICT":"UDP_SOURCE_BINDING_SCOPE_MISMATCH");
+        if(indexed){
+          var replay=governed.resolve(handoff,incoming,mapping,policy());
+          assertThat(replay.outcome()).isEqualTo("REVIEW_REQUIRED");
+          assertThat(replay.targetUrbanObjectId()).isNull();
+          assertThat(replay.duplicate()).isTrue();
+        }else{
+          var replay=resolver.resolve(handoff,incoming,legacy);
+          assertThat(replay.outcome()).isEqualTo("REVIEW_REQUIRED");
+          assertThat(replay.targetUrbanObjectId()).isNull();
+          assertThat(replay.duplicate()).isTrue();
+        }
+      }
     }
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='existing'")
+        .query(UUID.class).single()).isEqualTo(original);
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
   }
-
 
   @Test void approvedExistingObjectContinuesThroughPinnedPropertiesToCommit(){
     propertyContinuation("APPROVE");

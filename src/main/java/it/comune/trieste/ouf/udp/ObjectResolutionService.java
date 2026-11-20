@@ -22,10 +22,6 @@ public class ObjectResolutionService {
     Map<String,Object> source=HandoffIntakeService.object(payload,"sourceIdentity"),canonical=HandoffIntakeService.object(payload,"canonicalPayload");
     db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))")
       .param("key","source-binding:"+write(List.of(HandoffIntakeService.text(source,"sourceId"),HandoffIntakeService.text(source,"typeCode"),HandoffIntakeService.text(source,"sourceObjectId")))).query().singleRow();
-    List<Map<String,Object>> bound=db.sql("select b.urban_object_id,u.tenant_id,u.canonical_type,u.category_iri,u.status,b.state from ouf_udp.source_binding b join ouf_udp.urban_object u on u.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b,u")
-      .param("s",HandoffIntakeService.text(source,"sourceId")).param("t",HandoffIntakeService.text(source,"typeCode")).param("o",HandoffIntakeService.text(source,"sourceObjectId")).query().listOfRows();
-    if(!bound.isEmpty() && !Objects.equals(profile.categoryIri(),bound.getFirst().get("category_iri")))
-      throw IdentityCategory.drift();
     List<Map<String,Object>> prior=db.sql("select d.outcome,coalesce(d.target_urban_object_id,b.urban_object_id) target_urban_object_id,i.state issue_state from ouf_udp.resolution_decision d left join ouf_udp.handoff_intake h on h.handoff_id=d.handoff_id left join ouf_udp.source_binding b on b.source_id=h.source_id and b.type_code=h.type_code and b.source_object_id=h.source_object_id left join ouf_udp.resolution_issue i on i.resolution_decision_id=d.resolution_decision_id where d.handoff_id=:h").param("h",handoffId).query().listOfRows();if(!prior.isEmpty()){
       var previous=prior.getFirst();String outcome=String.valueOf(previous.get("outcome"));
       boolean reviewed="REVIEW_REQUIRED".equals(outcome)&&"RESOLVED".equals(previous.get("issue_state"));
@@ -34,9 +30,12 @@ public class ObjectResolutionService {
       return new Decision(reviewed&&target!=null?"MATCH":outcome,target,true);
     }
     if(canonical==null)return rejected(handoffId,profile,"UDP_CANONICAL_PAYLOAD_REQUIRED");
+    List<Map<String,Object>> bound=db.sql("select b.urban_object_id,u.tenant_id,u.canonical_type,u.category_iri,u.status,b.state from ouf_udp.source_binding b join ouf_udp.urban_object u on u.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b,u")
+      .param("s",HandoffIntakeService.text(source,"sourceId")).param("t",HandoffIntakeService.text(source,"typeCode")).param("o",HandoffIntakeService.text(source,"sourceObjectId")).query().listOfRows();
     if(bound.size()==1 && "ACTIVE".equals(bound.getFirst().get("state"))){
       var existing=bound.getFirst();
       if(!scopeMatches(existing,profile))return bindingReview(handoffId,profile);
+      if(!Objects.equals(profile.categoryIri(),existing.get("category_iri")))throw IdentityCategory.drift();
       UUID target=(UUID)existing.get("urban_object_id");
       decision(handoffId,"MATCH",target,profile,List.of("source-binding://"+HandoffIntakeService.text(source,"sourceId")+"/"+HandoffIntakeService.text(source,"sourceObjectId")),1.0);
       return new Decision("MATCH",target,false);
@@ -61,11 +60,10 @@ public class ObjectResolutionService {
   }
   private String effectiveTenant(){return tenant==null||tenant.isBlank()?"default":tenant;}
   private boolean scopeMatches(Map<String,Object> object,UdpPorts.ResolutionProfile profile){
-    if(!Objects.equals(profile.categoryIri(),object.get("category_iri")))throw IdentityCategory.drift();
     return effectiveTenant().equals(object.get("tenant_id"))&&profile.canonicalType().equals(object.get("canonical_type"))&&"ACTIVE".equals(object.get("status"));
   }
   private boolean inScope(UUID target,UdpPorts.ResolutionProfile profile){
-    return db.sql("select tenant_id,canonical_type,category_iri,status from ouf_udp.urban_object where urban_object_id=:u for update").param("u",target).query().listOfRows().stream().anyMatch(v->scopeMatches(v,profile));
+    return db.sql("select tenant_id,canonical_type,category_iri,status from ouf_udp.urban_object where urban_object_id=:u for update").param("u",target).query().listOfRows().stream().anyMatch(v->scopeMatches(v,profile)&&Objects.equals(profile.categoryIri(),v.get("category_iri")));
   }
   private Decision bindingReview(String handoff,UdpPorts.ResolutionProfile profile){
     List<String> evidence=scopeEvidence(handoff,profile,"validation://UDP_SOURCE_BINDING_SCOPE_MISMATCH");

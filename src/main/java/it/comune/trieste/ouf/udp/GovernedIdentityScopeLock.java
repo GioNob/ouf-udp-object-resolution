@@ -16,6 +16,26 @@ public class GovernedIdentityScopeLock {
       if(tenant==null||tenant.isBlank()||canonicalClass==null||canonicalClass.isBlank())
         throw new IllegalArgumentException("UDP_IDENTITY_SCOPE_INVALID");
     }
+    static Scope fromReviewEvidence(Object decoded,boolean governed) {
+      if(!(decoded instanceof List<?> items)||items.isEmpty())return null;
+      if(governed){
+        if(!(items.getFirst() instanceof Map<?,?> first)
+            || !(first.get("tenantId") instanceof String tenant)||tenant.isBlank()
+            || !(first.get("canonicalClass") instanceof String type)||type.isBlank()
+            || !(first.get("policyRef") instanceof String)||!(first.get("policyVersion") instanceof String))
+          return null;
+        Object category=first.get("categoryIri");
+        if(first.containsKey("categoryIri") && (!(category instanceof String iri)||iri.isBlank()))return null;
+        return new Scope(tenant,type,(String)category);
+      }
+      try{
+        String tenant=IdentityCategory.legacyField(items,"scope:tenant:");
+        String type=IdentityCategory.legacyField(items,"scope:canonical-type:");
+        String category=IdentityCategory.legacyField(items,"scope:category:");
+        return tenant==null||type==null?null:new Scope(tenant,type,category);
+      }catch(IllegalArgumentException malformed){return null;}
+    }
+
     static Scope object(Map<String,Object> row){
       return new Scope((String)row.get("tenant_id"),(String)row.get("canonical_type"),(String)row.get("category_iri"));
     }
