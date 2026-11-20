@@ -25,7 +25,7 @@ public class GovernedIdentityResolutionService {
   @Transactional public Result resolve(String handoffId,Map<String,Object> handoff,
       UdpPorts.MaterializationProfile materialization,GovernedIdentityEngine.Policy policy){
     Objects.requireNonNull(policy);
-    locks.acquire(policy.tenantId(),policy.canonicalClass());
+    locks.acquire(policy.tenantId(),policy.canonicalClass(),policy.categoryIri());
     var subject=subjects.map(handoffId,handoff,materialization,policy);
     Map<String,Object> source=HandoffIntakeService.object(handoff,"sourceIdentity");
     String type=HandoffIntakeService.text(source,"typeCode");
@@ -34,7 +34,7 @@ public class GovernedIdentityResolutionService {
         .param("h",handoffId).query().singleRow();
     if(!policy.sourceId().equals(stored.get("source_id"))||!type.equals(stored.get("type_code"))
         ||!sourceObject.equals(stored.get("source_object_id")))throw invalid();
-    List<Map<String,Object>> binding=db.sql("select b.urban_object_id,b.state,o.tenant_id,o.canonical_type,o.status object_status from ouf_udp.source_binding b join ouf_udp.urban_object o on o.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b")
+    List<Map<String,Object>> binding=db.sql("select b.urban_object_id,b.state,o.tenant_id,o.canonical_type,o.category_iri,o.status object_status from ouf_udp.source_binding b join ouf_udp.urban_object o on o.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b")
         .param("s",policy.sourceId()).param("t",type).param("o",sourceObject).query().listOfRows();
     UUID bound=binding.isEmpty()?null:(UUID)binding.getFirst().get("urban_object_id");
     boolean healthy=bound!=null&&"ACTIVE".equals(binding.getFirst().get("state"))
@@ -61,8 +61,8 @@ public class GovernedIdentityResolutionService {
             return new Result("REVIEW_REQUIRED",null,false);
           }
           UUID created=UUID.randomUUID();
-          db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(:id,:tenant,:type)")
-              .param("id",created).param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).update();
+          db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type,category_iri) values(:id,:tenant,:type,:category)")
+              .param("id",created).param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).param("category",policy.categoryIri(),java.sql.Types.VARCHAR).update();
           int inserted=db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict do nothing")
               .param("s",policy.sourceId()).param("t",type).param("o",sourceObject)
               .param("u",created).param("h",handoffId).update();
@@ -75,6 +75,7 @@ public class GovernedIdentityResolutionService {
         if("CREATE_NEW".equals(old.get("human_action"))&&!materialized)
           throw new IllegalStateException("UDP_NEW_IDENTITY_BINDING_CONFLICT");
         if(materialized)return new Result("MATCH",bound,true);
+        if(!Objects.equals(policy.categoryIri(),binding.getFirst().get("category_iri")))throw IdentityCategory.drift();
         var coverage=candidates.retrieve(policy,subject);
         return new Result("MATCH",bound,false,coverage.complete()?coverage.coverageRef():null);
       }
@@ -84,6 +85,7 @@ public class GovernedIdentityResolutionService {
     // An ACTIVE source binding is continuity evidence in its own right. A changed
     // observation may change properties without changing the canonical identity.
     if(healthy){
+      if(!Objects.equals(policy.categoryIri(),binding.getFirst().get("category_iri")))throw IdentityCategory.drift();
       var coverage=candidates.retrieve(policy,subject);
       String bindingRef="source-binding://"+policy.sourceId()+"/"+type+"/"+sourceObject;
       Map<String,Object> evidence=new LinkedHashMap<>();
@@ -101,7 +103,7 @@ public class GovernedIdentityResolutionService {
       var conflict=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,
           null,"SOURCE_BINDING_CONFLICT",policy.ref(),policy.version(),List.of());
       var unavailable=new GovernedIdentityEngine.Candidates(policy.ref(),policy.version(),
-          policy.tenantId(),policy.canonicalClass(),null,false,List.of());
+          policy.tenantId(),policy.canonicalClass(),null,false,List.of(),policy.categoryIri());
       reviews.record(handoffId,conflict,unavailable,false);
       return new Result("REVIEW_REQUIRED",null,false);
     }
@@ -121,12 +123,13 @@ public class GovernedIdentityResolutionService {
     }
     UUID target=decision.outcome()==GovernedIdentityEngine.Outcome.MATCH?decision.objectId():UUID.randomUUID();
     if(decision.outcome()==GovernedIdentityEngine.Outcome.NEW_OBJECT){
-      db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type) values(:id,:tenant,:type)")
-          .param("id",target).param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).update();
+      db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type,category_iri) values(:id,:tenant,:type,:category)")
+          .param("id",target).param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).param("category",policy.categoryIri(),java.sql.Types.VARCHAR).update();
     }
     Map<String,Object> evidence=new LinkedHashMap<>();
     evidence.put("policyRef",policy.ref());evidence.put("policyVersion",policy.version());
     evidence.put("tenantId",policy.tenantId());evidence.put("canonicalClass",policy.canonicalClass());
+    if(policy.categoryIri()!=null)evidence.put("categoryIri",policy.categoryIri());
     evidence.put("coverageRef",retrieved.coverageRef());evidence.put("complete",retrieved.complete());
     evidence.put("outcome",decision.outcome().name());evidence.put("reason",decision.reason());
     evidence.put("assessments",decision.assessments());
@@ -169,6 +172,7 @@ public class GovernedIdentityResolutionService {
     Map<String,Object> evidence=new LinkedHashMap<>();
     evidence.put("policyRef",policy.ref());evidence.put("policyVersion",policy.version());
     evidence.put("tenantId",policy.tenantId());evidence.put("canonicalClass",policy.canonicalClass());
+    if(policy.categoryIri()!=null)evidence.put("categoryIri",policy.categoryIri());
     evidence.put("coverageRef",coverage.coverageRef());evidence.put("complete",coverage.complete());
     evidence.put("outcome","REVIEW_REQUIRED");evidence.put("reason","NEW_IDENTITY_EVIDENCE_STALE");
     evidence.put("assessments",decision.assessments());

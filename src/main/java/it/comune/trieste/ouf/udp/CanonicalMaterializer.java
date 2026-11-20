@@ -23,9 +23,9 @@ public class CanonicalMaterializer {
     return materialize(handoffId,urbanObjectId,handoff,profile,true);
   }
   private Result materialize(String handoffId,UUID urbanObjectId,Map<String,Object> handoff,UdpPorts.MaterializationProfile profile,boolean refresh){
-    Map<String,Object> scope=db.sql("select tenant_id,canonical_type from ouf_udp.urban_object where urban_object_id=:id")
+    Map<String,Object> scope=db.sql("select tenant_id,canonical_type,category_iri from ouf_udp.urban_object where urban_object_id=:id")
         .param("id",urbanObjectId).query().singleRow();
-    identityScope.acquire(String.valueOf(scope.get("tenant_id")),String.valueOf(scope.get("canonical_type")));
+    identityScope.acquire(String.valueOf(scope.get("tenant_id")),String.valueOf(scope.get("canonical_type")),(String)scope.get("category_iri"));
     if(profile.properties().stream().anyMatch(r->r.reconciliation()!=null)){
       var sourceIdentity=HandoffIntakeService.object(handoff,"sourceIdentity");
       if(db.sql("select 1 from ouf_udp.source_binding b join ouf_udp.urban_object o on o.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:record and b.urban_object_id=:u and o.tenant_id=:tenant and o.status='ACTIVE'").param("s",sourceIdentity.get("sourceId")).param("t",sourceIdentity.get("typeCode")).param("record",sourceIdentity.get("sourceObjectId")).param("u",urbanObjectId).param("tenant",scope.get("tenant_id")).query(Integer.class).optional().isEmpty())throw new IllegalArgumentException("UDP_PROPERTY_IDENTITY_BINDING_REQUIRED");

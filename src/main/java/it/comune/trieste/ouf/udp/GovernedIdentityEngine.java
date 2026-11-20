@@ -28,7 +28,13 @@ public final class GovernedIdentityEngine {
   }
   public record Policy(String ref, String version, String tenantId, String canonicalClass,
                        String sourceId, int maxCandidates, boolean allowAutoNew,
-                       List<Signal> signals, List<SufficientRule> sufficientRules, List<SufficientRule> distinctRules) {
+                       List<Signal> signals, List<SufficientRule> sufficientRules, List<SufficientRule> distinctRules,
+                       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) IdentityCategory category) {
+    public Policy(String ref,String version,String tenantId,String canonicalClass,String sourceId,
+        int maxCandidates,boolean allowAutoNew,List<Signal> signals,List<SufficientRule> sufficientRules,List<SufficientRule> distinctRules){
+      this(ref,version,tenantId,canonicalClass,sourceId,maxCandidates,allowAutoNew,signals,sufficientRules,distinctRules,null);
+    }
+    public String categoryIri(){return category==null?null:category.conceptIri();}
     public Policy(String ref,String version,String tenantId,String canonicalClass,String sourceId,
         int maxCandidates,boolean allowAutoNew,List<Signal> signals,List<SufficientRule> sufficientRules){
       this(ref,version,tenantId,canonicalClass,sourceId,maxCandidates,allowAutoNew,signals,sufficientRules,List.of());
@@ -57,14 +63,20 @@ public final class GovernedIdentityEngine {
     public Value { if (blank(semanticRef) || raw == null || blank(provenanceRef)) throw invalid(); }
   }
   public record Subject(String tenantId, String canonicalClass, String sourceId,
-                        Map<String, Value> values) {
+                        Map<String, Value> values, String categoryIri) {
+    public Subject(String tenantId,String canonicalClass,String sourceId,Map<String,Value> values){
+      this(tenantId,canonicalClass,sourceId,values,null);
+    }
     public Subject {
       if (blank(tenantId) || blank(canonicalClass) || blank(sourceId) || values == null) throw invalid();
       values = Map.copyOf(values);
     }
   }
   public record Candidate(UUID objectId, String tenantId, String canonicalClass,
-                          Map<String, Value> values) {
+                          Map<String, Value> values, String categoryIri) {
+    public Candidate(UUID objectId,String tenantId,String canonicalClass,Map<String,Value> values){
+      this(objectId,tenantId,canonicalClass,values,null);
+    }
     public Candidate {
       if (objectId == null || blank(tenantId) || blank(canonicalClass) || values == null) throw invalid();
       values = Map.copyOf(values);
@@ -79,7 +91,10 @@ public final class GovernedIdentityEngine {
   /** Retrieval attests index coverage for the entire policy scope at a stable snapshot. */
   public record Candidates(String policyRef, String policyVersion, String tenantId,
                            String canonicalClass, String coverageRef, boolean complete,
-                           List<Candidate> rows) {
+                           List<Candidate> rows, String categoryIri) {
+    public Candidates(String policyRef,String policyVersion,String tenantId,String canonicalClass,String coverageRef,boolean complete,List<Candidate> rows){
+      this(policyRef,policyVersion,tenantId,canonicalClass,coverageRef,complete,rows,null);
+    }
     public Candidates {
       if (blank(policyRef) || blank(policyVersion) || blank(tenantId) || blank(canonicalClass)
           || rows == null || (complete && blank(coverageRef))) throw invalid();
@@ -108,10 +123,12 @@ public final class GovernedIdentityEngine {
     Objects.requireNonNull(policy); Objects.requireNonNull(subject); Objects.requireNonNull(retrieval);
     if (!policy.tenantId().equals(subject.tenantId())
         || !policy.canonicalClass().equals(subject.canonicalClass())
+        || !Objects.equals(policy.categoryIri(),subject.categoryIri())
         || !policy.sourceId().equals(subject.sourceId())) throw invalid();
     if (!policy.ref().equals(retrieval.policyRef()) || !policy.version().equals(retrieval.policyVersion())
         || !policy.tenantId().equals(retrieval.tenantId())
-        || !policy.canonicalClass().equals(retrieval.canonicalClass())) throw invalid();
+        || !policy.canonicalClass().equals(retrieval.canonicalClass())
+        || !Objects.equals(policy.categoryIri(),retrieval.categoryIri())) throw invalid();
     Map<String, Signal> configured = new HashMap<>();
     for (Signal signal : policy.signals()) configured.put(signal.id(), signal);
     if (!configured.keySet().containsAll(subject.values().keySet())) throw invalid();
@@ -128,7 +145,8 @@ public final class GovernedIdentityEngine {
     List<Assessment> assessments = new ArrayList<>();
     for (Candidate candidate : retrieved) {
       if (!seen.add(candidate.objectId()) || !policy.tenantId().equals(candidate.tenantId())
-          || !policy.canonicalClass().equals(candidate.canonicalClass())) throw invalid();
+          || !policy.canonicalClass().equals(candidate.canonicalClass())
+          || !Objects.equals(policy.categoryIri(),candidate.categoryIri())) throw invalid();
       List<Evidence> evidence = new ArrayList<>();
       Set<String> agreeing = new HashSet<>();
       Set<String> properties = new TreeSet<>(subject.values().keySet());

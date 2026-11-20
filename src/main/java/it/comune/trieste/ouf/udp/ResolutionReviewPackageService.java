@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.udp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -12,7 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.web.server.ResponseStatusException;
 
-/** One human confirmation applies the entire tenant-visible issue snapshot atomically. */
+/** Confirms the available tenant cards atomically, with package or per-card freshness checks. */
 @Service
 public class ResolutionReviewPackageService {
   private final JdbcClient db;
@@ -42,12 +43,12 @@ public class ResolutionReviewPackageService {
         ||!c.expectedReviewHash().matches("sha256:[0-9a-f]{64}")))throw invalid();
     lockReviewScopes(actor.tenantId(),selective?selected.keySet():null);
     PackageView current=snapshot(actor.tenantId(),true,selective?selected.keySet():null);
-    if((!selective&&!expectedHash.equals(current.snapshotHash()))||current.issues().isEmpty()
-        ||selected.size()!=current.issues().size()
-        ||!selected.keySet().equals(current.issues().stream().map(IssueCard::issueId).collect(
+    var actionable=current.issues().stream().filter(IssueCard::available).toList();
+    if((!selective&&!expectedHash.equals(current.snapshotHash()))
+        ||!selected.keySet().equals(actionable.stream().map(IssueCard::issueId).collect(
             java.util.stream.Collectors.toSet())))
       throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_PACKAGE_STALE");
-    for(IssueCard issue:current.issues()){
+    for(IssueCard issue:actionable){
       Choice choice=selected.get(issue.issueId());
       if(choice.expectedVersion()!=issue.version()
           ||selective&&!issue.reviewHash().equals(choice.expectedReviewHash()))
@@ -72,9 +73,9 @@ public class ResolutionReviewPackageService {
     if(unscoped>0)throw new ResponseStatusException(HttpStatus.CONFLICT,
         "UDP_REVIEW_TENANT_BACKFILL_REQUIRED");
     String sql="select i.issue_id,i.version,i.reason_code,i.candidate_refs::text candidates,i.evidence_refs::text evidence,"
-        +"h.handoff_id,h.source_id,h.source_object_id,h.type_code,(h.payload_json->'canonicalPayload')::text incoming_fields "
+        +"d.strategy_id,d.evidence_refs::text decision_evidence,h.handoff_id,h.source_id,h.source_object_id,h.type_code,(h.payload_json->'canonicalPayload')::text incoming_fields "
         +"from ouf_udp.resolution_issue i join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id "
-        +"where i.tenant_id=:tenant and i.state='OPEN'"
+        +"join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id where i.tenant_id=:tenant and i.state='OPEN'"
         +(selected==null?"":" and i.issue_id in (:selected)")+" order by i.issue_id"
         +(lock?" for update of i":"");
     var query=db.sql(sql).param("tenant",tenant);
@@ -89,68 +90,84 @@ public class ResolutionReviewPackageService {
       String candidates=String.valueOf(row.get("candidates"));
       String evidence=String.valueOf(row.get("evidence"));
       List<String> refs=readCandidates(candidates);
-      UUID suggested=null;
-      if(refs.size()==1)try{suggested=UUID.fromString(refs.getFirst());}
-        catch(IllegalArgumentException ignored){/* No automatic selection. */}
       Object decodedEvidence=readEvidence(evidence);
-      String expectedType=null;
-      if(decodedEvidence instanceof List<?> items&&!items.isEmpty()
-          &&items.getFirst() instanceof Map<?,?> first&&first.get("canonicalClass") instanceof String type)
-        expectedType=type;
+      var scope=reviewScope(tenant,decodedEvidence,row);
+      String unavailableReason=scope==null?"UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN":null;
       ReviewObject incoming=new ReviewObject("handoff://"+row.get("handoff_id"),
           String.valueOf(row.get("source_id")),String.valueOf(row.get("source_object_id")),
           String.valueOf(row.get("type_code")),null,null,row.get("incoming_fields")!=null,
           fields(row.get("incoming_fields")));
       Map<String,ReviewObject> objects=new LinkedHashMap<>();
       Map<String,Object> previews=new LinkedHashMap<>();
-      for(String ref:refs){objects.put(ref,candidate(ref,tenant,expectedType,lock));previews.put(ref,LinkedPropertyPreview.prepare(db,json,String.valueOf(row.get("handoff_id")),ref,tenant));}
+      UUID suggested=null;
+      for(String ref:refs){
+        var object=scope==null?unavailable(ref,unavailableReason):candidate(ref,scope,lock);
+        objects.put(ref,object);
+        if(object.unavailableReason()==null){
+          if(refs.size()==1)suggested=UUID.fromString(ref);
+          previews.put(ref,LinkedPropertyPreview.prepare(db,json,String.valueOf(row.get("handoff_id")),ref,tenant,scope.categoryIri()));
+        }
+      }
       Map<String,Object> item=new LinkedHashMap<>();
       item.put("id",id);item.put("version",version);item.put("reason",reason);
       item.put("candidates",candidates);item.put("evidence",evidence);
+      if(unavailableReason!=null)item.put("unavailableReason",unavailableReason);
       item.put("incomingObject",incoming);item.put("candidateObjects",objects);item.put("propertyPreviews",previews);
       canonical.add(item);
-      cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item),Collections.unmodifiableMap(previews)));
+      cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item),Collections.unmodifiableMap(previews),scope!=null,unavailableReason));
     }
     return new PackageView(tenant,digest(canonical),List.copyOf(cards));
   }
 
   // Match materialization's lock order: identity scope, then issue/object rows.
   private void lockReviewScopes(String tenant,Set<UUID> selected){
-    var query=db.sql("select candidate_refs::text candidates,evidence_refs::text evidence from ouf_udp.resolution_issue where tenant_id=:tenant and state='OPEN'"
-        +(selected==null?"":" and issue_id in (:selected)")).param("tenant",tenant);
+    var query=db.sql("select i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,d.evidence_refs::text decision_evidence "
+        +"from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id "
+        +"where i.tenant_id=:tenant and i.state='OPEN'"+(selected==null?"":" and i.issue_id in (:selected)")).param("tenant",tenant);
     if(selected!=null)query.param("selected",selected);
-    Set<String> classes=new TreeSet<>();Set<UUID> objects=new HashSet<>();
+    Set<GovernedIdentityScopeLock.Scope> scopes=new HashSet<>();Set<UUID> objects=new HashSet<>();
     for(var row:query.query().listOfRows()){
+      var scope=reviewScope(tenant,readEvidence(String.valueOf(row.get("evidence"))),row);
+      if(scope==null)continue;
+      scopes.add(scope);
       for(String ref:readCandidates(String.valueOf(row.get("candidates"))))
         try{objects.add(UUID.fromString(ref));}catch(IllegalArgumentException ignored){/* unavailable reference */}
-      Object decoded=readEvidence(String.valueOf(row.get("evidence")));
-      if(decoded instanceof List<?> items&&!items.isEmpty()&&items.getFirst() instanceof Map<?,?> first
-          &&first.get("canonicalClass") instanceof String type&&!type.isBlank())classes.add(type);
     }
-    if(!objects.isEmpty())classes.addAll(db.sql("select distinct canonical_type from ouf_udp.urban_object where tenant_id=:tenant and urban_object_id in (:objects)")
-        .param("tenant",tenant).param("objects",objects).query(String.class).list());
-    for(String type:classes)identityScope.acquire(tenant,type);
+    if(!objects.isEmpty())db.sql("select distinct tenant_id,canonical_type,category_iri from ouf_udp.urban_object where tenant_id=:tenant and urban_object_id in (:objects)")
+        .param("tenant",tenant).param("objects",objects).query().listOfRows().forEach(row->scopes.add(GovernedIdentityScopeLock.Scope.object(row)));
+    identityScope.acquireAll(scopes);
   }
 
-  private ReviewObject candidate(String ref,String tenant,String expectedType,boolean lock){
+  private GovernedIdentityScopeLock.Scope reviewScope(String tenant,Object decoded,Map<String,Object> row){
+    boolean governed="GOVERNED_IDENTITY".equals(row.get("strategy_id"));
+    var scope=GovernedIdentityScopeLock.Scope.fromReviewEvidence(decoded,governed);
+    if(scope==null||!tenant.equals(scope.tenant()))return null;
+    if(!governed && !scope.equals(GovernedIdentityScopeLock.Scope.fromReviewEvidence(
+        readEvidence(String.valueOf(row.get("decision_evidence"))),false)))return null;
+    return scope;
+  }
+
+  private ReviewObject candidate(String ref,GovernedIdentityScopeLock.Scope scope,boolean lock){
     UUID id;
-    try{id=UUID.fromString(ref);}catch(IllegalArgumentException failure){return unavailable(ref);}
-    String sql="select o.canonical_type,o.revision,s.revision_id,s.canonical_payload::text fields "
+    try{id=UUID.fromString(ref);}catch(IllegalArgumentException failure){return unavailable(ref,"CANDIDATE_UNAVAILABLE");}
+    if(!id.toString().equals(ref))return unavailable(ref,"CANDIDATE_UNAVAILABLE");
+    String sql="select o.canonical_type,o.category_iri,o.revision,s.revision_id,s.canonical_payload::text fields "
         +"from ouf_udp.urban_object o left join ouf_udp.urban_object_current_state s "
-        +"on s.urban_object_id=o.urban_object_id and s.revision_id=o.current_revision_id "
-        +"where o.urban_object_id=:id and o.tenant_id=:tenant and o.status='ACTIVE'"
-        +(expectedType==null?"":" and o.canonical_type=:type")+(lock?" for share of o":"");
-    var query=db.sql(sql).param("id",id).param("tenant",tenant);
-    if(expectedType!=null)query.param("type",expectedType);
+        +"on s.urban_object_id=o.urban_object_id and s.revision_id=o.current_revision_id and o.category_iri is not distinct from :category "
+        +"where o.urban_object_id=:id and o.tenant_id=:tenant and o.canonical_type=:type and o.status='ACTIVE'"
+        +(lock?" for share of o":"");
+    var query=db.sql(sql).param("id",id).param("tenant",scope.tenant()).param("type",scope.canonicalClass())
+        .param("category",scope.categoryIri(),java.sql.Types.VARCHAR);
     var matches=query.query().listOfRows();
-    if(matches.isEmpty())return unavailable(ref);
+    if(matches.isEmpty())return unavailable(ref,"CANDIDATE_UNAVAILABLE");
     var row=matches.getFirst();
+    if(!Objects.equals(scope.categoryIri(),row.get("category_iri")))return unavailable(ref,"UDP_IDENTITY_CATEGORY_MISMATCH");
     return new ReviewObject(ref,null,null,String.valueOf(row.get("canonical_type")),
         ((Number)row.get("revision")).longValue(),Objects.toString(row.get("revision_id"),null),
         row.get("fields")!=null,fields(row.get("fields")));
   }
-  private static ReviewObject unavailable(String ref){
-    return new ReviewObject(ref,null,null,null,null,null,false,Map.of());
+  private static ReviewObject unavailable(String ref,String reason){
+    return new ReviewObject(ref,null,null,null,null,null,false,Map.of(),reason);
   }
   private Map<String,Object> fields(Object raw){
     if(raw==null)return Map.of();
@@ -177,11 +194,19 @@ public class ResolutionReviewPackageService {
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_REVIEW_PACKAGE_INVALID");}
   public record IssueCard(UUID issueId,long version,String reasonCode,List<String> candidateRefs,
                           Object evidence,UUID suggestedTargetUrbanObjectId,ReviewObject incomingObject,
-                          Map<String,ReviewObject> candidateObjects,String reviewHash,Map<String,Object> propertyPreviews){
+                          Map<String,ReviewObject> candidateObjects,String reviewHash,Map<String,Object> propertyPreviews,
+                          boolean available,String unavailableReason){
+    public IssueCard(UUID id,long version,String reason,List<String> refs,Object evidence,UUID suggested,ReviewObject incoming,Map<String,ReviewObject> objects,String hash,Map<String,Object> previews){this(id,version,reason,refs,evidence,suggested,incoming,objects,hash,previews,true,null);}
     public IssueCard(UUID id,long version,String reason,List<String> refs,Object evidence,UUID suggested,ReviewObject incoming,Map<String,ReviewObject> objects,String hash){this(id,version,reason,refs,evidence,suggested,incoming,objects,hash,Map.of());}
   }
   public record ReviewObject(String reference,String sourceId,String sourceObjectId,String type,
-                             Long revision,String revisionRef,boolean available,Map<String,Object> fields){}
+                             Long revision,String revisionRef,boolean available,Map<String,Object> fields,
+                             @JsonInclude(JsonInclude.Include.NON_NULL) String unavailableReason){
+    public ReviewObject(String reference,String sourceId,String sourceObjectId,String type,Long revision,
+        String revisionRef,boolean available,Map<String,Object> fields){
+      this(reference,sourceId,sourceObjectId,type,revision,revisionRef,available,fields,null);
+    }
+  }
   public record PackageView(String tenantId,String snapshotHash,List<IssueCard> issues){}
   public record Choice(UUID issueId,long expectedVersion,String action,String reason,UUID targetUrbanObjectId,String expectedReviewHash){
     public Choice(UUID issueId,long expectedVersion,String action,String reason,UUID targetUrbanObjectId){

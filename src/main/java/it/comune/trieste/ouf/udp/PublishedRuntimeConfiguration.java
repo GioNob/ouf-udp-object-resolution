@@ -45,6 +45,8 @@ public class PublishedRuntimeConfiguration {
     if(materialization.properties().isEmpty())throw invalid();
     String canonicalClass=governed?text(object(resolutionDefinition,"governedIdentity"),"canonicalClass"):resolution.canonicalType();
     if(!(semantic.get("targetClasses") instanceof List<?> classes)||classes.stream().noneMatch(c->c instanceof Map<?,?> target&&canonicalClass.equals(target.get("classIri"))))throw invalid();
+    IdentityCategory category=IdentityCategory.forClass(classes,canonicalClass);
+    if(!governed)resolution=resolution.withCategory(category);
     var labels=new HashMap<String,String>();
     if(!(bundle.get("dataAccessPolicies") instanceof List<?> policies)||policies.isEmpty())throw invalid();
     for(Object p:policies){if(!(p instanceof Map<?,?> policy)||!Set.of("PROPERTY","RELATIONSHIP").contains(policy.get("scope")))throw invalid();labels.put(String.valueOf(policy.get("scope"))+":"+policy.get("target"),String.valueOf(policy.get("label")));}
@@ -54,7 +56,7 @@ public class PublishedRuntimeConfiguration {
     if(!targets.isEmpty())throw invalid();
     GovernedIdentityEngine.Policy identity=governed?PublishedIdentityPolicy.decode(json,resolutionDefinition,
         tenant,text(source,"sourceId"),canonicalClass,Set.copyOf(materialization.properties().stream()
-            .map(UdpPorts.PropertyRule::propertyIri).toList())):null;
+            .map(UdpPorts.PropertyRule::propertyIri).toList()),category):null;
     UdpPorts.SpatialProfile spatial=null;
     if(profile.containsKey("spatial")){
       spatial=json.convertValue(object(profile,"spatial"),UdpPorts.SpatialProfile.class);

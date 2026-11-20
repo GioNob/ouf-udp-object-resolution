@@ -3,6 +3,9 @@ package it.comune.trieste.ouf.udp;
 import static org.assertj.core.api.Assertions.*;
 import it.comune.trieste.ouf.udp.GovernedIdentityEngine.*;
 import java.util.*;
+import static org.mockito.Mockito.*;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 class GovernedIdentityEngineTest {
@@ -16,6 +19,24 @@ class GovernedIdentityEngineTest {
       new Signal("geo",GEO,ComparatorKind.TEXT_V1,false,false,"policy://comparison/geo" ));
   private static final Policy POLICY=new Policy("policy://objects","1","tenant","Place","source",10,true,
       SIGNALS,List.of(new SufficientRule("whole-record",Set.of("name","address","category","geo"),"policy://whole-record/1")));
+
+  @Test void engineRejectsAnOutOfScopeRowReturnedByIndexedLookup(){
+    var db=mock(JdbcClient.class);
+    var query=mock(JdbcClient.StatementSpec.class,
+        RETURNS_SELF);
+    var result=mock(JdbcClient.ResultQuerySpec.class);
+    when(db.sql(anyString())).thenReturn(query);
+    when(query.query()).thenReturn(result);
+    String foreign="urn:example:foreign-category";
+    Map<String,Object> row=Map.of("urban_object_id",UUID.randomUUID(),"category_iri",foreign,
+        "coverage_ref","coverage","snapshot_ref","snapshot","tx_ref","transaction");
+    when(result.listOfRows()).thenReturn(List.of(row));
+    var repository=new ScopedIdentityCandidateRepository(db,new ObjectMapper());
+    var incoming=subject("Aurora","Via Roma","cinema","entrance");
+    var retrieved=repository.retrieve(POLICY,incoming);
+    assertThat(retrieved.rows()).singleElement().extracting(Candidate::categoryIri).isEqualTo(foreign);
+    assertThatThrownBy(()->engine.decide(POLICY,incoming,retrieved)).hasMessage("UDP_IDENTITY_POLICY_INVALID");
+  }
 
   @Test void structuredCanonicalValuesCompareRegardlessOfObjectKeyOrder() {
     var signal=new Signal("details","urn:details@set-1",ComparatorKind.JSON_V1,false,false,"policy://details");

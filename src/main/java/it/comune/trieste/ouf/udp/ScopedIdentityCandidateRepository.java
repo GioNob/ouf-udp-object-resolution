@@ -19,6 +19,7 @@ public class ScopedIdentityCandidateRepository {
     Objects.requireNonNull(policy);Objects.requireNonNull(subject);
     if(!policy.tenantId().equals(subject.tenantId())
         || !policy.canonicalClass().equals(subject.canonicalClass())
+        || !Objects.equals(policy.categoryIri(),subject.categoryIri())
         || !policy.sourceId().equals(subject.sourceId()))throw new IllegalArgumentException("UDP_IDENTITY_SCOPE_INVALID");
     Map<String,GovernedIdentityEngine.Signal> signals=new HashMap<>();
     policy.signals().forEach(signal->signals.put(signal.id(),signal));
@@ -38,7 +39,7 @@ public class ScopedIdentityCandidateRepository {
     String sql="""
         with coverage as (
           select coverage_ref from ouf_udp.identity_lookup_coverage
-          where tenant_id=:tenant and canonical_class=:canonicalClass
+          where tenant_id=:tenant and canonical_class=:canonicalClass and category_iri is not distinct from :category
             and policy_ref=:policy and policy_version=:version
             and policy_fingerprint=:fingerprint and field_set_hash=:policyShape and complete
         ), seeds as (
@@ -48,16 +49,19 @@ public class ScopedIdentityCandidateRepository {
           select distinct t.urban_object_id
           from seeds s join ouf_udp.identity_lookup_token t
             on t.tenant_id=:tenant and t.canonical_class=:canonicalClass
+            and coalesce(t.category_iri,'')=coalesce(:category,'')
             and t.policy_ref=:policy and t.policy_version=:version
             and t.property_iri=s.property_iri and t.semantic_ref=s.semantic_ref
             and t.comparator=s.comparator and t.value_hash=s.value_hash
           join coverage on true
           join ouf_udp.urban_object active_object on active_object.urban_object_id=t.urban_object_id
-            and active_object.current_revision_id=t.revision_id and active_object.status='ACTIVE'
+            and active_object.tenant_id=:tenant and active_object.canonical_type=:canonicalClass
+            and active_object.category_iri is not distinct from :category and active_object.current_revision_id=t.revision_id and active_object.status='ACTIVE'
           order by t.urban_object_id limit :candidateLimit
         ), disjoint_shapes as materialized (
           select c.field_set_hash from ouf_udp.identity_lookup_shape_catalog c join coverage on true
           where c.tenant_id=:tenant and c.canonical_class=:canonicalClass
+            and coalesce(c.category_iri,'')=coalesce(:category,'')
             and c.policy_ref=:policy and c.policy_version=:version
             and not exists (
               select 1 from jsonb_array_elements_text(c.fields_json) field_name
@@ -66,10 +70,12 @@ public class ScopedIdentityCandidateRepository {
         ), shape_hits as (
           select s.urban_object_id from disjoint_shapes d
           join ouf_udp.identity_lookup_shape s on s.tenant_id=:tenant
-            and s.canonical_class=:canonicalClass and s.policy_ref=:policy
+            and s.canonical_class=:canonicalClass
+            and coalesce(s.category_iri,'')=coalesce(:category,'') and s.policy_ref=:policy
             and s.policy_version=:version and s.field_set_hash=d.field_set_hash
           join ouf_udp.urban_object active_object on active_object.urban_object_id=s.urban_object_id
-            and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
+            and active_object.tenant_id=:tenant and active_object.canonical_type=:canonicalClass
+            and active_object.category_iri is not distinct from :category and active_object.current_revision_id=s.revision_id and active_object.status='ACTIVE'
           order by s.field_set_hash,s.urban_object_id limit :candidateLimit
         ), hits as (
           select distinct urban_object_id from (
@@ -77,7 +83,7 @@ public class ScopedIdentityCandidateRepository {
             union all select urban_object_id from shape_hits
           ) selected order by urban_object_id limit :candidateLimit
         ), snapshot as (select pg_current_snapshot()::text snapshot_ref,txid_current()::text tx_ref)
-        select coverage.coverage_ref,snapshot.snapshot_ref,snapshot.tx_ref,o.urban_object_id,
+        select coverage.coverage_ref,snapshot.snapshot_ref,snapshot.tx_ref,o.urban_object_id,o.category_iri,
                p.property_iri,p.value_json::text value_json,p.contribution_id,
                c.provenance_json #>> '{contractRefs,semanticPublicationSetRef}' publication_ref
         from snapshot left join coverage on true left join hits h on true
@@ -87,7 +93,7 @@ public class ScopedIdentityCandidateRepository {
         order by o.urban_object_id,p.property_iri
         """;
     List<Map<String,Object>> rows=db.sql(sql).param("tenant",policy.tenantId())
-        .param("canonicalClass",policy.canonicalClass()).param("policy",policy.ref())
+        .param("canonicalClass",policy.canonicalClass()).param("category",policy.categoryIri(),java.sql.Types.VARCHAR).param("policy",policy.ref())
         .param("version",policy.version()).param("policyShape",policyShape)
         .param("incomingFields",write(new TreeSet<>(subject.values().keySet())))
         .param("fingerprint",fingerprint(policy))
@@ -96,11 +102,13 @@ public class ScopedIdentityCandidateRepository {
     if(rows.isEmpty())throw new IllegalStateException("UDP_CANDIDATE_SNAPSHOT_MISSING");
     String coverage=(String)rows.getFirst().get("coverage_ref");
     if(coverage==null)return incomplete(policy);
-    Map<UUID,Map<String,GovernedIdentityEngine.Value>> values=new LinkedHashMap<>();
+    record ObjectScope(UUID id,String categoryIri) {}
+    Map<ObjectScope,Map<String,GovernedIdentityEngine.Value>> values=new LinkedHashMap<>();
     for(var row:rows){
       UUID object=(UUID)row.get("urban_object_id");
       if(object==null)continue;
-      Map<String,GovernedIdentityEngine.Value> found=values.computeIfAbsent(object,ignored->new HashMap<>());
+      Map<String,GovernedIdentityEngine.Value> found=values.computeIfAbsent(
+          new ObjectScope(object,(String)row.get("category_iri")),ignored->new HashMap<>());
       if(row.get("property_iri") instanceof String property){
         String publication=row.get("publication_ref") instanceof String ref && !ref.isBlank()?ref:"unverified";
         UUID contribution=(UUID)row.get("contribution_id");
@@ -116,17 +124,17 @@ public class ScopedIdentityCandidateRepository {
       }
     }
     List<GovernedIdentityEngine.Candidate> candidates=new ArrayList<>();
-    for(var entry:values.entrySet())candidates.add(new GovernedIdentityEngine.Candidate(entry.getKey(),
-        policy.tenantId(),policy.canonicalClass(),entry.getValue()));
+    for(var entry:values.entrySet())candidates.add(new GovernedIdentityEngine.Candidate(entry.getKey().id(),
+        policy.tenantId(),policy.canonicalClass(),entry.getValue(),entry.getKey().categoryIri()));
     return new GovernedIdentityEngine.Candidates(policy.ref(),policy.version(),policy.tenantId(),
         policy.canonicalClass(),"indexed-snapshot://"+coverage+"/"+rows.getFirst().get("tx_ref")
             +"/"+rows.getFirst().get("snapshot_ref"),
-        candidates.size()<=policy.maxCandidates(),candidates);
+        candidates.size()<=policy.maxCandidates(),candidates,policy.categoryIri());
   }
 
   private GovernedIdentityEngine.Candidates incomplete(GovernedIdentityEngine.Policy policy){
     return new GovernedIdentityEngine.Candidates(policy.ref(),policy.version(),policy.tenantId(),
-        policy.canonicalClass(),null,false,List.of());
+        policy.canonicalClass(),null,false,List.of(),policy.categoryIri());
   }
   private String write(Object value){try{return json.writeValueAsString(value);}
     catch(Exception failure){throw new IllegalStateException("UDP_IDENTITY_SEED_ENCODING_FAILED",failure);}}
@@ -149,6 +157,7 @@ public class ScopedIdentityCandidateRepository {
             +String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();
     String legacy=policy.allowAutoNew()+"\u0002"+String.join("\u0001",parts)
         +"\u0002"+String.join("\u0001",rules);
+    if(policy.category()!=null)legacy+="\u0002category-v1\u0002"+policy.category().schemeIri()+"\u0000"+policy.categoryIri();
     if(policy.distinctRules().isEmpty())return hash(legacy);
     List<String> distinct=policy.distinctRules().stream().map(rule->rule.id()+"\u0000"+rule.assertionRef()
         +"\u0000"+String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();

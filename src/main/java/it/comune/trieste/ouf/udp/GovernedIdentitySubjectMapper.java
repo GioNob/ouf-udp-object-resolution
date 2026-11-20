@@ -38,7 +38,7 @@ public final class GovernedIdentitySubjectMapper {
             "handoff://"+handoffId+"#canonicalPayload/"+field));
       }
     }
-    return new GovernedIdentityEngine.Subject(policy.tenantId(),policy.canonicalClass(),policy.sourceId(),values);
+    return new GovernedIdentityEngine.Subject(policy.tenantId(),policy.canonicalClass(),policy.sourceId(),values,policy.categoryIri());
   }
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_IDENTITY_SUBJECT_MAPPING_INVALID");}
 }

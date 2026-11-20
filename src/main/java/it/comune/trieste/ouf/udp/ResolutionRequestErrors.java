@@ -8,6 +8,15 @@ import org.springframework.web.bind.annotation.*;
 /** Stable non-sensitive signal for a request rejected before owner invocation. */
 @RestControllerAdvice(assignableTypes=TrustedHumanApi.class)
 public class ResolutionRequestErrors {
+ @ExceptionHandler(IdentityCategory.Rejected.class)
+ ResponseEntity<Map<String,Object>> category(IdentityCategory.Rejected error){
+  String code=error.getMessage();
+  int status=switch(code){
+   case "UDP_IDENTITY_CATEGORY_INVALID","UDP_IDENTITY_CATEGORY_CONFLICT" -> 400;
+   default -> 409;
+  };
+  return ResponseEntity.status(status).body(Map.of("status",status,"code",code));
+ }
  @ExceptionHandler(HttpMessageNotReadableException.class)
  ResponseEntity<Map<String,Object>> unreadable(HttpMessageNotReadableException ignored){
   return ResponseEntity.badRequest().body(Map.of("status",400,"code","UDP_REVIEW_REQUEST_INVALID"));

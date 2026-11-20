@@ -16,10 +16,18 @@ public final class PublishedIdentityPolicy {
 
   public static GovernedIdentityEngine.Policy decode(ObjectMapper json, Map<String,Object> resolution,
       String tenant, String source, String canonicalClass, Set<String> mappedProperties) {
+    return decode(json,resolution,tenant,source,canonicalClass,mappedProperties,null);
+  }
+  static GovernedIdentityEngine.Policy decode(ObjectMapper json, Map<String,Object> resolution,
+      String tenant,String source,String canonicalClass,Set<String> mappedProperties,IdentityCategory category) {
     if(json==null || resolution==null || !resolution.keySet().equals(RESOLUTION)
         || !"GOVERNED_IDENTITY".equals(resolution.get("strategyId")))throw invalid();
     Set<String> fields=new HashSet<>(POLICY);
     if(resolution.get("governedIdentity") instanceof Map<?,?> candidate&&candidate.containsKey("distinctRules"))fields.add("distinctRules");
+    if(resolution.get("governedIdentity") instanceof Map<?,?> candidate && candidate.containsKey("category")) {
+      fields.add("category");
+      if(!Objects.equals(IdentityCategory.declared(candidate),category))throw IdentityCategory.conflict();
+    }
     Map<?,?> raw=map(resolution.get("governedIdentity"),fields);
     if(!Objects.equals(raw.get("ref"),resolution.get("policyRef"))
         || !Objects.equals(raw.get("version"),resolution.get("strategyVersion"))
@@ -49,8 +57,10 @@ public final class PublishedIdentityPolicy {
       if(!(rule.get("signalIds") instanceof List<?> ids)||ids.size()<2
           ||!compared.containsAll(ids)||new HashSet<>(ids).size()!=ids.size())throw invalid();
     }
+    Map<Object,Object> effective=new HashMap<>(raw);
+    effective.put("category",category);
     try{return json.copy().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,true)
-        .convertValue(raw,GovernedIdentityEngine.Policy.class);
+        .convertValue(effective,GovernedIdentityEngine.Policy.class);
     }catch(IllegalArgumentException failure){throw invalid();}
   }
   private static Map<?,?> map(Object value,Set<String> fields){
