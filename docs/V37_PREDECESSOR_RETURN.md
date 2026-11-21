@@ -19,6 +19,6 @@ Un job riuscito conserva gli ID delle immagini con i rispettivi SHA, la storia e
 
 ## V38 e D-080
 
-Al task-19 restano la rimozione dell'arbitro lake a cinque colonne, le copie fisiche successive e il passaggio all'unicità canonica parziale come unico vincolo sulla chiave. La V38 deve provare il ritorno all'immagine del ponte con copie successive e chiavi riutilizzate già presenti, verificando i riferimenti e il lineage.
+Il contratto successivo e la prova di ritorno al ponte su schema V38 sono descritti in [UDP V38 e ritorno al ponte V37](V38_CONTRACT.md).
 
 Per D-080 ogni task con migrazioni dichiara il predecessore in esercizio, le sue dipendenze SQL e gli stati che il candidato può scrivere. Rimozioni e restrizioni attese dal predecessore slittano al rilascio successivo. La prova su dati popolati deve riuscire prima di dichiarare la coppia compatibile.

@@ -17,30 +17,32 @@ public class LakeCatalogRepository {
       String mediaType,long size,String locator,String retentionClass,String label,OffsetDateTime retentionUntil,String correlation){
     db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))")
         .param("key",write(List.of("lake-copy",tenant,tier,source,type,hash))).query().singleRow();
-    int inserted=db.sql("""
-        insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,
-          media_type,logical_size_bytes,locator,state,retention_class,access_label,retention_until,copy_no)
-        values(:id,:tenant,:source,:type,:tier,:hash,:media,:size,:locator,'STAGED',:retention,:label,:until,0)
-        on conflict(tenant_id,tier,content_hash,source_id,type_code,copy_no) do nothing
-        """)
-        .param("id",id).param("tenant",tenant).param("source",source).param("type",type).param("tier",tier)
-        .param("hash",hash).param("media",mediaType).param("size",size).param("locator",locator)
-        .param("retention",retentionClass).param("label",label).param("until",retentionUntil).update();
-    if(inserted==1){
-      event(id,null,"STAGED","SYSTEM","",correlation,"LAKE_OBJECT_STAGED",Map.of("copy",0));
-      return get(id);
-    }
-    LakeObject object=db.sql("""
+    var latest=db.sql("""
         select * from ouf_udp.lake_object where tenant_id=:tenant and tier=:tier and content_hash=:hash
           and source_id=:source and type_code=:type order by copy_no desc limit 1 for update
         """).param("tenant",tenant).param("tier",tier).param("hash",hash).param("source",source).param("type",type)
-        .query((rs,n)->map(rs)).single();
-    if(!label.equals(object.accessLabel())||!retentionClass.equals(object.retentionClass())
-        ||!mediaType.equals(object.mediaType())||size!=object.size())throw new IllegalStateException("UDP_LAKE_COPY_POLICY_CONFLICT");
-    if("RAW".equals(tier)&&Set.of("COMPACTED","FAILED","QUARANTINED").contains(object.state()))
-      throw new LakeCopyRecoveryPending();
-    return object;
+        .query((rs,n)->new Copy(map(rs),rs.getLong("copy_no"))).optional();
+    long copyNo=0;
+    if(latest.isPresent()){
+      var previous=latest.get();
+      var object=previous.object();
+      if(!label.equals(object.accessLabel())||!retentionClass.equals(object.retentionClass())
+          ||!mediaType.equals(object.mediaType())||size!=object.size())throw new IllegalStateException("UDP_LAKE_COPY_POLICY_CONFLICT");
+      if(!"RAW".equals(tier)||!Set.of("COMPACTED","FAILED","QUARANTINED").contains(object.state()))return object;
+      copyNo=Math.incrementExact(previous.number());
+    }
+    db.sql("""
+        insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,
+          media_type,logical_size_bytes,locator,state,retention_class,access_label,retention_until,copy_no)
+        values(:id,:tenant,:source,:type,:tier,:hash,:media,:size,:locator,'STAGED',:retention,:label,:until,:copy)
+        """)
+        .param("id",id).param("tenant",tenant).param("source",source).param("type",type).param("tier",tier)
+        .param("hash",hash).param("media",mediaType).param("size",size).param("locator",locator)
+        .param("retention",retentionClass).param("label",label).param("until",retentionUntil).param("copy",copyNo).update();
+    event(id,null,"STAGED","SYSTEM","",correlation,"LAKE_OBJECT_STAGED",Map.of("copy",copyNo));
+    return get(id);
   }
+  private record Copy(LakeObject object,long number){}
   public record Segment(UUID pack,String locator,String hash,long packSize,long offset,long length,String state,String catalogLocator){}
   public Segment compactedSegment(LakeObject input){
     return db.sql("""
