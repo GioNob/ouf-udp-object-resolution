@@ -26,19 +26,19 @@ class LakeLifecycleRuntimeTest {
   @Test void compactionPreservesLogicalIdentityAndRejectsLabelCrossing(){var a=store("a","OPEN");var b=store("b","OPEN");var restricted=store("c","RESTRICTED");assertThatThrownBy(()->lake.compact(List.of(a.id(),restricted.id()),"corr-invalid")).hasMessageContaining("BOUNDARY");UUID manifest=lake.compact(List.of(a.id(),b.id()),"corr-compact");assertThat(catalog.get(a.id()).state()).isEqualTo("COMPACTED");assertThat(catalog.get(a.id()).hash()).isEqualTo(a.hash());assertThat(db.sql("select count(*) from ouf_udp.compaction_manifest_entry where manifest_id=:id").param("id",manifest).query(Long.class).single()).isEqualTo(2);}
   @Test void reconciliationQuarantinesMismatchAndReportsOrphanWithoutDeleting(){var object=store("scan","OPEN");storage.corrupt(object.locator());storage.orphan("lake/orphan");var scan=lake.reconcile();assertThat(scan.checksumMismatch()).isOne();assertThat(scan.orphan()).isOne();assertThat(catalog.get(object.id()).state()).isEqualTo("QUARANTINED");assertThat(storage.inventory()).extracting(LakeObjectStoragePort.StoredObject::locator).contains("lake/orphan");}
 
-  @Test void resubmittedBytesGetOneVerifiedPhysicalCopyAndPreserveFailedEvidence(){
+  @Test void recoveryLeavesFailedAndQuarantinedCopyZeroUntouched(){
     storage.failDurability=true;
     assertThatThrownBy(()->store("same","OPEN")).hasMessageContaining("DURABILITY");
     storage.failDurability=false;
     var failed=db.sql("select lake_object_id from ouf_udp.lake_object").query(UUID.class).single();
-    var second=store("same","OPEN");
+    assertThatThrownBy(()->store("same","OPEN")).isInstanceOf(LakeCopyRecoveryPending.class)
+        .hasMessage("UDP_LAKE_COPY_RECOVERY_PENDING_CONTRACT");
+    var second=store("different","OPEN");
     storage.corrupt(second.locator());lake.reconcile();
-    var third=store("same","OPEN");
+    assertThatThrownBy(()->store("different","OPEN")).isInstanceOf(LakeCopyRecoveryPending.class);
     assertThat(catalog.get(failed).state()).isEqualTo("FAILED");
     assertThat(catalog.get(second.id()).state()).isEqualTo("QUARANTINED");
-    assertThat(third.state()).isEqualTo("VERIFIED");
-    assertThat(third.id()).isNotEqualTo(second.id());
-    assertThat(store("same","OPEN").id()).isEqualTo(third.id());
+    assertThat(db.sql("select copy_no from ouf_udp.lake_object").query(Long.class).list()).containsExactly(0L,0L);
     assertThat(storage.read(second.locator())).isEqualTo("tampered".getBytes(StandardCharsets.UTF_8));
   }
   @Test void interruptedDurableCopyIsReadBackBeforeReuse(){
@@ -51,15 +51,13 @@ class LakeLifecycleRuntimeTest {
     assertThat(store("resume","OPEN").id()).isEqualTo(staged.id());
     assertThat(catalog.get(staged.id()).state()).isEqualTo("VERIFIED");
   }
-  @Test void compactedBytesSupportOriginalManifestAndFreshUpload(){
+  @Test void compactedBytesKeepOriginalManifestAndDeferFreshUpload(){
     var a=store("first","OPEN");var b=store("second","OPEN");
     lake.compact(List.of(a.id(),b.id()),"pack");
     var segment=lake.verifyCompacted(catalog.get(b.id()));
     assertThat(segment.offset()).isEqualTo(a.size());
-    var fresh=store("second","OPEN");
-    assertThat(fresh.state()).isEqualTo("VERIFIED");
-    assertThat(fresh.hash()).isEqualTo(b.hash());
-    assertThat(fresh.id()).isNotEqualTo(b.id());
+    assertThatThrownBy(()->store("second","OPEN")).isInstanceOf(LakeCopyRecoveryPending.class);
+    assertThat(lake.verifyCompacted(catalog.get(b.id()))).isEqualTo(segment);
     assertThat(catalog.get(b.id()).state()).isEqualTo("COMPACTED");
     storage.corrupt(segment.locator());
     assertThatThrownBy(()->lake.verifyCompacted(catalog.get(b.id()))).hasMessage("UDP_LAKE_CHECKSUM_MISMATCH");

@@ -1,7 +1,33 @@
 name: UDP Object Resolution module CI
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      predecessor:
+        description: Full commit of the supported predecessor
+        type: string
+        default: c0cf1702b2eb971718996a959414caee004af494
 permissions: {contents: read}
 jobs:
+  predecessor-return:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PREDECESSOR: ${{ inputs.predecessor || 'c0cf1702b2eb971718996a959414caee004af494' }}
+      PREDECESSOR_SCHEMA: '36'
+      CANDIDATE_SCHEMA: '37'
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Exercise predecessor, candidate and return on one populated database
+        run: bash scripts/ci/predecessor-return.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: udp-predecessor-return-${{ github.run_id }}
+          path: target/predecessor-return/
+          if-no-files-found: error
+          retention-days: 30
   java21-postgresql17:
     runs-on: ubuntu-24.04
     timeout-minutes: 30

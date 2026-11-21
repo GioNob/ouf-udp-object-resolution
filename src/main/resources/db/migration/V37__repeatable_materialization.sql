@@ -9,17 +9,13 @@ begin
   execute format('alter table ouf_udp.object_revision drop constraint %I',hash_constraint);
 end $migration$;
 
--- V1 keys were global across tenants and across retired objects. The old
--- uniqueness guarantees existing live rows satisfy the narrower index.
+-- Prepare the scoped index, retaining V1 global uniqueness throughout the bridge.
 create unique index urban_object_active_canonical_key on ouf_udp.urban_object
   (tenant_id,canonical_type,canonical_key) where status='ACTIVE';
-alter table ouf_udp.urban_object drop constraint urban_object_canonical_type_canonical_key_key;
 
--- Existing lake:// references denote copy zero forever. A later upload may
--- create a separately verified copy without altering quarantined bytes or lineage.
+-- Both conflict arbiters must work on the same rows across application rollback.
 alter table ouf_udp.lake_object add column copy_no bigint not null default 0 check(copy_no>=0);
 alter table ouf_udp.lake_object add constraint lake_object_scoped_copy_key unique(tenant_id,tier,content_hash,source_id,type_code,copy_no);
-alter table ouf_udp.lake_object drop constraint lake_object_tenant_id_tier_content_hash_source_id_type_code_key;
 
 create trigger lake_object_copy_immutable before update of copy_no on ouf_udp.lake_object
   for each row when (old.copy_no is distinct from new.copy_no)
@@ -49,9 +45,17 @@ create function ouf_udp.archive_review_evidence() returns trigger language plpgs
 begin
   insert into ouf_udp.resolution_issue_evidence_history(issue_id,version,reason_code,candidate_refs,evidence_refs)
     values(old.issue_id,old.version,old.reason_code,old.candidate_refs,old.evidence_refs);
+  -- V36 cannot inspect the pending flag. Withdraw selectable targets and the
+  -- completeness proof until the worker publishes the reassessed evidence.
+  if new.reevaluation_pending and not old.reevaluation_pending then
+    new.candidate_refs = '[]'::jsonb;
+    if jsonb_typeof(new.evidence_refs->0) = 'object' then
+      new.evidence_refs = jsonb_set(new.evidence_refs,'{0,complete}','false'::jsonb);
+    end if;
+  end if;
   return new;
 end $$;
-create trigger archive_resolution_review before update of candidate_refs,evidence_refs,reason_code on ouf_udp.resolution_issue
+create trigger archive_resolution_review before update of candidate_refs,evidence_refs,reason_code,reevaluation_pending on ouf_udp.resolution_issue
   for each row when (new.version>old.version) execute function ouf_udp.archive_review_evidence();
 create trigger resolution_issue_evidence_immutable before update or delete on ouf_udp.resolution_issue_evidence_history
   for each row execute function ouf_udp.reject_append_only_mutation();

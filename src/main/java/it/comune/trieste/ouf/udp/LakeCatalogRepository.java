@@ -17,23 +17,29 @@ public class LakeCatalogRepository {
       String mediaType,long size,String locator,String retentionClass,String label,OffsetDateTime retentionUntil,String correlation){
     db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))")
         .param("key",write(List.of("lake-copy",tenant,tier,source,type,hash))).query().singleRow();
-    var previous=db.sql("select * from ouf_udp.lake_object where tenant_id=:tenant and tier=:tier and content_hash=:hash and source_id=:source and type_code=:type order by copy_no desc limit 1 for update")
-        .param("tenant",tenant).param("tier",tier).param("hash",hash).param("source",source).param("type",type)
-        .query((rs,n)->new Copy(map(rs),rs.getLong("copy_no"))).optional();
-    long generation=0;
-    if(previous.isPresent()){
-      Copy copy=previous.get();LakeObject object=copy.object();
-      if(!label.equals(object.accessLabel())||!retentionClass.equals(object.retentionClass())
-          ||!mediaType.equals(object.mediaType())||size!=object.size())throw new IllegalStateException("UDP_LAKE_COPY_POLICY_CONFLICT");
-      if(!"RAW".equals(tier)||!Set.of("COMPACTED","FAILED","QUARANTINED").contains(object.state()))return object;
-      generation=copy.generation()+1;
-    }
-    db.sql("insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,media_type,logical_size_bytes,locator,state,retention_class,access_label,retention_until,copy_no) values(:id,:tenant,:source,:type,:tier,:hash,:media,:size,:locator,'STAGED',:retention,:label,:until,:generation)")
+    int inserted=db.sql("""
+        insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,
+          media_type,logical_size_bytes,locator,state,retention_class,access_label,retention_until,copy_no)
+        values(:id,:tenant,:source,:type,:tier,:hash,:media,:size,:locator,'STAGED',:retention,:label,:until,0)
+        on conflict(tenant_id,tier,content_hash,source_id,type_code,copy_no) do nothing
+        """)
         .param("id",id).param("tenant",tenant).param("source",source).param("type",type).param("tier",tier)
         .param("hash",hash).param("media",mediaType).param("size",size).param("locator",locator)
-        .param("retention",retentionClass).param("label",label).param("until",retentionUntil).param("generation",generation).update();
-    event(id,null,"STAGED","SYSTEM","",correlation,"LAKE_OBJECT_STAGED",Map.of("copy",generation));
-    return get(id);
+        .param("retention",retentionClass).param("label",label).param("until",retentionUntil).update();
+    if(inserted==1){
+      event(id,null,"STAGED","SYSTEM","",correlation,"LAKE_OBJECT_STAGED",Map.of("copy",0));
+      return get(id);
+    }
+    LakeObject object=db.sql("""
+        select * from ouf_udp.lake_object where tenant_id=:tenant and tier=:tier and content_hash=:hash
+          and source_id=:source and type_code=:type order by copy_no desc limit 1 for update
+        """).param("tenant",tenant).param("tier",tier).param("hash",hash).param("source",source).param("type",type)
+        .query((rs,n)->map(rs)).single();
+    if(!label.equals(object.accessLabel())||!retentionClass.equals(object.retentionClass())
+        ||!mediaType.equals(object.mediaType())||size!=object.size())throw new IllegalStateException("UDP_LAKE_COPY_POLICY_CONFLICT");
+    if("RAW".equals(tier)&&Set.of("COMPACTED","FAILED","QUARANTINED").contains(object.state()))
+      throw new LakeCopyRecoveryPending();
+    return object;
   }
   public record Segment(UUID pack,String locator,String hash,long packSize,long offset,long length,String state,String catalogLocator){}
   public Segment compactedSegment(LakeObject input){
@@ -50,7 +56,6 @@ public class LakeCatalogRepository {
             rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getLong(4),rs.getLong(5),rs.getLong(6),rs.getString(7),rs.getString(8)))
         .optional().orElseThrow(()->new IllegalStateException("UDP_LAKE_MANIFEST_UNVERIFIED"));
   }
-  private record Copy(LakeObject object,long generation){}
   @Transactional public LakeObject transition(UUID id,long expected,String from,String to,String actor,String decision,String correlation,Map<String,Object> detail){int n=db.sql("update ouf_udp.lake_object set state=:to,state_version=state_version+1,verified_at=case when :to='VERIFIED' then transaction_timestamp() else verified_at end,deleted_at=case when :to='DELETED' then transaction_timestamp() else deleted_at end where lake_object_id=:id and state=:from and state_version=:version").param("to",to).param("id",id).param("from",from).param("version",expected).update();if(n!=1)throw new IllegalStateException("UDP_LAKE_STATE_CONFLICT");event(id,from,to,actor,decision,correlation,"LAKE_OBJECT_STATE_CHANGED",detail);return get(id);}
   @Transactional public LakeObject requestDeletion(UUID id,long expected,OffsetDateTime purgeAfter,String reason,TrustedHumanContext actor){actor.require("lake.object.delete");int n=db.sql("update ouf_udp.lake_object set state='DELETION_PENDING',purge_after=:purge,state_version=state_version+1 where lake_object_id=:id and tenant_id=:tenant and state in('VERIFIED','COMPACTED','COLD','QUARANTINED') and state_version=:version and retention_until<=transaction_timestamp() and legal_hold=false and retention_class<>'LEGAL_HOLD' and blocking_lineage_refs=0 and historical_replay_required=false and active_export_refs=0").param("purge",purgeAfter).param("id",id).param("tenant",actor.tenantId()).param("version",expected).update();if(n!=1)throw new IllegalStateException("UDP_LAKE_DELETION_GUARD_DENIED");event(id,null,"DELETION_PENDING",actor.subject(),actor.authorizationDecisionRef(),actor.correlationId(),"LAKE_OBJECT_DELETION_AUTHORIZED",Map.of("purgeAfter",purgeAfter.toString(),"reason",reason));return get(id);}
   @Transactional public LakeObject markCompacted(UUID id,long expected,String newLocator,UUID manifest,String correlation){LakeObject before=get(id);int n=db.sql("update ouf_udp.lake_object set state='COMPACTED',previous_locator=locator,locator=:locator,state_version=state_version+1 where lake_object_id=:id and state='VERIFIED' and state_version=:version").param("locator",newLocator).param("id",id).param("version",expected).update();if(n!=1)throw new IllegalStateException("UDP_LAKE_COMPACTION_CONFLICT");event(id,before.state(),"COMPACTED","SYSTEM","",correlation,"LAKE_OBJECT_COMPACTED",Map.of("manifestId",manifest.toString()));return get(id);}
