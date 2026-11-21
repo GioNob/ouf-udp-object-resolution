@@ -30,18 +30,23 @@ public class PublishedResolutionLoop {
       var profiles=configuration.resolve(HandoffIntakeService.text(refs,"bundleRef"),claim.typeCode());
       gate.profilesReady(claim);
       tx.executeWithoutResult(status->{
-        if(db.sql("select 1 from ouf_udp.materialization_job where job_id=:j and state='RUNNING' and claimed_by=:w and lease_until>transaction_timestamp() for update").param("j",claim.jobId()).param("w",worker).query(Integer.class).optional().isEmpty())throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
+        jobs.lockClaim(claim);
         db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))").param("key","resolution:"+profiles.canonicalType()).query().singleRow();
         materializer.rememberProfile(claim.handoffId(),profiles.canonicalType(),HandoffIntakeService.text(refs,"bundleRef"),profiles.materialization());
         GovernedCrsTransform.Result geometry=null;
         if(profiles.spatial()!=null){geometry=spatial.prepare(claim.handoffId(),claim.payload(),profiles.spatial());if(!"OK".equals(geometry.status())){jobs.quarantine(claim,"UDP_SPATIAL_REVIEW_REQUIRED");return;}}
         var identity=profiles.identity();
+        if(identity!=null&&profiles.spatial()!=null){
+          var start=spatial.futureStart(claim.payload());
+          if(start!=null){jobs.awaitValidity(claim,start);return;}
+        }
         var governedDecision=identity==null?null:governed.resolve(claim.handoffId(),claim.payload(),profiles.materialization(),identity);
         var legacyDecision=identity==null?resolution.resolve(claim.handoffId(),claim.payload(),profiles.resolution(),geometry):null;
         String outcome=identity==null?legacyDecision.outcome():governedDecision.outcome();
         if("REVIEW_REQUIRED".equals(outcome)){jobs.quarantine(claim,"UDP_RESOLUTION_REVIEW_REQUIRED");return;}
         if(Set.of("MATCH","NEW_OBJECT").contains(outcome)&&!(identity!=null&&governedDecision.duplicate())){
-          if(identity!=null&&governedDecision.coverageRef()==null)
+          boolean reconcileIndex=identity!=null&&governedDecision.coverageRef()==null;
+          if(reconcileIndex&&(!governedDecision.resumed()||profiles.spatial()==null||!spatiallySuspended(claim.handoffId())))
             throw new IllegalStateException("UDP_IDENTITY_COVERAGE_UNVERIFIED");
           UUID target=identity==null?legacyDecision.targetUrbanObjectId():governedDecision.targetUrbanObjectId();
           db.sql("select urban_object_id from ouf_udp.urban_object where urban_object_id=:u for update").param("u",target).query(UUID.class).single();
@@ -53,13 +58,22 @@ public class PublishedResolutionLoop {
             if("ADVANCE".equals(action))spatial.materializePrepared(claim.handoffId(),target,claim.payload(),profiles.spatial(),geometry);
           }
           materializer.materialize(claim.handoffId(),target,claim.payload(),profiles.materialization());
-          if(identity!=null)identityIndex.refreshOne(identity,target,governedDecision.coverageRef());
+          if(identity!=null){
+            // A pre-upgrade suspended NEW_OBJECT can itself have invalidated coverage.
+            // Re-certify from current revisions before committing this resumed job.
+            if(reconcileIndex)identityIndex.reconcileSpatialResume(identity);
+            else identityIndex.refreshOne(identity,target,governedDecision.coverageRef());
+          }
           if(relationships!=null)relationships.accept(claim.handoffId(),target,claim.payload(),profiles.relationships());
         }
         jobs.complete(claim);
       });
     }catch(PublicationAccessFailure failure){gate.transportFailure(claim,failure);
     }catch(RuntimeException failure){if(!"UDP_RESOLUTION_LEASE_LOST".equals(failure.getMessage()))jobs.fail(claim,failure.getMessage());LOG.warn("UDP_AUTOMATIC_RESOLUTION_INCOMPLETE");}
+  }
+  private boolean spatiallySuspended(String handoff){
+    return db.sql("select exists(select 1 from ouf_udp.handoff_event where handoff_id=:h and (event_type='GEOMETRY_VALIDITY_DEFERRED' or (event_type='REFERENCE_INTEGRITY_QUARANTINED' and safe_detail->>'safeFailureCode'='UDP_SPATIAL_AUTHORITY_CONFLICT')))")
+        .param("h",handoff).query(Boolean.class).single();
   }
 }
 

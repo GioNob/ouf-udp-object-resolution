@@ -67,14 +67,10 @@ public class ResolutionReviewPackageService {
 
   private PackageView snapshot(String tenant,boolean lock,Set<UUID> selected){
     if(tenant==null||tenant.isBlank())throw new SecurityException("UDP_REVIEW_TENANT_REQUIRED");
-    long unscoped=db.sql("select count(*) from ouf_udp.resolution_issue where state='OPEN' and tenant_id is null")
-        .query(Long.class).single();
-    if(unscoped>0)throw new ResponseStatusException(HttpStatus.CONFLICT,
-        "UDP_REVIEW_TENANT_BACKFILL_REQUIRED");
-    String sql="select i.issue_id,i.version,i.reason_code,i.candidate_refs::text candidates,i.evidence_refs::text evidence,"
+    String sql="select i.issue_id,i.version,i.reason_code,i.reevaluation_pending,j.state job_state,j.safe_failure_code,i.candidate_refs::text candidates,i.evidence_refs::text evidence,"
         +"h.handoff_id,h.source_id,h.source_object_id,h.type_code,(h.payload_json->'canonicalPayload')::text incoming_fields "
         +"from ouf_udp.resolution_issue i join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id "
-        +"where i.tenant_id=:tenant and i.state='OPEN'"
+        +"left join ouf_udp.materialization_job j on j.handoff_id=i.handoff_id where i.tenant_id=:tenant and i.state='OPEN'"
         +(selected==null?"":" and i.issue_id in (:selected)")+" order by i.issue_id"
         +(lock?" for update of i":"");
     var query=db.sql(sql).param("tenant",tenant);
@@ -108,8 +104,19 @@ public class ResolutionReviewPackageService {
       item.put("id",id);item.put("version",version);item.put("reason",reason);
       item.put("candidates",candidates);item.put("evidence",evidence);
       item.put("incomingObject",incoming);item.put("candidateObjects",objects);item.put("propertyPreviews",previews);
+      boolean pending=Boolean.TRUE.equals(row.get("reevaluation_pending"));
+      boolean canReevaluate=!pending&&"QUARANTINED".equals(row.get("job_state"))
+          &&Set.of("UDP_RESOLUTION_REVIEW_REQUIRED","UDP_IDENTITY_REVIEW_REQUIRED").contains(Objects.toString(row.get("safe_failure_code"),""));
+      String prerequisite=switch(reason){
+        case "UDP_RESOLUTION_TOO_BROAD","RESOLUTION_TOO_BROAD","CANDIDATE_LIMIT" -> "NARROW_CANDIDATE_SCOPE";
+        case "SOURCE_BINDING_CONFLICT","UDP_SOURCE_BINDING_SCOPE_MISMATCH" -> "RECONCILE_SOURCE_BINDING";
+        case "CANDIDATE_COVERAGE_UNVERIFIED" -> "IDENTITY_PREFLIGHT";
+        default -> null;
+      };
+      var reevaluation=new Reevaluation(pending,canReevaluate?"REEVALUATE":null,prerequisite);
+      item.put("reevaluation",reevaluation);
       canonical.add(item);
-      cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item),Collections.unmodifiableMap(previews)));
+      cards.add(new IssueCard(id,version,reason,refs,decodedEvidence,suggested,incoming,Collections.unmodifiableMap(objects),digest(item),Collections.unmodifiableMap(previews),reevaluation));
     }
     return new PackageView(tenant,digest(canonical),List.copyOf(cards));
   }
@@ -175,9 +182,11 @@ public class ResolutionReviewPackageService {
     catch(Exception failure){throw new IllegalStateException("UDP_REVIEW_HASH_INVALID",failure);}
   }
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_REVIEW_PACKAGE_INVALID");}
+  public record Reevaluation(boolean pending,String action,String prerequisite){}
   public record IssueCard(UUID issueId,long version,String reasonCode,List<String> candidateRefs,
                           Object evidence,UUID suggestedTargetUrbanObjectId,ReviewObject incomingObject,
-                          Map<String,ReviewObject> candidateObjects,String reviewHash,Map<String,Object> propertyPreviews){
+                          Map<String,ReviewObject> candidateObjects,String reviewHash,Map<String,Object> propertyPreviews,Reevaluation reevaluation){
+    public IssueCard(UUID id,long version,String reason,List<String> refs,Object evidence,UUID suggested,ReviewObject incoming,Map<String,ReviewObject> objects,String hash,Map<String,Object> previews){this(id,version,reason,refs,evidence,suggested,incoming,objects,hash,previews,null);}
     public IssueCard(UUID id,long version,String reason,List<String> refs,Object evidence,UUID suggested,ReviewObject incoming,Map<String,ReviewObject> objects,String hash){this(id,version,reason,refs,evidence,suggested,incoming,objects,hash,Map.of());}
   }
   public record ReviewObject(String reference,String sourceId,String sourceObjectId,String type,

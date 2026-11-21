@@ -85,6 +85,46 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Long.class).single()).isOne();
   }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+  void versionedReevaluationReplacesEmptyChoicesAndMaterializesOriginalHandoff(boolean overflow){
+    clearObjects();
+    var policy=policy();var existing=materialize("first-row","Alpha");
+    db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-first-row'").update();
+    UUID extra=null;
+    if(overflow){
+      extra=materialize("additional-row","Alpha");
+      db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-additional-row'").update();
+      backfill.rebuild(policy);
+    }
+    var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    org.mockito.Mockito.when(config.resolve("bundle://road/1","ROAD")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),null,mapping,null,null,policy));
+    var loop=new PublishedResolutionLoop(jobs,config,gate,resolver,materializer,null,db,tx,null,governed,backfill);
+    intake.accept(envelope("second-row","Alpha"));loop.tick();
+    var human=new TrustedHumanContext("HUMAN","reviewer","default",Set.of("resolution.issue.read","resolution.match.approve"),"authz://review","reevaluate");
+    var before=packages.prepare(human);var old=before.issues().getFirst();
+    assertThat(old.candidateRefs()).isEmpty();
+    assertThat(old.reevaluation().action()).isEqualTo("REEVALUATE");
+    assertThat(old.reevaluation().prerequisite()).isEqualTo(overflow?"NARROW_CANDIDATE_SCOPE":"IDENTITY_PREFLIGHT");
+    if(overflow)db.sql("update ouf_udp.urban_object set status='RETIRED' where urban_object_id=:id").param("id",extra).update();
+    backfill.rebuild(policy);
+    packages.confirm(before.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(old.issueId(),old.version(),"REEVALUATE",null,null,old.reviewHash())),human);
+    loop.tick();
+    var current=packages.prepare(human);var card=current.issues().getFirst();
+    assertThat(card.issueId()).isEqualTo(old.issueId());
+    assertThat(card.version()).isGreaterThan(old.version());
+    assertThat(card.candidateRefs()).containsExactly(existing.toString());
+    assertThatThrownBy(()->packages.confirm(before.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(old.issueId(),old.version(),"APPROVE",null,existing,old.reviewHash())),human))
+        .hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
+    packages.confirm(current.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(card.issueId(),card.version(),"APPROVE",null,existing,card.reviewHash())),human);
+    loop.tick();
+    assertThat(db.sql("select urban_object_id from ouf_udp.materialization_observation where handoff_id='candidate-second-row'").query(UUID.class).single()).isEqualTo(existing);
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-second-row'").query(String.class).single()).isEqualTo("SUCCEEDED");
+  }
+
   @Test void humanApprovedReviewResumesAndMaterializesTheObservation(){
     clearObjects();
     UUID existing=materializeWithAddress("review-target","Alpha","Via Roma");
@@ -259,7 +299,12 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     db.sql("update ouf_udp.urban_object_current_state set updated_at=transaction_timestamp()")
         .update();
     assertThat(preflight.status(attestation.attestationId(),admin).valid()).isFalse();
+    var paused=envelope("waiting-for-preflight","Alpha");intake.accept(paused);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    assertThat(governed.resolve("candidate-waiting-for-preflight",paused,mapping,policy).outcome()).isEqualTo("REVIEW_REQUIRED");
+    db.sql("update ouf_udp.materialization_job set state='QUARANTINED',safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED' where handoff_id='candidate-waiting-for-preflight'").update();
     var refreshed=preflight.prepare("registry",hash,configuration,admin);
+    assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i using(handoff_id) where j.handoff_id='candidate-waiting-for-preflight' and i.reevaluation_pending").query(String.class).single()).isEqualTo("READY");
     assertThat(refreshed.valid()).isTrue();
     assertThat(refreshed.attestationId()).isNotEqualTo(attestation.attestationId());
     assertThat(refreshed.coverageRef()).isNotEqualTo(attestation.coverageRef());

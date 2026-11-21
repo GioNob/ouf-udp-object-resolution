@@ -26,6 +26,45 @@ class LakeLifecycleRuntimeTest {
   @Test void compactionPreservesLogicalIdentityAndRejectsLabelCrossing(){var a=store("a","OPEN");var b=store("b","OPEN");var restricted=store("c","RESTRICTED");assertThatThrownBy(()->lake.compact(List.of(a.id(),restricted.id()),"corr-invalid")).hasMessageContaining("BOUNDARY");UUID manifest=lake.compact(List.of(a.id(),b.id()),"corr-compact");assertThat(catalog.get(a.id()).state()).isEqualTo("COMPACTED");assertThat(catalog.get(a.id()).hash()).isEqualTo(a.hash());assertThat(db.sql("select count(*) from ouf_udp.compaction_manifest_entry where manifest_id=:id").param("id",manifest).query(Long.class).single()).isEqualTo(2);}
   @Test void reconciliationQuarantinesMismatchAndReportsOrphanWithoutDeleting(){var object=store("scan","OPEN");storage.corrupt(object.locator());storage.orphan("lake/orphan");var scan=lake.reconcile();assertThat(scan.checksumMismatch()).isOne();assertThat(scan.orphan()).isOne();assertThat(catalog.get(object.id()).state()).isEqualTo("QUARANTINED");assertThat(storage.inventory()).extracting(LakeObjectStoragePort.StoredObject::locator).contains("lake/orphan");}
 
+  @Test void resubmittedBytesGetOneVerifiedPhysicalCopyAndPreserveFailedEvidence(){
+    storage.failDurability=true;
+    assertThatThrownBy(()->store("same","OPEN")).hasMessageContaining("DURABILITY");
+    storage.failDurability=false;
+    var failed=db.sql("select lake_object_id from ouf_udp.lake_object").query(UUID.class).single();
+    var second=store("same","OPEN");
+    storage.corrupt(second.locator());lake.reconcile();
+    var third=store("same","OPEN");
+    assertThat(catalog.get(failed).state()).isEqualTo("FAILED");
+    assertThat(catalog.get(second.id()).state()).isEqualTo("QUARANTINED");
+    assertThat(third.state()).isEqualTo("VERIFIED");
+    assertThat(third.id()).isNotEqualTo(second.id());
+    assertThat(store("same","OPEN").id()).isEqualTo(third.id());
+    assertThat(storage.read(second.locator())).isEqualTo("tampered".getBytes(StandardCharsets.UTF_8));
+  }
+  @Test void interruptedDurableCopyIsReadBackBeforeReuse(){
+    byte[] bytes="resume".getBytes(StandardCharsets.UTF_8);
+    String hash=RuntimeLakeApi.hash(bytes);
+    var staged=catalog.stage(UUID.randomUUID(),"default","source","TYPE","RAW",hash,"application/json",
+        bytes.length,"lake/interrupted","OPERATIONAL","OPEN",OffsetDateTime.now(),"one");
+    storage.put(staged.locator(),bytes,"application/json",hash);
+    catalog.transition(staged.id(),staged.version(),"STAGED","DURABLE","SYSTEM","","one",Map.of());
+    assertThat(store("resume","OPEN").id()).isEqualTo(staged.id());
+    assertThat(catalog.get(staged.id()).state()).isEqualTo("VERIFIED");
+  }
+  @Test void compactedBytesSupportOriginalManifestAndFreshUpload(){
+    var a=store("first","OPEN");var b=store("second","OPEN");
+    lake.compact(List.of(a.id(),b.id()),"pack");
+    var segment=lake.verifyCompacted(catalog.get(b.id()));
+    assertThat(segment.offset()).isEqualTo(a.size());
+    var fresh=store("second","OPEN");
+    assertThat(fresh.state()).isEqualTo("VERIFIED");
+    assertThat(fresh.hash()).isEqualTo(b.hash());
+    assertThat(fresh.id()).isNotEqualTo(b.id());
+    assertThat(catalog.get(b.id()).state()).isEqualTo("COMPACTED");
+    storage.corrupt(segment.locator());
+    assertThatThrownBy(()->lake.verifyCompacted(catalog.get(b.id()))).hasMessage("UDP_LAKE_CHECKSUM_MISMATCH");
+  }
+
   private LakeCatalogRepository.LakeObject store(String value,String label){return lake.store(value.getBytes(StandardCharsets.UTF_8),"default","source","TYPE","RAW","application/json","OPERATIONAL",label,OffsetDateTime.now().minusSeconds(1),"corr-"+value);}
   private static TrustedHumanContext human(){return new TrustedHumanContext("HUMAN_USER","operator","default",Set.of("lake.object.delete"),"authz://lake","corr-delete");}
   @TestConfiguration static class Config {@Bean MemoryStorage storage(){return new MemoryStorage();}}
