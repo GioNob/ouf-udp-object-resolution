@@ -184,6 +184,96 @@ class SpatialMaterializerRuntimeTest {
     assertThat(jobs.claim("early",java.time.Duration.ofMinutes(1))).isEmpty();
   }
 
+  @Autowired GovernedIdentityIndexBackfill identityIndex;
+  @Autowired GovernedIdentityResolutionService governed;
+  @Autowired GeometryGovernanceService geometryReview;
+
+  @Test void governedSecondGeometryResumesThroughHumanChoiceAndServesTheSecondObservation(){
+    var loop=governedLoop();
+    var first=handoff("round-one","asset","ASSET",point(1,1),"EPSG:4326");
+    HandoffIntakeService.object(first,"canonicalPayload").put("name","Before");
+    intake.accept(first);loop.tick();
+    var second=handoff("round-two","asset","ASSET",point(2,2),"EPSG:4326");
+    HandoffIntakeService.object(second,"canonicalPayload").put("name","After");
+    intake.accept(second);loop.tick();
+    assertThat(db.sql("select safe_failure_code from ouf_udp.materialization_job where handoff_id='round-two'").query(String.class).single()).isEqualTo("UDP_SPATIAL_AUTHORITY_CONFLICT");
+    UUID issue=db.sql("select issue_id from ouf_udp.spatial_resolution_issue where handoff_id='round-two'").query(UUID.class).single();
+    UUID before=db.sql("select geometry_revision_id from ouf_udp.urban_geometry_current").query(UUID.class).single();
+    UUID candidate=db.sql("select geometry_revision_id from ouf_udp.urban_geometry where handoff_id='round-two'").query(UUID.class).single();
+    var caps=Set.of("urban.object.read","urban.geometry.read","resolution.issue.read","authority.override");
+    var actor=new TrustedHumanContext("HUMAN","reviewer","default",caps,"authz://geometry","round-two");
+    var reader=new ServingAuthorizationContext("HUMAN","reviewer","default",caps,Set.of("OPEN","RESTRICTED"),"authz://geometry","round-two");
+    geometryReview.decide(issue,before,candidate,"Verified geometry",actor,reader);
+    loop.tick();
+    assertSecondRead("round-two","After",reader);
+  }
+
+  @Autowired GovernedCrsTransform crs;
+  @Test void governedFutureObservationBecomesCurrentWhenItsValidityStarts(){
+    var starts=java.time.OffsetDateTime.parse("2020-02-01T00:00:00Z");
+    var timed=org.mockito.Mockito.spy(new SpatialMaterializer(db,json,crs));
+    org.mockito.Mockito.doReturn(starts.minusDays(1)).when(timed).validityNow();
+    var loop=governedLoop(timed);
+    var first=handoff("now","asset","ASSET",point(1,1),"EPSG:4326");
+    HandoffIntakeService.object(first,"canonicalPayload").put("name","Before");
+    intake.accept(first);loop.tick();
+    var next=handoff("later","asset","ASSET",point(1,1),"EPSG:4326");
+    HandoffIntakeService.object(next,"sourceIdentity").put("validFrom",starts.toString());
+    HandoffIntakeService.object(next,"canonicalPayload").put("name","Later");
+    intake.accept(next);loop.tick();
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='later'").query(String.class).single()).isEqualTo("PAUSED");
+    org.mockito.Mockito.doReturn(starts.plusDays(1)).when(timed).validityNow();
+    loop.tick();
+    assertSecondRead("later","Later",new ServingAuthorizationContext("HUMAN","reader","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN","RESTRICTED"),"authz://reader","later"));
+  }
+
+  @Test void persistedV36NewIdentitySurvivesExpiryOfItsSpatialPause(){
+    var loop=governedLoop();var row=handoff("old-pause","asset","ASSET",point(1,1),"EPSG:4326");
+    HandoffIntakeService.object(row,"canonicalPayload").put("name","Recovered");
+    var due=java.time.OffsetDateTime.now().minusSeconds(1);
+    HandoffIntakeService.object(row,"sourceIdentity").put("validFrom",due.toString());
+    intake.accept(row);
+    var claim=jobs.claim("v36",java.time.Duration.ofMinutes(1)).orElseThrow();
+    var old=governed.resolve("old-pause",row,spatialMapping(),spatialIdentity());
+    assertThat(old.outcome()).isEqualTo("NEW_OBJECT");
+    jobs.awaitValidity(claim,due);
+    assertThat(db.sql("select count(*) from ouf_udp.materialization_observation").query(Long.class).single()).isZero();
+    loop.tick();
+    assertSecondRead("old-pause","Recovered",new ServingAuthorizationContext("HUMAN","reader","default",Set.of("urban.object.read","urban.geometry.read"),Set.of("OPEN","RESTRICTED"),"authz://reader","resume"));
+    assertThat(db.sql("select urban_object_id from ouf_udp.materialization_observation").query(UUID.class).single()).isEqualTo(old.targetUrbanObjectId());
+  }
+
+  private GovernedIdentityEngine.Policy spatialIdentity(){
+    return new GovernedIdentityEngine.Policy("policy://spatial-identity","1","default","ouf:Asset","spatial-source",5,true,
+        List.of(new GovernedIdentityEngine.Signal("identity","identity@semantic://1",GovernedIdentityEngine.ComparatorKind.TEXT_V1,false,false,"assertion://id")),
+        List.of(new GovernedIdentityEngine.SufficientRule("id",Set.of("identity"),"assertion://id-rule")));
+  }
+  private UdpPorts.MaterializationProfile spatialMapping(){
+    return new UdpPorts.MaterializationProfile("policy://authority/geometry-review",List.of(
+        new UdpPorts.PropertyRule("identity","identity","string","OPEN",List.of()),
+        new UdpPorts.PropertyRule("geometry","geometry","geometry","RESTRICTED",List.of()),
+        new UdpPorts.PropertyRule("name","name","string","OPEN",List.of())));
+  }
+  private PublishedResolutionLoop governedLoop(){return governedLoop(spatial);}
+  private PublishedResolutionLoop governedLoop(SpatialMaterializer geometryMaterializer){
+    var policy=spatialIdentity();identityIndex.rebuild(policy);
+    var mapping=spatialMapping();
+    var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    org.mockito.Mockito.when(config.resolve("bundle://1","ASSET")).thenReturn(new PublishedRuntimeConfiguration.Profiles(
+        Map.of(),null,mapping,new UdpPorts.SpatialProfile("policy://geometry/1",geometry,List.of()),null,policy));
+    return new PublishedResolutionLoop(jobs,config,gate,resolution,canonical,geometryMaterializer,db,new org.springframework.transaction.support.TransactionTemplate(transactions),null,governed,identityIndex);
+  }
+  private void assertSecondRead(String handoff,String name,ServingAuthorizationContext reader){
+    var observed=db.sql("select o.urban_object_id,o.revision_id,j.state from ouf_udp.materialization_observation o join ouf_udp.materialization_job j using(handoff_id) where o.handoff_id=:h")
+        .param("h",handoff).query().singleRow();
+    assertThat(observed.get("state")).isEqualTo("SUCCEEDED");
+    var served=serving.current((UUID)observed.get("urban_object_id"),reader);
+    assertThat(served.get("revisionId")).isEqualTo(observed.get("revision_id"));
+    assertThat(((Map<?,?>)served.get("properties")).get("name")).isEqualTo(name);
+  }
+
   private void storeTarget(String handoff,String object,Object geometryValue){Fixture f=create(handoff,object,"AREA","ouf:Area",geometryValue,"EPSG:4326");spatial.materialize(handoff,f.objectId,f.payload,new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of()));}
   private UdpPorts.SpatialProfile profile(String predicate){return new UdpPorts.SpatialProfile("policy://spatial/1",geometry,List.of(new UdpPorts.SpatialRelationshipRule("ouf:insideArea","ouf:Area",predicate,"QUARANTINE_RELATION",null,null,null,"RESTRICTED",false)));}
   private Fixture create(String handoff,String object,String type,String canonicalType,Object geometryValue,String crs){Map<String,Object> payload=handoff(handoff,object,type,geometryValue,crs);intake.accept(payload);var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://resolution/1",canonicalType,"identity","identity");UUID id=resolution.resolve(handoff,payload,rp).targetUrbanObjectId();canonical.materialize(handoff,id,payload,properties);return new Fixture(id,payload);}

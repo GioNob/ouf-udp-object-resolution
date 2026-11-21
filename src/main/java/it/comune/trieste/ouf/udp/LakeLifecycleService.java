@@ -15,7 +15,57 @@ public class LakeLifecycleService {
   private final LakeCatalogRepository catalog;private final ObjectProvider<LakeObjectStoragePort> storageProvider;
   public LakeLifecycleService(LakeCatalogRepository catalog,ObjectProvider<LakeObjectStoragePort> storageProvider){this.catalog=catalog;this.storageProvider=storageProvider;}
 
-  public LakeCatalogRepository.LakeObject store(byte[] content,String tenant,String source,String type,String tier,String mediaType,String retentionClass,String accessLabel,OffsetDateTime retentionUntil,String correlation){validate(tier,retentionClass,retentionUntil);String hash=hash(content),key="lake/"+tenant+"/"+tier.toLowerCase(Locale.ROOT)+"/"+hash.substring(7);UUID id=UUID.randomUUID();var staged=catalog.stage(id,tenant,source,type,tier,hash,mediaType,content.length,key,retentionClass,accessLabel,retentionUntil,correlation);if("VERIFIED".equals(staged.state()))return staged;if(!"STAGED".equals(staged.state()))throw new IllegalStateException("UDP_LAKE_DUPLICATE_NOT_USABLE");try{var receipt=storage().put(key,content,mediaType,hash);if(!receipt.durable()||!key.equals(receipt.locator())||!hash.equals(receipt.contentHash())||receipt.sizeBytes()!=content.length)throw new IllegalStateException("UDP_LAKE_DURABILITY_PROOF_INVALID");var durable=catalog.transition(staged.id(),staged.version(),"STAGED","DURABLE","SYSTEM","",correlation,Map.of("locatorFingerprint",fingerprint(receipt.locator())));var head=storage().head(receipt.locator()).orElseThrow(()->new IllegalStateException("UDP_LAKE_OBJECT_MISSING_AFTER_PUT"));if(!hash.equals(head.contentHash())||head.sizeBytes()!=content.length)throw new IllegalStateException("UDP_LAKE_CHECKSUM_MISMATCH");return catalog.transition(durable.id(),durable.version(),"DURABLE","VERIFIED","SYSTEM","",correlation,Map.of("locatorFingerprint",fingerprint(receipt.locator())));}catch(RuntimeException failure){LakeCatalogRepository.LakeObject current=catalog.get(staged.id());if("STAGED".equals(current.state()))catalog.transition(current.id(),current.version(),"STAGED","FAILED","SYSTEM","",correlation,Map.of("safeErrorCode","UDP_LAKE_WRITE_FAILED"));else if("DURABLE".equals(current.state()))catalog.transition(current.id(),current.version(),"DURABLE","QUARANTINED","SYSTEM","",correlation,Map.of("safeErrorCode","UDP_LAKE_VERIFY_FAILED"));throw failure;}}
+  public LakeCatalogRepository.LakeObject store(byte[] content,String tenant,String source,String type,String tier,
+      String mediaType,String retentionClass,String accessLabel,OffsetDateTime retentionUntil,String correlation){
+    validate(tier,retentionClass,retentionUntil);
+    String hash=hash(content);UUID id=UUID.randomUUID();
+    String locator="lake/"+tenant+"/"+tier.toLowerCase(Locale.ROOT)+"/"+hash.substring(7)+("RAW".equals(tier)?"/"+id:"");
+    var object=catalog.stage(id,tenant,source,type,tier,hash,mediaType,content.length,locator,retentionClass,
+        accessLabel,retentionUntil,correlation);
+    if("VERIFIED".equals(object.state()))return object;
+    if("STAGED".equals(object.state())){
+      try{
+        var receipt=storage().put(object.locator(),content,mediaType,hash);
+        if(!receipt.durable()||!object.locator().equals(receipt.locator())||!hash.equals(receipt.contentHash())
+            ||receipt.sizeBytes()!=content.length)throw new IllegalStateException("UDP_LAKE_DURABILITY_PROOF_INVALID");
+      }catch(RuntimeException failure){
+        catalog.transition(object.id(),object.version(),"STAGED","FAILED","SYSTEM","",correlation,Map.of("safeErrorCode","UDP_LAKE_WRITE_FAILED"));
+        throw failure;
+      }
+      object=advanceCopy(object,"DURABLE",correlation);
+    }
+    if("VERIFIED".equals(object.state()))return object;
+    if(!"DURABLE".equals(object.state()))throw new IllegalStateException("UDP_LAKE_DUPLICATE_NOT_USABLE");
+    try{
+      var head=storage().head(object.locator()).orElseThrow(()->new IllegalStateException("UDP_LAKE_OBJECT_MISSING_AFTER_PUT"));
+      if(!head.durable()||!hash.equals(head.contentHash())||head.sizeBytes()!=content.length
+          ||("RAW".equals(tier)&&!Arrays.equals(content,storage().read(object.locator()))))throw new IllegalStateException("UDP_LAKE_CHECKSUM_MISMATCH");
+    }catch(RuntimeException failure){
+      catalog.transition(object.id(),object.version(),"DURABLE","QUARANTINED","SYSTEM","",correlation,Map.of("safeErrorCode","UDP_LAKE_VERIFY_FAILED"));
+      throw failure;
+    }
+    return advanceCopy(object,"VERIFIED",correlation);
+  }
+  LakeCatalogRepository.Segment verifyCompacted(LakeCatalogRepository.LakeObject input){
+    var segment=catalog.compactedSegment(input);
+    if(segment.packSize()>67_108_864L||segment.length()!=input.size()||segment.offset()>segment.packSize()-segment.length())
+      throw new IllegalStateException("UDP_LAKE_MANIFEST_UNVERIFIED");
+    byte[] pack=storage().read(segment.locator());
+    if(pack.length!=segment.packSize()||!hash(pack).equals(segment.hash())
+        ||!hash(Arrays.copyOfRange(pack,(int)segment.offset(),(int)(segment.offset()+segment.length()))).equals(input.hash()))
+      throw new IllegalStateException("UDP_LAKE_CHECKSUM_MISMATCH");
+    return segment;
+  }
+  private LakeCatalogRepository.LakeObject advanceCopy(LakeCatalogRepository.LakeObject object,String to,String correlation){
+    try{return catalog.transition(object.id(),object.version(),object.state(),to,"SYSTEM","",correlation,
+        Map.of("locatorFingerprint",fingerprint(object.locator())));}
+    catch(IllegalStateException conflict){
+      if(!"UDP_LAKE_STATE_CONFLICT".equals(conflict.getMessage()))throw conflict;
+      var current=catalog.get(object.id());
+      if(to.equals(current.state())||"VERIFIED".equals(current.state()))return current;
+      throw conflict;
+    }
+  }
 
   public LakeCatalogRepository.LakeObject authorizeDeletion(UUID id,long expected,String reason,TrustedHumanContext actor){if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_LAKE_DELETION_REASON_REQUIRED");return catalog.requestDeletion(id,expected,OffsetDateTime.now().plusHours(1),reason,actor);}
 

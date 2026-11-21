@@ -14,19 +14,21 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /** Exercise JSON conversion, not a direct Java service call. */
 class ResolutionPackageHttpContractTest {
- @Test void browserSelectivePayloadReachesOwnerWithoutLosingHashOrOptionalNote()throws Exception{
+ @org.junit.jupiter.params.ParameterizedTest
+ @org.junit.jupiter.params.provider.ValueSource(strings={"CREATE_NEW","REEVALUATE"})
+ void browserSelectivePayloadReachesOwnerWithoutLosingHashOrOptionalNote(String action)throws Exception{
   var packages=mock(ResolutionReviewPackageService.class);
   UUID id=UUID.randomUUID();String hash="sha256:"+"a".repeat(64);
   when(packages.confirm(anyString(),anyList(),any())).thenAnswer(call->{
     List<ResolutionReviewPackageService.Choice> choices=call.getArgument(1);
     assertThat(choices).hasSize(1);var choice=choices.getFirst();
     assertThat(choice.issueId()).isEqualTo(id);assertThat(choice.expectedVersion()).isZero();
-    assertThat(choice.action()).isEqualTo("CREATE_NEW");assertThat(choice.reason()).isEmpty();
+    assertThat(choice.action()).isEqualTo(action);assertThat(choice.reason()).isEmpty();
     assertThat(choice.targetUrbanObjectId()).isNull();assertThat(choice.expectedReviewHash()).isEqualTo(hash);
     return new ResolutionReviewPackageService.Confirmation(UUID.randomUUID(),hash,1);
   });
   var mvc=MockMvcBuilders.standaloneSetup(new TrustedHumanApi(mock(IdentityGovernanceService.class),packages,mock(GovernedIdentityPreflight.class))).setControllerAdvice(new ResolutionRequestErrors()).build();
-  String body="{\"snapshotHash\":\""+hash+"\",\"choices\":[{\"issueId\":\""+id+"\",\"expectedVersion\":0,\"action\":\"CREATE_NEW\",\"reason\":\"\",\"targetUrbanObjectId\":null,\"expectedReviewHash\":\""+hash+"\"}]}";
+  String body="{\"snapshotHash\":\""+hash+"\",\"choices\":[{\"issueId\":\""+id+"\",\"expectedVersion\":0,\"action\":\""+action+"\",\"reason\":\"\",\"targetUrbanObjectId\":null,\"expectedReviewHash\":\""+hash+"\"}]}";
   mvc.perform(post("/api/udp/v1/governance/resolution/issues/package/confirm")
       .contentType(MediaType.APPLICATION_JSON).content(body).with(request->{
         TestAuthorization.bind(request,"alice","HUMAN",Set.of("resolution.match.approve"));

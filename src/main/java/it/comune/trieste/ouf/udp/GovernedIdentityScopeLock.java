@@ -9,6 +9,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class GovernedIdentityScopeLock {
   private final JdbcClient db;
   public GovernedIdentityScopeLock(JdbcClient db){this.db=db;}
+  static void lockBinding(JdbcClient db,Object source,Object type,Object record){
+    db.sql("select pg_advisory_xact_lock(hashtextextended('source-binding:' || jsonb_build_array(cast(:s as text),cast(:t as text),cast(:o as text))::text,0))")
+        .param("s",source).param("t",type).param("o",record).query().singleRow();
+  }
   public void acquire(String tenant,String canonicalClass){
     if(!TransactionSynchronizationManager.isActualTransactionActive())
       throw new IllegalStateException("UDP_IDENTITY_TRANSACTION_REQUIRED");

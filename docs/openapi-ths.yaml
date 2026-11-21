@@ -146,6 +146,7 @@ paths:
       responses: {'200': {description: Complete tenant-scoped OPEN issue snapshot with evidence, candidate references and version hash; read only}}
   /api/udp/v1/governance/resolution/issues/package/confirm:
     post:
+      description: A versioned REEVALUATE choice with no target queues the original identity review job. Read the refreshed package before confirming APPROVE or CREATE_NEW.
       operationId: confirmResolutionReviewPackage
       x-ouf-capability: resolution.match.approve
       x-ouf-mcp-eligible: false
