@@ -66,6 +66,29 @@ public class GovernedIdentityPreflight {
         .param("version",policy.version()).param("fingerprint",fingerprint)
         .param("coverage",rebuilt.coverageRef()).param("count",rebuilt.indexedObjects())
         .param("actor",actor.subject()).update();
+    // Only identity reviews whose original publication and scope can use this proof.
+    // The normal worker reopens their pinned profiles and regenerates the choices.
+    db.sql("""
+        with eligible as (
+          select i.issue_id,j.job_id from ouf_udp.resolution_issue i
+          join ouf_udp.resolution_decision d using(resolution_decision_id)
+          join ouf_udp.materialization_job j on j.handoff_id=i.handoff_id
+          join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id
+          where i.state='OPEN' and not i.reevaluation_pending and i.tenant_id=:tenant
+            and h.source_id=:source and d.strategy_id='GOVERNED_IDENTITY'
+            and d.policy_ref=:policy and d.strategy_version=:version
+            and i.evidence_refs->0->>'canonicalClass'=:type and j.state='QUARANTINED'
+            and j.safe_failure_code in ('UDP_RESOLUTION_REVIEW_REQUIRED','UDP_IDENTITY_REVIEW_REQUIRED')
+          for update of i,j skip locked
+        ), queued as (
+          update ouf_udp.materialization_job j set state='READY',state_version=state_version+1,
+            updated_at=transaction_timestamp(),safe_failure_code=null from eligible e
+          where j.job_id=e.job_id returning e.issue_id
+        )
+        update ouf_udp.resolution_issue i set reevaluation_pending=true,version=version+1
+        from queued q where i.issue_id=q.issue_id
+        """).param("tenant",policy.tenantId()).param("source",sourceId).param("policy",policy.ref())
+        .param("version",policy.version()).param("type",policy.canonicalClass()).update();
     return status(id,actor);
   }
 

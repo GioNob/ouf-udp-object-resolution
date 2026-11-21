@@ -49,9 +49,14 @@ public class SpatialMaterializer {
     if(advance){db.sql("insert into ouf_udp.urban_geometry_role_current(urban_object_id,geometry_role,geometry_revision_id) values(:u,:role,:g) on conflict(urban_object_id,geometry_role) do update set geometry_revision_id=excluded.geometry_revision_id").param("u",object).param("role",profile.geometry().geometryRole()).param("g",id).update();}
     if(advance&&"PRIMARY".equals(profile.geometry().geometryRole()))db.sql("insert into ouf_udp.urban_geometry_current(urban_object_id,geometry_revision_id) values(:u,:g) on conflict(urban_object_id) do update set geometry_revision_id=excluded.geometry_revision_id").param("u",object).param("g",id).update();return id;
   }
+  OffsetDateTime validityNow(){return OffsetDateTime.now();}
+  OffsetDateTime futureStart(Map<String,Object> payload){
+    var start=time(HandoffIntakeService.object(payload,"sourceIdentity").get("validFrom"));
+    return start!=null&&start.isAfter(validityNow())?start:null;
+  }
   /** Published processing must arbitrate geometry before changing either current view. */
   String currentAction(String handoff,UUID object,Map<String,Object> payload,UdpPorts.SpatialProfile spatial,UdpPorts.MaterializationProfile materialization,GovernedCrsTransform.Result transformed){
-    var identity=HandoffIntakeService.object(payload,"sourceIdentity");var now=OffsetDateTime.now();var from=time(identity.get("validFrom"));var to=time(identity.get("validTo"));
+    var identity=HandoffIntakeService.object(payload,"sourceIdentity");var now=validityNow();var from=time(identity.get("validFrom"));var to=time(identity.get("validTo"));
     if((from!=null&&from.isAfter(now))||(to!=null&&!to.isAfter(now))){storeGeometry(handoff,object,payload,spatial,(Map<?,?>)HandoffIntakeService.object(payload,"canonicalPayload").get(spatial.geometry().sourceField()),transformed,false);return from!=null&&from.isAfter(now)?"FUTURE":"HISTORICAL_ONLY";}
     var current=db.sql("select g.geometry_revision_id,g.access_label,g.valid_from,g.valid_to,h.source_id,h.payload_json::text previous_payload,coalesce((select max(observed_at) from ouf_udp.geometry_observation x where x.geometry_revision_id=g.geometry_revision_id),(h.payload_json#>>'{sourceIdentity,observedAt}')::timestamptz) latest_observed,ST_Equals(g.geometry,ST_GeomFromEWKB(decode(:g,'hex'))) equivalent from ouf_udp.urban_geometry_role_current c join ouf_udp.urban_geometry g on g.geometry_revision_id=c.geometry_revision_id join ouf_udp.handoff_intake h on h.handoff_id=g.handoff_id where c.urban_object_id=:u and c.geometry_role=:role").param("role",spatial.geometry().geometryRole()).param("g",transformed.servingEwkb()).param("u",object).query().listOfRows();
     if(current.isEmpty())return "ADVANCE";

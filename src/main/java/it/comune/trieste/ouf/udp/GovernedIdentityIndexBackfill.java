@@ -56,6 +56,14 @@ public class GovernedIdentityIndexBackfill {
         .param("shape",shape).param("count",indexed).update();
     return new Result(ref,indexed);
   }
+  /** A suspended V36 NEW_OBJECT could invalidate coverage before its first revision.
+   * The last such resume can certify the full scope. Until then its marker stays incomplete. */
+  @Transactional public void reconcileSpatialResume(GovernedIdentityEngine.Policy policy){
+    locks.acquire(policy.tenantId(),policy.canonicalClass());
+    if(!db.sql("select exists(select 1 from ouf_udp.urban_object where tenant_id=:tenant and canonical_type=:type and status='ACTIVE' and current_revision_id is null)")
+        .param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).query(Boolean.class).single())
+      rebuild(policy);
+  }
   /** Called in the same transaction as a resolution made against complete coverage and its materialization. */
   @Transactional public void refreshOne(GovernedIdentityEngine.Policy policy,UUID objectId,
       String observedCoverageRef){

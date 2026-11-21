@@ -70,6 +70,19 @@ class PublicationDependencyRecoveryRuntimeTest {
   assertThatThrownBy(()->recovery.defer(old,PublicationAccessFailure.network())).hasMessage("UDP_RESOLUTION_LEASE_LOST");
   recovery.defer(current,PublicationAccessFailure.network());assertThat(attempts()).isEqualTo(1);
  }
+ @Test void expiredWorkerCannotFailTheReplacementIntakeOrEmitAnEvent(){
+  accept("late");var old=claim("worker");
+  db.sql("update ouf_udp.materialization_job set lease_until=clock_timestamp()-interval '1 second'").update();
+  jobs.fail(old,"UDP_LATE");
+  var replacement=claim("worker");
+  assertThatThrownBy(()->jobs.complete(old)).hasMessage("UDP_RESOLUTION_LEASE_LOST");
+  jobs.fail(old,"UDP_LATE");
+  assertThat(state()).isEqualTo("RUNNING");
+  jobs.complete(replacement);jobs.fail(old,"UDP_LATE");
+  assertThat(state()).isEqualTo("SUCCEEDED");
+  assertThat(db.sql("select state from ouf_udp.handoff_intake").query(String.class).single()).isEqualTo("PROCESSED");
+  assertThat(db.sql("select count(*) from ouf_udp.handoff_event where event_type='RESOLUTION_FAILED'").query(Long.class).single()).isZero();
+ }
  private ResolutionRepository.Claim claim(String worker){return jobs.claim(worker,Duration.ofMinutes(2)).orElseThrow();}
  private String state(){return db.sql("select state from ouf_udp.materialization_job").query(String.class).single();}
  private int attempts(){return db.sql("select dependency_attempts from ouf_udp.materialization_job").query(Integer.class).single();}

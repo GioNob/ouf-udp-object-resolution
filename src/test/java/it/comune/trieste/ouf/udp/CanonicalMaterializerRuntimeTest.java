@@ -133,8 +133,82 @@ class CanonicalMaterializerRuntimeTest {
     assertThat(db.sql("select count(*) from ouf_udp.human_property_decision").query(Long.class).single()).isZero();
   }
 
+  @Autowired ResolutionRepository jobs;
+  @Autowired GovernedServingService serving;
+  @Autowired org.springframework.transaction.support.TransactionTemplate transactions;
+  @Test void successiveRunsOfSameAndDifferentCsvReachServingWithoutReset(){
+    var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    org.mockito.Mockito.when(config.resolve("bundle://road/1","ROAD")).thenReturn(
+        new PublishedRuntimeConfiguration.Profiles(Map.of(),resolutionProfile,authorityProfile,null));
+    var loop=new PublishedResolutionLoop(jobs,config,gate,resolution,materializer,null,db,transactions);
+    var reader=new ServingAuthorizationContext("HUMAN","reader","default",Set.of("urban.object.read"),Set.of("OPEN"),"authz://serving","read");
+    String firstCsv="code,name,surface\nR1,First road,42\n",secondCsv=firstCsv+"R2,Second road,42\n";
+    String firstRaw="lake://"+UUID.randomUUID(),secondRaw="lake://"+UUID.randomUUID();
+    List<UUID> targets=new ArrayList<>(),revisions=new ArrayList<>();
+    for(int i=0;i<4;i++){
+      String id="repeat-"+i,source=i<2?"registry":"survey",code=i==3?"R2":"R1",name=i==3?"Second road":"First road";
+      var row=handoff(id,source,code,code,name,42);row.put("ingestionRunId",i<2?"run-"+i:"run-2");
+      row.put("rawObjectRef",i<2?firstRaw:secondRaw);
+      row.put("contentHash",RuntimeLakeApi.hash((i<2?firstCsv:secondCsv).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+      assertThat(intake.accept(row).durable()).isTrue();loop.tick();
+      var result=db.sql("""
+          select o.urban_object_id,o.revision_id,j.state,h.state intake_state,b.urban_object_id binding_target
+          from ouf_udp.materialization_observation o join ouf_udp.materialization_job j using(handoff_id)
+          join ouf_udp.handoff_intake h using(handoff_id) join ouf_udp.source_binding b
+            on (b.source_id,b.type_code,b.source_object_id)=(h.source_id,h.type_code,h.source_object_id)
+          where o.handoff_id=:h
+          """).param("h",id).query().singleRow();
+      UUID target=(UUID)result.get("urban_object_id"),revision=(UUID)result.get("revision_id");
+      assertThat(result).containsEntry("state","SUCCEEDED").containsEntry("intake_state","PROCESSED").containsEntry("binding_target",target);
+      var served=serving.current(target,reader);
+      assertThat(served.get("revisionId")).isEqualTo(revision);
+      assertThat(((Map<?,?>)served.get("properties")).get("ouf:name")).isEqualTo(name);
+      targets.add(target);revisions.add(revision);
+    }
+    assertThat(targets.subList(0,3)).containsOnly(targets.getFirst());
+    assertThat(targets.getLast()).isNotEqualTo(targets.getFirst());
+    assertThat(revisions.get(1)).isEqualTo(revisions.getFirst());
+  }
+
+  @Test void returningToHistoricalValueCreatesThirdRevisionOnSameObject(){
+    UUID object=null;
+    for(int i=0;i<3;i++){
+      String handoff="cycle-"+i;
+      var row=resolved(handoff,"registry","stable","R1",i==1?"Beta":"Alpha",42);
+      if(i==0)object=row.objectId;
+      assertThat(row.objectId).isEqualTo(object);
+      assertThat(materializer.materialize(handoff,object,row.payload,authorityProfile).materialChange()).isTrue();
+    }
+    assertThat(db.sql("select revision_no from ouf_udp.object_revision order by revision_no").query(Long.class).list()).containsExactly(1L,2L,3L);
+    assertThat(db.sql("select count(distinct (canonical_hash,authority_hash)) from ouf_udp.object_revision").query(Long.class).single()).isEqualTo(2);
+    assertThat(db.sql("select revision_no from ouf_udp.materialization_observation o join ouf_udp.object_revision r using(revision_id) where o.handoff_id='cycle-2'").query(Long.class).single()).isEqualTo(3);
+  }
+
+  @Test void legacyKeyCollisionAndContradictoryWeightedMatchRequireReview(){
+    var exact=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://keys","ouf:Road","code","name");
+    var first=handoff("first-key","registry","old","K","First",1);intake.accept(first);
+    UUID object=resolution.resolve("first-key",first,exact).targetUrbanObjectId();
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority",List.of(new UdpPorts.PropertyRule("surface","surface","number","OPEN",List.of())));
+    materializer.materialize("first-key",object,first,mapping);
+    var other=handoff("second-key","survey","other","K","Different",2);intake.accept(other);
+    assertThat(resolution.resolve("second-key",other,exact).outcome()).isEqualTo("REVIEW_REQUIRED");
+    var weighted=new WeightedIdentity.Policy(List.of(new WeightedIdentity.Signal("surface","EXACT",1,null)),List.of("surface"),null,5,.9,.6,.1,false);
+    var sameName=handoff("same-name","survey","third","L","First",2);intake.accept(sameName);
+    assertThat(resolution.resolve("same-name",sameName,new UdpPorts.ResolutionProfile("COMPOSITE","1","policy://weight","ouf:Road","code","name",weighted)).outcome()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(db.sql("select candidate_refs->>0 from ouf_udp.resolution_issue").query(String.class).list())
+        .containsExactly(object.toString(),object.toString());
+    var issue=db.sql("select issue_id from ouf_udp.resolution_issue where handoff_id='second-key'").query(UUID.class).single();
+    identityGovernance.decideResolutionIssue(issue,0,"APPROVE","Reviewed key collision",object,
+        new TrustedHumanContext("HUMAN","reviewer","default",Set.of("resolution.match.approve"),"authz://keys","keys"));
+    assertThat(resolution.resolve("second-key",other,exact).targetUrbanObjectId()).isEqualTo(object);
+    materializer.materialize("second-key",object,other,mapping);
+    assertThat(db.sql("select urban_object_id from ouf_udp.materialization_observation where handoff_id='second-key'").query(UUID.class).single()).isEqualTo(object);
+  }
+  @Autowired IdentityGovernanceService identityGovernance;
   private Fixture resolved(String handoff,String source,String object,String code,String name,int surface){Map<String,Object> payload=handoff(handoff,source,object,code,name,surface);intake.accept(payload);var decision=resolution.resolve(handoff,payload,resolutionProfile);return new Fixture(decision.targetUrbanObjectId(),payload);}
-  private static Map<String,Object> handoff(String id,String source,String object,String code,String name,int surface){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"typeCode","ROAD","sourceObjectId",object,"observedAt","2026-09-12T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",code,"name",name,"surface",surface)),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
+  static Map<String,Object> handoff(String id,String source,String object,String code,String name,int surface){return new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-1"),Map.entry("ingestionId","ing-"+id),Map.entry("sourceIdentity",new LinkedHashMap<>(Map.of("sourceId",source,"typeCode","ROAD","sourceObjectId",object,"observedAt","2026-09-12T00:00:00Z"))),Map.entry("operation","UPSERT"),Map.entry("canonicalPayload",Map.of("code",code,"name",name,"surface",surface)),Map.entry("rawObjectRef","raw://"+id),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+id),Map.entry("acquiredAt","2026-09-12T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT"))));}
   private static String required(String n){String v=System.getenv(n);if(v==null)throw new IllegalStateException(n+" required");return v;}
   private record Fixture(UUID objectId,Map<String,Object> payload){}
 }
