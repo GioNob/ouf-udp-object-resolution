@@ -19,7 +19,7 @@ public class LakeLifecycleService {
       String mediaType,String retentionClass,String accessLabel,OffsetDateTime retentionUntil,String correlation){
     validate(tier,retentionClass,retentionUntil);
     String hash=hash(content);UUID id=UUID.randomUUID();
-    String locator="lake/"+tenant+"/"+tier.toLowerCase(Locale.ROOT)+"/"+hash.substring(7);
+    String locator="lake/"+tenant+"/"+tier.toLowerCase(Locale.ROOT)+"/"+hash.substring(7)+("RAW".equals(tier)?"/"+id:"");
     var object=catalog.stage(id,tenant,source,type,tier,hash,mediaType,content.length,locator,retentionClass,
         accessLabel,retentionUntil,correlation);
     if("VERIFIED".equals(object.state()))return object;

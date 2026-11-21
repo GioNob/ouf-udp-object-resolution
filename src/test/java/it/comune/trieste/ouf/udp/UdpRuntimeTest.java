@@ -70,19 +70,19 @@ class UdpRuntimeTest {
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans={true,false})
-  void globallyReservedCanonicalKeyDoesNotCreateOrExposeAnotherObject(boolean foreignTenant){
+  void canonicalKeyCanBeReusedOutsideTheActiveTenantScope(boolean foreignTenant){
     seed("reserved","old match");
     db.sql(foreignTenant?"update ouf_udp.urban_object set tenant_id='other'":
         "update ouf_udp.urban_object set status='RETIRED'").update();
     var incoming=handoff("new-handoff","new-row","reserved","new match");
     intake.accept(incoming);
     var decision=resolution.resolve("new-handoff",incoming,profile);
-    assertThat(decision.outcome()).isEqualTo("REVIEW_REQUIRED");
-    assertThat(decision.targetUrbanObjectId()).isNull();
-    assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.resolution_issue where reason_code='UDP_RESOLUTION_KEY_CONFLICT'")
-        .query(Integer.class).single()).isZero();
-    assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
-    assertThat(db.sql("select count(*) from ouf_udp.source_binding").query(Long.class).single()).isZero();
+    assertThat(decision.outcome()).isEqualTo("NEW_OBJECT");
+    assertThat(db.sql("select urban_object_id from ouf_udp.urban_object where tenant_id='default' and status='ACTIVE' and canonical_key='reserved'")
+        .query(UUID.class).single()).isEqualTo(decision.targetUrbanObjectId());
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding").query(UUID.class).single())
+        .isEqualTo(decision.targetUrbanObjectId());
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object where canonical_key='reserved'").query(Long.class).single()).isEqualTo(2);
   }
 
   @Test void duplicateReplayCannotBypassCurrentNatureGuard(){

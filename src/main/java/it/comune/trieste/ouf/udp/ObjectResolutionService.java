@@ -88,8 +88,6 @@ public class ObjectResolutionService {
     }else if(keys.size()>1)reviewReason="UDP_RESOLUTION_AMBIGUOUS";
     else if(keys.size()==1&&(!Objects.equals(keys.getFirst().get("canonical_key"),canonicalKey)
         ||!Objects.equals(keys.getFirst().get("match_key"),matchKey)))reviewReason="UDP_RESOLUTION_KEY_CONFLICT";
-    if(refresh!=null&&reviewReason==null&&candidates.isEmpty()&&bound.isEmpty()&&reservedKey(profile,canonicalKey))
-      reviewReason="UDP_RESOLUTION_KEY_CONFLICT";
     if(refresh!=null&&(!createApproved||reviewReason!=null||!candidates.isEmpty()||!bound.isEmpty())){
       String reason=reviewReason!=null?reviewReason:candidates.isEmpty()&&bound.isEmpty()
           ?"UDP_LEGACY_NEW_IDENTITY_AVAILABLE":candidates.isEmpty()?"UDP_SOURCE_BINDING_SCOPE_MISMATCH":"UDP_RESOLUTION_REVIEW_REQUIRED";
@@ -100,13 +98,11 @@ public class ObjectResolutionService {
       target=UUID.randomUUID();
       int inserted=db.sql("""
           insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type,canonical_key,match_key)
-          values(:id,:tenant,:type,:key,:match) on conflict do nothing
+          values(:id,:tenant,:type,:key,:match)
+          on conflict (tenant_id,canonical_type,canonical_key) where status='ACTIVE' do nothing
           """).param("id",target).param("tenant",effectiveTenant()).param("type",profile.canonicalType())
           .param("key",canonicalKey,java.sql.Types.VARCHAR).param("match",matchKey,java.sql.Types.VARCHAR).update();
       if(inserted==0){
-        // The bridge still reserves keys belonging to inactive objects and other tenants.
-        // Never expose the owner as a possible match.
-        if(!reservedKey(profile,canonicalKey))throw new IllegalStateException("UDP_IDENTITY_DECISION_CONFLICT");
         reviewReason="UDP_RESOLUTION_KEY_CONFLICT";
         if(refresh!=null)return refreshed(refresh,reviewReason,List.of(),evidence);
       }
@@ -130,10 +126,6 @@ public class ObjectResolutionService {
     return new Decision("REVIEW_REQUIRED",null,false);
   }
   private String effectiveTenant(){return tenant==null||tenant.isBlank()?"default":tenant;}
-  private boolean reservedKey(UdpPorts.ResolutionProfile profile,String key){
-    return key!=null&&db.sql("select exists(select 1 from ouf_udp.urban_object where canonical_type=:type and canonical_key=:key)")
-        .param("type",profile.canonicalType()).param("key",key).query(Boolean.class).single();
-  }
   private boolean scopeMatches(Map<String,Object> object,UdpPorts.ResolutionProfile profile){
     return effectiveTenant().equals(object.get("tenant_id"))&&profile.canonicalType().equals(object.get("canonical_type"))&&"ACTIVE".equals(object.get("status"));
   }
