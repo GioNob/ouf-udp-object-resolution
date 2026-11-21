@@ -302,6 +302,24 @@ class IdentityGovernanceRuntimeTest {
     materializer.materialize("reconsider-row",selected,second,new UdpPorts.MaterializationProfile("policy://authority",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of("roads")))));
     assertThat(db.sql("select urban_object_id from ouf_udp.materialization_observation where handoff_id='reconsider-row'").query(UUID.class).single()).isEqualTo(target);
   }
+  @Test void pendingChoicesAreArchivedAndAReviewParkedByV36CanBeRequeued(){
+    seedCandidate("a","same");seedCandidate("b","same");
+    UUID issue=reviewIssue();
+    String park="update ouf_udp.materialization_job set state='QUARANTINED',safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED' where handoff_id='review-h'";
+    db.sql(park).update();
+    governance.decideResolutionIssue(issue,0,"REEVALUATE","Refresh choices",null,human);
+    assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.resolution_issue_evidence_history where issue_id=:i and version=0")
+        .param("i",issue).query(Integer.class).single()).isEqualTo(2);
+    assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.resolution_issue where issue_id=:i")
+        .param("i",issue).query(Integer.class).single()).isZero();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,1,"REEVALUATE","Still queued",null,human))
+        .hasMessageContaining("UDP_REVIEW_JOB_CHANGED");
+    db.sql(park).update();
+    governance.decideResolutionIssue(issue,1,"REEVALUATE","Resume after return",null,human);
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='review-h'").query(String.class).single())
+        .isEqualTo("READY");
+  }
+
   @Test void historicalUnattributedIssueDoesNotBlockEitherTenant(){
     seedCandidate("A","same");seedCandidate("B","same");
     UUID historical=reviewIssue();

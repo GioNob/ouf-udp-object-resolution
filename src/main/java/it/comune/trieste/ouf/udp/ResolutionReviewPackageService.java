@@ -104,9 +104,9 @@ public class ResolutionReviewPackageService {
       item.put("id",id);item.put("version",version);item.put("reason",reason);
       item.put("candidates",candidates);item.put("evidence",evidence);
       item.put("incomingObject",incoming);item.put("candidateObjects",objects);item.put("propertyPreviews",previews);
-      boolean pending=Boolean.TRUE.equals(row.get("reevaluation_pending"));
-      boolean canReevaluate=!pending&&"QUARANTINED".equals(row.get("job_state"))
+      boolean canReevaluate="QUARANTINED".equals(row.get("job_state"))
           &&Set.of("UDP_RESOLUTION_REVIEW_REQUIRED","UDP_IDENTITY_REVIEW_REQUIRED").contains(Objects.toString(row.get("safe_failure_code"),""));
+      boolean pending=Boolean.TRUE.equals(row.get("reevaluation_pending"))&&!canReevaluate;
       String prerequisite=switch(reason){
         case "UDP_RESOLUTION_TOO_BROAD","RESOLUTION_TOO_BROAD","CANDIDATE_LIMIT" -> "NARROW_CANDIDATE_SCOPE";
         case "SOURCE_BINDING_CONFLICT","UDP_SOURCE_BINDING_SCOPE_MISMATCH" -> "RECONCILE_SOURCE_BINDING";

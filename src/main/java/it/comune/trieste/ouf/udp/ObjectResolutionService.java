@@ -30,7 +30,8 @@ public class ObjectResolutionService {
       boolean active=target!=null&&"ACTIVE".equals(previous.get("binding_state"))&&inScope(target,profile);
       createApproved=reviewed&&"CREATE_NEW".equals(previous.get("human_action"));
       boolean changedApproval=reviewed&&!createApproved&&(!active||!target.equals(previous.get("human_target")));
-      if(!Boolean.TRUE.equals(previous.get("reevaluation_pending"))&&!createApproved&&!changedApproval){
+      boolean pending="OPEN".equals(previous.get("issue_state"))&&Boolean.TRUE.equals(previous.get("reevaluation_pending"));
+      if(!pending&&!createApproved&&!changedApproval){
         if(target!=null&&!active)throw new SecurityException("UDP_RESOLUTION_REPLAY_TARGET_SCOPE_MISMATCH");
         return new Decision(reviewed&&target!=null?"MATCH":outcome,target,true);
       }
@@ -87,10 +88,28 @@ public class ObjectResolutionService {
     }else if(keys.size()>1)reviewReason="UDP_RESOLUTION_AMBIGUOUS";
     else if(keys.size()==1&&(!Objects.equals(keys.getFirst().get("canonical_key"),canonicalKey)
         ||!Objects.equals(keys.getFirst().get("match_key"),matchKey)))reviewReason="UDP_RESOLUTION_KEY_CONFLICT";
+    if(refresh!=null&&reviewReason==null&&candidates.isEmpty()&&bound.isEmpty()&&reservedKey(profile,canonicalKey))
+      reviewReason="UDP_RESOLUTION_KEY_CONFLICT";
     if(refresh!=null&&(!createApproved||reviewReason!=null||!candidates.isEmpty()||!bound.isEmpty())){
       String reason=reviewReason!=null?reviewReason:candidates.isEmpty()&&bound.isEmpty()
           ?"UDP_LEGACY_NEW_IDENTITY_AVAILABLE":candidates.isEmpty()?"UDP_SOURCE_BINDING_SCOPE_MISMATCH":"UDP_RESOLUTION_REVIEW_REQUIRED";
       return refreshed(refresh,reason,candidates,evidence);
+    }
+    UUID target=candidates.size()==1?candidates.getFirst():null;
+    if(reviewReason==null&&target==null){
+      target=UUID.randomUUID();
+      int inserted=db.sql("""
+          insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type,canonical_key,match_key)
+          values(:id,:tenant,:type,:key,:match) on conflict do nothing
+          """).param("id",target).param("tenant",effectiveTenant()).param("type",profile.canonicalType())
+          .param("key",canonicalKey,java.sql.Types.VARCHAR).param("match",matchKey,java.sql.Types.VARCHAR).update();
+      if(inserted==0){
+        // The bridge still reserves keys belonging to inactive objects and other tenants.
+        // Never expose the owner as a possible match.
+        if(!reservedKey(profile,canonicalKey))throw new IllegalStateException("UDP_IDENTITY_DECISION_CONFLICT");
+        reviewReason="UDP_RESOLUTION_KEY_CONFLICT";
+        if(refresh!=null)return refreshed(refresh,reviewReason,List.of(),evidence);
+      }
     }
     if(reviewReason!=null){
       UUID id=decision(handoffId,"REVIEW_REQUIRED",null,profile,evidence,null,scored);
@@ -99,7 +118,8 @@ public class ObjectResolutionService {
           .param("e",write(evidence)).param("tenant",effectiveTenant()).update();
       return new Decision("REVIEW_REQUIRED",null,false);
     }
-    UUID target;if(candidates.size()==1){target=candidates.getFirst();decision(handoffId,"MATCH",target,profile,evidence,scored==null?1.0:scored.candidates().getFirst().score(),scored);}else{target=UUID.randomUUID();db.sql("insert into ouf_udp.urban_object(urban_object_id,tenant_id,canonical_type,canonical_key,match_key) values(:i,:tenant,:t,:k,:m)").param("i",target).param("tenant",tenant==null||tenant.isBlank()?"default":tenant).param("t",profile.canonicalType()).param("k",canonicalKey).param("m",matchKey).update();if(!createApproved)decision(handoffId,"NEW_OBJECT",null,profile,evidence,scored==null?1.0:null,scored);}
+    if(candidates.size()==1)decision(handoffId,"MATCH",target,profile,evidence,scored==null?1.0:scored.candidates().getFirst().score(),scored);
+    else if(!createApproved)decision(handoffId,"NEW_OBJECT",null,profile,evidence,scored==null?1.0:null,scored);
     int bindingWritten=db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict(source_id,type_code,source_object_id) do update set urban_object_id=excluded.urban_object_id,state='ACTIVE' where source_binding.state='UNRESOLVED'").param("s",HandoffIntakeService.text(source,"sourceId")).param("t",HandoffIntakeService.text(source,"typeCode")).param("o",HandoffIntakeService.text(source,"sourceObjectId")).param("u",target).param("h",handoffId).update();if(bindingWritten!=1)throw new IllegalStateException("UDP_SOURCE_BINDING_CHANGED_DURING_RESOLUTION");return new Decision(candidates.isEmpty()?"NEW_OBJECT":"MATCH",target,false);
   }
   private Decision refreshed(Map<String,Object> issue,String reason,List<UUID> candidates,List<String> evidence){
@@ -110,6 +130,10 @@ public class ObjectResolutionService {
     return new Decision("REVIEW_REQUIRED",null,false);
   }
   private String effectiveTenant(){return tenant==null||tenant.isBlank()?"default":tenant;}
+  private boolean reservedKey(UdpPorts.ResolutionProfile profile,String key){
+    return key!=null&&db.sql("select exists(select 1 from ouf_udp.urban_object where canonical_type=:type and canonical_key=:key)")
+        .param("type",profile.canonicalType()).param("key",key).query(Boolean.class).single();
+  }
   private boolean scopeMatches(Map<String,Object> object,UdpPorts.ResolutionProfile profile){
     return effectiveTenant().equals(object.get("tenant_id"))&&profile.canonicalType().equals(object.get("canonical_type"))&&"ACTIVE".equals(object.get("status"));
   }

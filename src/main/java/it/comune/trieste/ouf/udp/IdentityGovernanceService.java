@@ -48,7 +48,9 @@ public class IdentityGovernanceService {
         .orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"UDP_ISSUE_VERSION_CONFLICT"));
     if(!actor.tenantId().equals(issue.get("tenant_id")))
       throw new SecurityException("UDP_REVIEW_TENANT_REQUIRED");
-    if(Boolean.TRUE.equals(issue.get("reevaluation_pending")))throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_REEVALUATION_PENDING");
+    // A V36 worker may have returned an unfinished reassessment to quarantine.
+    // Only the guarded QUARANTINED -> READY transition below can queue it again.
+    if(Boolean.TRUE.equals(issue.get("reevaluation_pending"))&&!reevaluate)throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_REEVALUATION_PENDING");
     if(reevaluate){
       if(target!=null)throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
       int queued=db.sql("update ouf_udp.materialization_job set state='READY',state_version=state_version+1,safe_failure_code=null,updated_at=transaction_timestamp() where handoff_id=:h and state='QUARANTINED' and safe_failure_code in ('UDP_RESOLUTION_REVIEW_REQUIRED','UDP_IDENTITY_REVIEW_REQUIRED')")
