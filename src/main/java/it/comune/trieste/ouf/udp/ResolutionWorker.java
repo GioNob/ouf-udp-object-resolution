@@ -14,7 +14,7 @@ public class ResolutionWorker {
     var claimed=jobs.claim(worker,Duration.ofMinutes(2));
     if(claimed.isEmpty())return Optional.empty();
     var claim=claimed.orElseThrow();
-    try{
+    try(var window=GatewayReadPacing.forClaim(claim)){
       if(!referenceGate.verify(claim))return Optional.of(claim.handoffId());
       var refs=HandoffIntakeService.object(claim.payload(),"contractRefs");
       String bundle=HandoffIntakeService.text(refs,"bundleRef");
@@ -35,6 +35,7 @@ public class ResolutionWorker {
           materializer.materialize(claim.handoffId(),decision.targetUrbanObjectId(),claim.payload(),materializationProfile);
         jobs.complete(claim);
       });
+    }catch(SemanticReferenceFailure failure){referenceGate.reject(claim,failure);
     }catch(PublicationAccessFailure failure){referenceGate.transportFailure(claim,failure);}
     catch(RuntimeException failure){jobs.fail(claim,failure.getMessage());}
     return Optional.of(claim.handoffId());

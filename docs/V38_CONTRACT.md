@@ -1,8 +1,8 @@
-# UDP V38 e ritorno al ponte V37
+# Compatibilità UDP e ritorno al predecessore
 
-Il predecessore supportato per D-080 è `7809a0fdf6bd70cf02e15a4630f8fe9cd59695be`, in esercizio con V37. Il ritorno riavvia quell'immagine sul database V38 popolato, con Flyway attivo, validazione e `*:future`. La qualifica della coppia richiede un'esecuzione verde del job `predecessor-return`.
+Dal task-51c la coppia D-080 parte da `e18f703263c5e3727f7e623cd59cbfcde3ed3d7d` (schema 39). Il candidato usa lo stesso schema. La prova A/B/A conserva il database popolato, registra GET/POST/GET e verifica la storia Flyway al ritorno. Il checksum Flyway fissato per V39 vale `-1862540699`.
 
-Dal rilascio della PR #52 il predecessore in esercizio è `ebc5a3221a9071b158a233441abf4db99270fee3`, già su V38 (immagine costruita dal merge di prova `3acd707c`). Il job `predecessor-return` dei candidati successivi, a partire dai tipi di valore (task-41, D-084), lo usa con `PREDECESSOR_SCHEMA=38`: lo scenario A/B/A resta lo stesso, con predecessore e candidato sulla stessa versione Flyway.
+La prima qualifica V38 usava il ponte V37 `7809a0fdf6bd70cf02e15a4630f8fe9cd59695be` con Flyway attivo, validazione e `*:future`. Il task-41 usava il predecessore V38 `ebc5a3221a9071b158a233441abf4db99270fee3`.
 
 ## Dipendenze verificate sul ponte
 
@@ -18,6 +18,6 @@ Un nuovo invio con la stessa identità di contenuto prende il lock consultivo tr
 ## Prova CI su PostgreSQL 17 e MinIO
 
 1. Il ponte materializza A su V37. A processo fermo, la fixture danneggia i byte del RAW sorgente e inserisce una chiave canonica ritirata nel database di prova.
-2. Il candidato migra a V38. La riconciliazione registra la quarantena della copia zero. Il candidato materializza B e di nuovo A. Due upload concorrenti di A devono ottenere la stessa copia uno. Un altro handoff deve materializzare un nuovo oggetto attivo con la chiave ritirata.
-3. Il ponte riavviato legge la storia A/B/A, ripete l'upload di A e deve restituire l'UUID della copia uno. Materializza C, scrive e riusa la sua copia zero, e risolve la chiave riutilizzata da un nuovo record sorgente. Il job verifica i retry dopo un 503 per entrambe le immagini.
+2. Nel primo passaggio dal ponte il candidato migra a V38. Nella coppia corrente entrambi avviano V39. La riconciliazione registra la quarantena della copia zero. Il candidato materializza B e di nuovo A. Due upload concorrenti di A devono ottenere la stessa copia uno. Un altro handoff deve materializzare un nuovo oggetto attivo con la chiave ritirata.
+3. Il ponte riavviato legge la storia A/B/A, ripete l'upload di A e deve restituire l'UUID della copia uno. Materializza C, scrive e riusa la sua copia zero, e risolve la chiave riutilizzata da un nuovo record sorgente. Il job verifica i retry dopo un 429 con Retry-After per entrambe le immagini.
 4. Le asserzioni confrontano UUID, numeri di copia, locator, stato, versione e contatori di lineage per gli handoff A, oltre ai byte danneggiati in MinIO e alla storia Flyway. Le ricevute del job sono in `target/predecessor-return/`.

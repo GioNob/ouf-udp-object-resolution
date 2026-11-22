@@ -99,6 +99,9 @@ verified_type(){
 
 start "$PREDECESSOR" "$PREDECESSOR_SCHEMA"
 node scripts/ci/predecessor-scenario.mjs seed
+cp "$FIXTURE_DIR/reference-methods" "$evidence/references-predecessor.txt"
+test "$(sort -u "$evidence/references-predecessor.txt")" = GET
+: > "$FIXTURE_DIR/reference-methods"
 history > "$evidence/flyway-predecessor.txt"
 stop
 # Two synthetic preconditions. UDP itself detects the damaged bytes, allocates
@@ -121,6 +124,9 @@ test "$(source_raw return-seed state)" = QUARANTINED
 copy_lineage > "$evidence/copy-quarantined.txt"
 touch "$FIXTURE_DIR/unavailable-once"
 node scripts/ci/predecessor-scenario.mjs candidate
+cp "$FIXTURE_DIR/reference-methods" "$evidence/references-candidate.txt"
+test "$(sort -u "$evidence/references-candidate.txt")" = POST
+: > "$FIXTURE_DIR/reference-methods"
 test "$(verified_type)" = 'ci:Worksite'
 verified_type > "$evidence/materialization-type-candidate.txt"
 object_id=$(sql "select urban_object_id from ouf_udp.urban_object where tenant_id='tenant-ci' and canonical_type='ci:Worksite'
@@ -140,6 +146,9 @@ stop
 start "$PREDECESSOR" "$CANDIDATE_SCHEMA"
 touch "$FIXTURE_DIR/unavailable-once"
 node scripts/ci/predecessor-scenario.mjs return "$object_id"
+cp "$FIXTURE_DIR/reference-methods" "$evidence/references-return.txt"
+test "$(sort -u "$evidence/references-return.txt")" = GET
+: > "$FIXTURE_DIR/reference-methods"
 verified_type > "$evidence/materialization-type-return.txt"
 diff -u "$evidence/materialization-type-candidate.txt" "$evidence/materialization-type-return.txt"
 retry_events=$(sql "select handoff_id,event_type from ouf_udp.handoff_event

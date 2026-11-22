@@ -17,25 +17,6 @@ class PublishedRelationshipBindingTest {
   private static final String TARGET_VOCABULARY="urn:d084:colours@"+new UUID(1,2);
   @TempDir Path temp;
   private final ObjectMapper json=new ObjectMapper();
-  @Test void nativeClassAndTwentyPropertiesResolveEveryExactHistoricalReference()throws Exception{
-    for(int count:List.of(21,32,33)){
-      var b=bundle();var execution=map(map(map(b,"extractionProfile"),"runtime"),"execution");
-      String publication=new UUID(1,1).toString();execution.put("sourceSchemaRef","schema:1");execution.put("semanticPublicationSetRef",publication);execution.put("adapterProfileRef","adapter:1");
-      var bindings=new ArrayList<Map<String,Object>>();for(int i=0;i<count;i++)bindings.add(Map.of("semanticId","urn:native:"+i,"semanticVersion","1","revisionId",new UUID(0,i+1).toString(),"publicationSetId",publication));b.put("semanticReferenceBindings",bindings);
-      String hash="sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(new TreeMap<>(b))));b.put("checksum",hash);
-      var refs=new LinkedHashMap<String,Object>(execution);refs.put("bundleRef","bundle:1:"+hash);var calls=new java.util.concurrent.atomic.AtomicInteger();var corruptLast=new java.util.concurrent.atomic.AtomicBoolean();
-      var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/",exchange->{try{
-        if(!"Bearer fixture".equals(exchange.getRequestHeaders().getFirst("Authorization"))){exchange.sendResponseHeaders(403,-1);return;}Map<String,Object> response;
-        if(exchange.getRequestURI().getPath().startsWith("/api/semantic")){calls.incrementAndGet();var query=new HashMap<String,String>();for(String part:exchange.getRequestURI().getRawQuery().split("&")){String[] pair=part.split("=",2);query.put(pair[0],URLDecoder.decode(pair[1],java.nio.charset.StandardCharsets.UTF_8));}String id=query.get("semanticId");int index=Integer.parseInt(id.substring(id.lastIndexOf(':')+1));response=Map.of("semantic_id",id,"semantic_version",corruptLast.get()&&index==count-1?"2":"1","revision_id",query.get("revisionId"),"publication_set_id",query.get("publicationSetId"));}
-        else response=Map.of("tenantId","tenant-a","sourceId","cameras","checksum",hash,"bundle",b);
-        byte[] bytes=json.writeValueAsBytes(response);exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
-      }finally{exchange.close();}});server.start();
-      try{Path token=temp.resolve("native-token");Files.writeString(token,"fixture");var client=new PublishedRuntimeConfiguration(json,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a");
-        if(count>32){assertThatThrownBy(()->client.resolveContracts(refs)).hasMessage("UDP_PINNED_PROFILE_INVALID");assertThat(calls).hasValue(0);}
-        else{assertThat(client.resolveContracts(refs)).isNotNull();assertThat(calls).hasValue(count);corruptLast.set(true);assertThatThrownBy(()->client.resolveContracts(refs)).hasMessage("UDP_PINNED_PROFILE_INVALID");assertThat(calls).hasValue(count*2);}
-      }finally{server.stop(0);}
-    }
-  }
   @Test void bindsRelationshipToDeclaredMappingTargetKeyLabelAndHistoricalReference()throws Exception{
     assertThat(resolve(bundle()).relationships().relationships()).hasSize(1);
     for(String fault:List.of("label","targetKey","strategyRef","mapping")){
@@ -91,10 +72,36 @@ class PublishedRelationshipBindingTest {
     assertThat(resolve(fixture.bundle(),responses).materialization().properties().getLast().canonicalType().type())
         .isEqualTo(ROOT_TYPE+"@"+PUBLICATION_SET);
     responses.get(DETAIL_TYPE).put("status","DRAFT");
-    assertThatThrownBy(()->resolve(fixture.bundle(),responses)).hasMessage("UDP_PINNED_DATATYPE_INVALID");
+    assertThatThrownBy(()->resolve(fixture.bundle(),responses)).hasMessage("UDP_SEMANTIC_REFERENCE_MISMATCH");
     responses.get(DETAIL_TYPE).put("status","RETIRED");
     responses.get(DETAIL_TYPE).put("definitionSha256","0".repeat(64));
-    assertThatThrownBy(()->resolve(fixture.bundle(),responses)).hasMessage("UDP_PINNED_DATATYPE_INVALID");
+    assertThatThrownBy(()->resolve(fixture.bundle(),responses)).hasMessage("UDP_SEMANTIC_REFERENCE_MISMATCH");
+  }
+
+  @Test void compactD084DigestsVerifyEmbeddedDefinitionsAndHistoricalStatus()throws Exception{
+    var fixture=nestedValueBundle();
+    assertThat(resolve(fixture.bundle(),fixture.registry(),true).materialization().properties().getLast().canonicalType()).isNotNull();
+    fixture.registry().get(VALUE_MAP).put("definitionSha256","f".repeat(64));
+    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry(),true))
+        .isInstanceOfSatisfying(SemanticReferenceFailure.class,e->
+            assertThat(e.detail).containsEntry("index",2).containsEntry("semanticId",VALUE_MAP));
+    fixture.valueMapPin().put("definitionSha256","f".repeat(64));
+    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry(),true)).hasMessage("UDP_SEMANTIC_REFERENCE_MISMATCH");
+  }
+
+  @Test void compactConceptKeepsIndependentVocabularyProof()throws Exception{
+    var fixture=nestedValueBundle();
+    String id="urn:d084:extra-concept",revision=new UUID(0,17).toString();
+    Map<String,Object> definition=Map.of("vocabularyRef","urn:d084:colours");
+    ((List<Map<String,Object>>)fixture.bundle().get("semanticReferenceBindings")).add(Map.of("semanticId",id,
+        "semanticVersion","1","revisionId",revision,"publicationSetId",PUBLICATION_SET,"definition",definition));
+    var actual=new HashMap<String,Object>(Map.of("semantic_id",id,"semantic_version","1","revision_id",revision,
+        "publication_set_id",PUBLICATION_SET,"artifact_type","CONCEPT","status","RETIRED","definition",definition));
+    fixture.registry().put(id,actual);
+    assertThat(resolve(fixture.bundle(),fixture.registry(),true)).isNotNull();
+    actual.put("definition",Map.of("vocabularyRef","urn:d084:elsewhere"));
+    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry(),true))
+        .isInstanceOfSatisfying(SemanticReferenceFailure.class,e->assertThat(e.detail).containsEntry("semanticId",id));
   }
 
   @Test void d084OnboardingValueMapPinVerifiesNestedConceptMembership()throws Exception{
@@ -133,7 +140,7 @@ class PublishedRelationshipBindingTest {
     assertInvalidValueMap(fixture);
     actual.put("status","ACTIVE");
     actual.put("revision_id",UUID.randomUUID().toString());
-    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry())).hasMessage("UDP_PINNED_PROFILE_INVALID");
+    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry())).hasMessage("UDP_SEMANTIC_REFERENCE_MISMATCH");
 
     for(String target:List.of("urn:d084:colours","relative@"+PUBLICATION_SET,"urn:d084:colours@not-a-uuid")){
       var malformed=nestedValueBundle();
@@ -150,11 +157,11 @@ class PublishedRelationshipBindingTest {
     b.put("semanticReferenceBindings",List.of(fixture.valueMapPin()));
     assertThat(resolve(b,fixture.registry()).relationships().relationships()).hasSize(1);
     fixture.valueMapPin().remove("definitionSha256");
-    assertThatThrownBy(()->resolve(b,fixture.registry())).hasMessage("UDP_PINNED_DATATYPE_INVALID");
+    assertThatThrownBy(()->resolve(b,fixture.registry())).hasMessage("UDP_SEMANTIC_REFERENCE_MISMATCH");
   }
 
   private void assertInvalidValueMap(NestedValueBundle fixture){
-    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry())).hasMessage("UDP_PINNED_DATATYPE_INVALID");
+    assertThatThrownBy(()->resolve(fixture.bundle(),fixture.registry())).hasMessage("UDP_SEMANTIC_REFERENCE_MISMATCH");
   }
   private static Map<String,Object> mappedRecord(){
     return Map.of("value",List.of(Map.of("value","98765432109876543210.1","colour","urn:red"),
@@ -248,21 +255,37 @@ class PublishedRelationshipBindingTest {
     return resolve(bundle,Map.of());
   }
   private PublishedRuntimeConfiguration.Profiles resolve(Map<String,Object> bundle,Map<String,Map<String,Object>> registry)throws Exception{
+    return resolve(bundle,registry,false);
+  }
+  private PublishedRuntimeConfiguration.Profiles resolve(Map<String,Object> bundle,Map<String,Map<String,Object>> registry,boolean compact)throws Exception{
     bundle.remove("checksum");String hash="sha256:"+definitionDigest(bundle);bundle.put("checksum",hash);
     byte[] response=json.writeValueAsBytes(Map.of("tenantId","tenant-a","sourceId","cameras","checksum",hash,"bundle",bundle));
     var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/",exchange->{byte[] body=response;
+      if(exchange.getRequestURI().getPath().endsWith(":resolve-batch")){
+        if(!compact){exchange.sendResponseHeaders(405,-1);exchange.close();return;}
+        var results=new ArrayList<Map<String,Object>>();
+        for(var pin:json.readTree(exchange.getRequestBody()).required("references")){
+          Map<String,Object> row=json.convertValue(pin,Map.class);
+          var actual=new HashMap<>(registry.get(row.get("semanticId")));
+          // Compact v1 (Semantic 51a): definitions only for CONCEPT, as membership proof.
+          if(!"CONCEPT".equals(actual.get("artifact_type")))actual.remove("definition");
+          row.put("index",results.size());row.put("outcome","RESOLVED");row.put("resolved",actual);results.add(row);
+        }
+        body=json.writeValueAsBytes(Map.of("contract","ouf.semantic.reference-batch.v1","registryVersion","d084","results",results));
+      }
       if(exchange.getRequestURI().getPath().equals("/api/semantic/v1/references:resolve")){
         var query=exchange.getRequestURI().getQuery();
         String iri=query.substring("semanticId=".length(),query.indexOf('&'));
         body=json.writeValueAsBytes(registry.get(iri));
       }
       exchange.sendResponseHeaders(200,body.length);try(var output=exchange.getResponseBody()){output.write(body);}});server.start();
-    try{Path token=temp.resolve("token");Files.writeString(token,"fixture");return new PublishedRuntimeConfiguration(json,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a").resolve("bundle:1:"+hash,"FILE");}finally{server.stop(0);}
+    try{Path token=temp.resolve("token");Files.writeString(token,"fixture");return new PublishedRuntimeConfiguration(json,"http://127.0.0.1:"+server.getAddress().getPort(),token.toString(),"tenant-a",new ReferenceBatchSettings(262144,1000,2049,3145728,3,1,1)).resolve("bundle:1:"+hash,"FILE");}finally{server.stop(0);}
   }
-  private Map<String,Object> bundle()throws Exception{
+  static Map<String,Object> bundle()throws Exception{
     var rule=Map.of("sourceField","ref","relationIri","connectedTo","targetCanonicalType","Cabinet","targetPropertyIri","code","resolutionStrategy","CANONICAL_KEY","onNoMatch","QUARANTINE_RELATION","accessLabel","OPEN","selfLoopAllowed",false);
     var udp=Map.of("resolution",Map.of("strategyId","key","strategyVersion","1","policyRef","policy://identity/1","canonicalType","Camera","canonicalKeyProperty","ref","matchProperty","ref"),"materialization",Map.of("policyRef","policy://authority/1","checkpointInterval",1,"bitemporalProperties",List.of(),"properties",List.of(Map.of("sourceField","ref","propertyIri","ref","datatype","string","accessLabel","OPEN","authorityOrder",List.of()))),"relationships",Map.of("policyRef","policy://relations/1","relationships",List.of(rule)));
     var b=Map.of("bundleId","bundle","bundleVersion","1","semanticMapping",Map.of("sourceType",Map.of("sourceId","cameras","typeCode","FILE"),"targetClasses",List.of(Map.of("classIri","Camera")),"propertyMappings",List.of(Map.of("sourceField","cabinet","targetPropertyIri","ref"))),"extractionProfile",Map.of("runtime",Map.of("udp",udp,"execution",Map.of("relationshipResolutionStrategyRefs",List.of("relationship://camera-cabinet/1")))),"dataAccessPolicies",List.of(Map.of("scope","PROPERTY","target","ref","label","OPEN"),Map.of("scope","RELATIONSHIP","target","connectedTo","label","OPEN")),"relationshipMappings",List.of(Map.of("mappingId","relationship://camera-cabinet/1","sourceField","cabinet","relationIri","connectedTo","targetClassIri","Cabinet","resolution",Map.of("strategy","CANONICAL_KEY","targetKeyProperty","code","onNoMatch","QUARANTINE_RELATION","onMultipleMatches","REVIEW_REQUIRED"))));
+    var json=new ObjectMapper();
     return json.readValue(json.writeValueAsBytes(b),Map.class);
   }
   @SuppressWarnings("unchecked") private static Map<String,Object> map(Map<String,Object> p,String k){return (Map<String,Object>)p.get(k);}

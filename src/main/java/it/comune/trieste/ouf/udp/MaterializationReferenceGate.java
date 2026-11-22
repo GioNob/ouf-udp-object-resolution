@@ -17,12 +17,20 @@ public class MaterializationReferenceGate {
     }catch(PublicationAccessFailure failure){
       if(failure.retryable())dependencies.defer(claim,failure);else jobs.quarantine(claim,failure.getMessage());
       return false;
+    }catch(SemanticReferenceFailure failure){reject(claim,failure);return false;
     }catch(IllegalArgumentException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CONTRACT_INVALID",ReferenceFailureEvidence.detail(e));return false;}catch(IllegalStateException e){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_CATALOG_INVALID",ReferenceFailureEvidence.detail(e));return false;}
     if(!result.ready()){jobs.pause(claim,result.missingRefHashes(),delay(claim.integrityAttempts()),maxAttempts);return false;}
     if(claim.integrityBaselineHash()!=null&&!claim.integrityBaselineHash().equals(result.baselineHash())){jobs.quarantine(claim,"UDP_REFERENCE_INTEGRITY_DRIFT");return false;}
     jobs.integrityPassed(claim,result.baselineHash());return true;
   }
-  public void profilesReady(ResolutionRepository.Claim claim){dependencies.recovered(claim);}
+  void reject(ResolutionRepository.Claim claim,SemanticReferenceFailure failure){
+    jobs.quarantine(claim,failure.getMessage(),failure.detail);
+    org.slf4j.LoggerFactory.getLogger(MaterializationReferenceGate.class).atWarn()
+        .addKeyValue("code",failure.getMessage()).addKeyValue("index",failure.detail.get("index"))
+        .addKeyValue("semanticId",failure.detail.get("semanticId")).addKeyValue("revisionId",failure.detail.get("revisionId"))
+        .log("UDP semantic reference rejected");
+  }
+  public void profilesReady(ResolutionRepository.Claim claim){if(!dependencies.recovered(claim))throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");}
   public void transportFailure(ResolutionRepository.Claim claim,PublicationAccessFailure failure){
     if(failure.retryable())dependencies.defer(claim,failure);else jobs.quarantine(claim,failure.getMessage());
   }

@@ -31,6 +31,7 @@ deployed = {
     26: ("V26__geometry_roles_and_validity.sql", -369310849),
     37: ("V37__repeatable_materialization.sql", 1985595747),  # Bridge 7809a0fd
     38: ("V38__lake_copy_and_active_identity_contract.sql", -81279437),  # D-080 ebc5a322
+    39: ("V39__lake_failed_restage.sql", -1862540699),  # D-080 e18f7032
 }
 for version, (filename, expected) in deployed.items():
     path = versions[version]
@@ -42,5 +43,5 @@ for version, (filename, expected) in deployed.items():
     if path.name != filename or signed != expected:
         raise SystemExit(f"DEPLOYED_MIGRATION_CHANGED={version}")
 
-print("LIVE_MIGRATIONS_V22_TO_V26_AND_V37_V38_IMMUTABLE=PASS LATEST=V39")
+print("LIVE_MIGRATIONS_V22_TO_V26_AND_V37_TO_V39_IMMUTABLE=PASS LATEST=V39")
 

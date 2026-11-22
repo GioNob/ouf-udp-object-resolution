@@ -15,10 +15,13 @@ import org.springframework.stereotype.Component;
 
 /** Exact historical publication resolution over the Gateway, including checksum validation. */
 @Component @ConditionalOnProperty(name="ouf.udp.execution.enabled",havingValue="true")
+@org.springframework.boot.context.properties.EnableConfigurationProperties(ReferenceBatchSettings.class)
 public class PublishedRuntimeConfiguration {
-  static final int MAX_SEMANTIC_REFERENCES=32;
+  private final ReferenceBatchSettings limits;
+  private final GatewayReadPacing pacing = new GatewayReadPacing();
   private final ObjectMapper json;private final URI gateway;private final Path token;private final String tenant;private final HttpClient http;
-  public PublishedRuntimeConfiguration(ObjectMapper json,@Value("${ouf.udp.execution.gateway-url}") String gateway,@Value("${ouf.udp.execution.token-file}") String token,@Value("${ouf.udp.lake.tenant-id}") String tenant){
+  public PublishedRuntimeConfiguration(ObjectMapper json,@Value("${ouf.udp.execution.gateway-url}") String gateway,@Value("${ouf.udp.execution.token-file}") String token,@Value("${ouf.udp.lake.tenant-id}") String tenant, ReferenceBatchSettings limits){
+    this.limits=limits;
     this.json=json;this.gateway=URI.create(gateway);this.token=Path.of(token);this.tenant=tenant;
     if(tenant.isBlank()||!Set.of("http","https").contains(this.gateway.getScheme())||this.gateway.getHost()==null||this.gateway.getUserInfo()!=null||this.gateway.getQuery()!=null||this.gateway.getFragment()!=null||!Set.of("","/").contains(this.gateway.getPath()))throw new IllegalArgumentException("UDP_GATEWAY_INVALID");
     http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).followRedirects(HttpClient.Redirect.NEVER).build();
@@ -27,11 +30,12 @@ public class PublishedRuntimeConfiguration {
     return resolve(ref,type,publication(ref),null);
   }
   private Map<String,Object> publication(String ref){
-    return get("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(ref));
+    return read(exchange("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(ref),null));
   }
   private Profiles resolve(String ref,String type,Map<String,Object> envelope,Map<String,Object> refs){
     var bundle=object(envelope,"bundle");var unsigned=new TreeMap<>(bundle);unsigned.remove("checksum");
     Object rawBindings=bundle.get("semanticReferenceBindings");
+    if(rawBindings instanceof List<?> pins && pins.size()>limits.references())throw invalid();
     String hash=canonicalPublicationHash(json,unsigned);
     if(!tenant.equals(envelope.get("tenantId"))||!hash.equals(bundle.get("checksum"))||!hash.equals(envelope.get("checksum"))||!ref.equals(text(bundle,"bundleId")+":"+text(bundle,"bundleVersion")+":"+hash))throw invalid();
     var semantic=object(bundle,"semanticMapping");var source=object(semantic,"sourceType");
@@ -45,7 +49,6 @@ public class PublishedRuntimeConfiguration {
         .containsAll(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
     UdpPorts.ResolutionProfile resolution=governed?null:json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
     var compositions=compositions(semantic);
-    var types=new PublishedValueTypes();
     var rawMaterialization=object(profile,"materialization");
     if(!(rawMaterialization.get("properties") instanceof List<?> rawProperties))throw invalid();
     boolean structured=rawProperties.stream().map(PublishedValueTypes::object).map(p->text(p,"datatype"))
@@ -57,7 +60,7 @@ public class PublishedRuntimeConfiguration {
     }
     boolean embeddedDefinitions=rawBindings instanceof List<?> bindings
         && bindings.stream().anyMatch(b->b instanceof Map<?,?> pin && PublishedValueTypes.hasEmbeddedDefinition(pin));
-    if(refs!=null || structured || embeddedDefinitions) verifyBindings(bundle,types,structured);
+    var types = refs!=null || structured || embeddedDefinitions ? verifyBindings(bundle,structured) : new PublishedValueTypes();
     var materialization=materialization(json,rawMaterialization,compositions,types);
     if(!governed&&java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
         resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank()))
@@ -123,20 +126,13 @@ public class PublishedRuntimeConfiguration {
     resolved.add(new HistoricalContractCatalog.ResolvedRef("BUNDLE",ref,text(bundle,"bundleVersion"),text(bundle,"checksum")));
     return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),contractRefsHash(refs));
   }
-  private void verifyBindings(Map<String,Object> bundle,PublishedValueTypes types,boolean structured){
+  private PublishedValueTypes verifyBindings(Map<String,Object> bundle,boolean structured){
     var execution=object(object(object(bundle,"extractionProfile"),"runtime"),"execution");
-    Object raw=bundle.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw invalid();
-    boolean publicationFound=false;
-    for(Object item:bindings){if(!(item instanceof Map<?,?>))throw invalid();@SuppressWarnings("unchecked")var binding=(Map<String,Object>)item;
-      String id=text(binding,"semanticId"),revision=uuid(binding,"revisionId"),publication=uuid(binding,"publicationSetId");
-      var actual=get("/api/semantic/v1/references:resolve?semanticId="+escape(id)+"&revisionId="+revision+"&publicationSetId="+publication);
-      if(!id.equals(actual.get("semantic_id"))||!text(binding,"semanticVersion").equals(actual.get("semantic_version"))||!revision.equals(actual.get("revision_id"))||!publication.equals(actual.get("publication_set_id")))throw invalid();
-      if(structured || "DATATYPE".equals(actual.get("artifact_type")) || "VALUE_MAP".equals(actual.get("artifact_type"))
-          || PublishedValueTypes.hasEmbeddedDefinition(binding))
-        types.bind(binding,actual,definition->canonicalPublicationHash(json,definition));
-      publicationFound|=publication.equals(execution.get("semanticPublicationSetRef"));
-    }
-    if(!publicationFound)throw invalid();
+    if (!(bundle.get("semanticReferenceBindings") instanceof List<?> bindings) || bindings.isEmpty()) throw invalid();
+    String publication=text(execution,"semanticPublicationSetRef");
+    if (bindings.stream().map(PublishedValueTypes::object).noneMatch(pin -> publication.equals(uuid(pin,"publicationSetId"))))
+      throw invalid();
+    return new SemanticReferenceBatch(this,json,limits,bindings,structured).verify();
   }
   static Map<String,Map<String,Object>> compositions(Map<String,Object> semantic){
     var result=new HashMap<String,Map<String,Object>>();
@@ -176,15 +172,25 @@ public class PublishedRuntimeConfiguration {
       if(comparators.get(rule.propertyIri())!=expected)throw new IllegalArgumentException("UDP_IDENTITY_DATATYPE_COMPARATOR_INVALID");
     }
   }
-  @SuppressWarnings("unchecked") private Map<String,Object> get(String path){
+  HttpResponse<byte[]> exchange(String path,byte[] body){
+    boolean publication=path.startsWith("/api/onboarding/");
+    boolean legacy=!publication && body==null;
+    var route=publication ? GatewayReadPacing.Route.PUBLICATION : legacy ? GatewayReadPacing.Route.LEGACY : GatewayReadPacing.Route.BATCH;
+    pacing.before(route,legacy ? limits.fallbackIntervalMs() : limits.gatewayIntervalMs());
+
     String credential;
     try{credential=Files.readString(token).strip();}
     catch(java.io.IOException failure){throw PublicationAccessFailure.credential();}
     if(credential.isEmpty()||credential.length()>16384||credential.chars().anyMatch(Character::isWhitespace))
       throw PublicationAccessFailure.credential();
-    var request=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4))
-        .header("Authorization","Bearer "+credential).GET().build();
-    var pending=http.sendAsync(request,info->new LimitedResponse());HttpResponse<byte[]> response;
+    var builder=HttpRequest.newBuilder(gateway.resolve(path)).timeout(Duration.ofSeconds(4))
+        .header("Authorization","Bearer "+credential);
+    var request=body==null ? builder.GET().build() : builder.header("Content-Type","application/json")
+        .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build();
+    var pending=http.sendAsync(request,info->info.statusCode()==200
+        ? new LimitedResponse(publication ? limits.bundleBytes() : 2*1024*1024)
+        : HttpResponse.BodySubscribers.replacing(new byte[0]));
+    HttpResponse<byte[]> response;
     try{response=pending.get(5,TimeUnit.SECONDS);}
     catch(TimeoutException failure){pending.cancel(true);throw PublicationAccessFailure.network();}
     catch(InterruptedException failure){pending.cancel(true);Thread.currentThread().interrupt();throw PublicationAccessFailure.network();}
@@ -197,9 +203,29 @@ public class PublishedRuntimeConfiguration {
       if(cause instanceof java.io.IOException)throw PublicationAccessFailure.network();
       throw PublicationAccessFailure.invalid();
     }
-    if(response.statusCode()!=200)throw PublicationAccessFailure.status(response.statusCode(),
-        response.headers().firstValue("Retry-After").orElse(null),java.time.Instant.now());
-    try{return json.readValue(response.body(),Map.class);}
+    var now=java.time.Instant.now();
+    String retryAfter=response.headers().firstValue("Retry-After").orElse(null);
+    boolean throttled=response.statusCode()==429 || response.statusCode()==503;
+    var admission=throttled ? pacing.deferral(route,response.headers(),retryAfter,now)
+        : pacing.observe(route,response.headers(),now,null);
+    if (response.statusCode()!=200 && !(body!=null && Set.of(404,405,413).contains(response.statusCode()))
+        && !(legacy && Set.of(404,410).contains(response.statusCode()))) {
+      throw PublicationAccessFailure.status(response.statusCode(),throttled?null:retryAfter,now,admission);
+    }
+    return response;
+  }
+  @org.springframework.beans.factory.annotation.Autowired
+  void configureGatewayRetry(@Value("${ouf.udp.gateway-retry.max-delay-ms:60000}") long maxDelayMs,
+      @Value("${ouf.udp.gateway-retry.jitter-ms:1000}") long jitterMs) {
+    pacing.configure(maxDelayMs,jitterMs);
+  }
+  GatewayReadPacing pacing(){return pacing;}
+  @SuppressWarnings("unchecked") Map<String,Object> read(HttpResponse<byte[]> response){
+    try{
+      Map<String,Object> result=json.readValue(response.body(),Map.class);
+      if(result==null)throw PublicationAccessFailure.invalid();
+      return result;
+    }
     catch(java.io.IOException failure){throw PublicationAccessFailure.invalid();}
   }
   private String contractRefsHash(Map<String,Object> refs){try{return sha256(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(refs));}catch(Exception e){throw invalid();}}
@@ -213,22 +239,27 @@ public class PublishedRuntimeConfiguration {
   }
   @SuppressWarnings("unchecked") static Map<String,Object> object(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof Map<?,?> value))throw invalid();return (Map<String,Object>)value;}
   static String text(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof String value)||value.isBlank())throw invalid();return value;}
-  private static String uuid(Map<String,Object> binding,String field){
+  static String uuid(Map<String,Object> binding,String field){
     try{
-      return UUID.fromString(text(binding,field)).toString();
+      String value=text(binding,field);
+      String canonical=UUID.fromString(value).toString();
+      if(!canonical.equalsIgnoreCase(value))throw invalid();
+      return canonical;
     }catch(IllegalArgumentException failure){throw invalid();}
   }
   private static String escape(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}
-  private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_PINNED_PROFILE_INVALID");}
+  static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_PINNED_PROFILE_INVALID");}
   public record Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial,UdpPorts.RelationshipProfile relationships,GovernedIdentityEngine.Policy identity){
     public Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial){this(bundle,resolution,materialization,spatial,null,null);}
     public Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial,UdpPorts.RelationshipProfile relationships){this(bundle,resolution,materialization,spatial,relationships,null);}
     public String canonicalType(){return identity==null?resolution.canonicalType():identity.canonicalClass();}
   }
   private static final class LimitedResponse implements HttpResponse.BodySubscriber<byte[]>{
+    private final int limit;
+    LimitedResponse(int limit){this.limit=limit;}
     private final CompletableFuture<byte[]> result=new CompletableFuture<>();private final java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream();private java.util.concurrent.Flow.Subscription subscription;
     public CompletionStage<byte[]> getBody(){return result;}public void onSubscribe(java.util.concurrent.Flow.Subscription s){subscription=s;s.request(1);}
-    public void onNext(List<java.nio.ByteBuffer> buffers){for(var b:buffers){if(bytes.size()+b.remaining()>2097152){subscription.cancel();result.completeExceptionally(PublicationAccessFailure.invalid());return;}byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}subscription.request(1);}
+    public void onNext(List<java.nio.ByteBuffer> buffers){for(var b:buffers){if(b.remaining()>limit-bytes.size()){result.completeExceptionally(PublicationAccessFailure.invalid());subscription.cancel();return;}byte[] chunk=new byte[b.remaining()];b.get(chunk);bytes.writeBytes(chunk);}subscription.request(1);}
     public void onError(Throwable e){result.completeExceptionally(e);}public void onComplete(){result.complete(bytes.toByteArray());}
   }
 }
