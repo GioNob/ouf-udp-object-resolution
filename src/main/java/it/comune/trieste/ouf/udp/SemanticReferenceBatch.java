@@ -149,14 +149,9 @@ final class SemanticReferenceBatch {
           || !Set.of("ACTIVE","DEPRECATED","RETIRED").contains(text(actual,"status"))) throw pin.mismatch();
       String kind = text(actual,"artifact_type");
       if (structured || "DATATYPE".equals(kind) || "VALUE_MAP".equals(kind) || PublishedValueTypes.hasEmbeddedDefinition(binding)) {
-        // v1 has no proof of CONCEPT vocabulary membership in the compact result.
-        if (compact && "CONCEPT".equals(kind)) {
-          var full = get(pin);
-          if (!kind.equals(full.get("artifact_type"))) throw pin.mismatch();
-          verifyOccurrence(pin,binding,full,types,false);
-        } else {
-          types.bind(binding,actual,definition -> canonicalPublicationHash(json,definition),compact);
-        }
+        // For CONCEPT the compact result carries the same definition as the GET (vocabularyRef):
+        // vocabulary membership is proven by the batch itself, without a per-element read.
+        types.bind(binding,actual,definition -> canonicalPublicationHash(json,definition),compact);
       }
     } catch (SemanticReferenceFailure failure) { throw failure; }
     catch (IllegalArgumentException malformed) { throw pin.mismatch(); }

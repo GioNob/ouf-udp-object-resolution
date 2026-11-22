@@ -26,6 +26,9 @@ final class ReferenceBatchFixture implements AutoCloseable {
   volatile int maxItems=1000, maxBytes=262144, missing=-1, transientAt=-1, transientStatus=429, unsupported=0;
   volatile String versionMode="stable", fault="";
   volatile int faultAt=0;
+  volatile String kind="PROPERTY";
+  volatile boolean conceptDefinition=true;
+  final List<Map<String,Object>> pins=new ArrayList<>();
 
   ReferenceBatchFixture(Path directory,int count,String suffix,int padding) throws Exception {
     prefix="urn:udp:"+suffix+":";
@@ -37,7 +40,6 @@ final class ReferenceBatchFixture implements AutoCloseable {
     execution.put("sourceSchemaRef","schema:1");
     execution.put("adapterProfileRef","adapter:1");
     execution.put("semanticPublicationSetRef",SET);
-    var pins=new ArrayList<Map<String,Object>>();
     var mappings=new ArrayList<Map<String,Object>>();
     var rules=new ArrayList<Map<String,Object>>();
     var labels=new ArrayList<Map<String,Object>>();
@@ -141,9 +143,12 @@ final class ReferenceBatchFixture implements AutoCloseable {
     return index;
   }
   private Map<String,Object> actual(int i){
-    return Map.of("semantic_id",id(i),"revision_id",revision(i),"publication_set_id",SET,
-        "semantic_version",fault.equals("version") && faultAt==i?"2":"1","artifact_type","PROPERTY",
-        "status",fault.equals("revoked") && faultAt==i?"DRAFT":"ACTIVE","content_hash","fixture","publication_checksum","fixture");
+    var actual=new HashMap<String,Object>(Map.of("semantic_id",id(i),"revision_id",revision(i),"publication_set_id",SET,
+        "semantic_version",fault.equals("version") && faultAt==i?"2":"1","artifact_type",kind,
+        "status",fault.equals("revoked") && faultAt==i?"DRAFT":"ACTIVE","content_hash","fixture","publication_checksum","fixture"));
+    // Like the Semantic resolver: a CONCEPT carries its definition with the vocabulary membership.
+    if("CONCEPT".equals(kind) && conceptDefinition)actual.put("definition",Map.of("vocabularyRef","urn:udp:vocabulary:fixture"));
+    return actual;
   }
   private void send(HttpExchange exchange,byte[] body) throws IOException{
     exchange.sendResponseHeaders(200,body.length);exchange.getResponseBody().write(body);

@@ -267,7 +267,8 @@ class PublishedRelationshipBindingTest {
         for(var pin:json.readTree(exchange.getRequestBody()).required("references")){
           Map<String,Object> row=json.convertValue(pin,Map.class);
           var actual=new HashMap<>(registry.get(row.get("semanticId")));
-          actual.remove("definition");
+          // Compact v1 (Semantic 51a): definitions only for CONCEPT, as membership proof.
+          if(!"CONCEPT".equals(actual.get("artifact_type")))actual.remove("definition");
           row.put("index",results.size());row.put("outcome","RESOLVED");row.put("resolved",actual);results.add(row);
         }
         body=json.writeValueAsBytes(Map.of("contract","ouf.semantic.reference-batch.v1","registryVersion","d084","results",results));

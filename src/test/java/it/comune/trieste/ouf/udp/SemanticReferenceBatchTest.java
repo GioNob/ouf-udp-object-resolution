@@ -91,4 +91,23 @@ class SemanticReferenceBatchTest {
       assertThat(peer.legacyReads).hasValue(0);
     }
   }
+
+  @Test void conceptMembershipIsProvenByTheBatchWithoutPerElementReads(@org.junit.jupiter.api.io.TempDir java.nio.file.Path temp) throws Exception {
+    try(var peer=new ReferenceBatchFixture(temp,1024,"concept",0)){
+      peer.kind="CONCEPT";
+      var limits=new ReferenceBatchSettings(262144,1000,2049,3145728,3,1,1);
+      var verified=new SemanticReferenceBatch(peer.client(limits),new com.fasterxml.jackson.databind.ObjectMapper(),limits,peer.pins,true).verify();
+      assertThat(verified).isNotNull();
+      assertThat(peer.sizes).containsExactly(1000,24);
+      assertThat(peer.legacyReads).hasValue(0);
+      // A CONCEPT result without its definition is not a membership proof: the pin is rejected, no GET.
+      peer.conceptDefinition=false;
+      assertThatThrownBy(()->new SemanticReferenceBatch(peer.client(limits),new com.fasterxml.jackson.databind.ObjectMapper(),limits,peer.pins,true).verify())
+          .isInstanceOfSatisfying(SemanticReferenceFailure.class,e->{
+            assertThat(e.getMessage()).isEqualTo("UDP_SEMANTIC_REFERENCE_MISMATCH");
+            assertThat(e.detail).containsEntry("index",0);
+          });
+      assertThat(peer.legacyReads).hasValue(0);
+    }
+  }
 }
