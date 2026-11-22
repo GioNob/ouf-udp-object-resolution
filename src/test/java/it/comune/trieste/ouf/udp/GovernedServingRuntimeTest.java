@@ -1,6 +1,8 @@
 package it.comune.trieste.ouf.udp;
 
 import static org.assertj.core.api.Assertions.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,7 +43,7 @@ class GovernedServingRuntimeTest {
 
   @Test void currentOmitsUnauthorizedPropertyBeforeSerializationAndAuditsRedaction(){Fixture f=materialize("h-1","asset-1","Visible","classified",null);Map<String,Object> view=serving.current(f.objectId,open);Map<String,Object> properties=map(view.get("properties"));assertThat(properties).containsEntry("ouf:name","Visible").doesNotContainKey("ouf:secret");assertThat(view.toString()).doesNotContain("classified");assertThat(db.sql("select outcome from ouf_udp.serving_access_audit").query(String.class).single()).isEqualTo("REDACTED");}
 
-  @Test void d084CanonicalServingAndPostgisPointValidation(){
+  @Test void d084CanonicalServingAndPostgisPointValidation() throws Exception {
     String id="typed-handoff";
     String decimal="999999999999999999999999.000000000000000001";
     var payload=handoff(id,"typed-object","typed","classified",null);
@@ -68,8 +70,14 @@ class GovernedServingRuntimeTest {
     UUID object=resolution.resolve(id,payload,resolutionProfile).targetUrbanObjectId();
     canonical.materialize(id,object,payload,profile);
     var auth=new ServingAuthorizationContext("HUMAN_USER","reader","default",Set.of("urban.object.read","urban.object.search","urban.geometry.read"),Set.of("OPEN"),"authz://geometry","point");
+    var json=new ObjectMapper().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+    String expectedPoint="{\"crs\":\"EPSG:4326\",\"geoJson\":{\"coordinates\":[13.75,45.6495],\"type\":\"Point\"}}";
+    String expectedRecord="{\"location\":"+expectedPoint+",\"measurement\":{\"scores\":[\""+decimal+"\"]}}";
     for(var view:List.of(serving.current(object,auth),serving.search("ouf:Asset",10,null,auth).items().getFirst())){
-      assertThat(map(view.get("properties"))).containsEntry("urn:amount",decimal).containsEntry("urn:point",point).containsEntry("urn:hasRecord",nested);
+      var properties=map(view.get("properties"));
+      assertThat(properties).containsEntry("urn:amount",decimal);
+      assertThat(json.writeValueAsString(properties.get("urn:point"))).isEqualTo(expectedPoint);
+      assertThat(json.writeValueAsString(properties.get("urn:hasRecord"))).isEqualTo(expectedRecord);
       assertThat(map(view.get("propertyDatatypes"))).containsEntry("urn:amount",CanonicalValueType.XSD+"decimal")
           .containsEntry("urn:hasRecord","urn:record").containsEntry("urn:point",CanonicalValueType.GEO).doesNotContainKey("ouf:secret");
     }
