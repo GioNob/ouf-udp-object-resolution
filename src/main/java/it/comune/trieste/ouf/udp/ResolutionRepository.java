@@ -13,8 +13,8 @@ public class ResolutionRepository {
   private static final String CURRENT_CLAIM="job_id=:j and handoff_id=:handoff and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>clock_timestamp()";
   private final JdbcClient db;private final ObjectMapper json;public ResolutionRepository(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
   @Transactional public Optional<Claim> claim(String worker,Duration lease){
-    return db.sql("with candidate as (select job_id from ouf_udp.materialization_job where state='READY' or (state='RUNNING' and lease_until<transaction_timestamp()) or (state='PAUSED' and next_integrity_check_at<=transaction_timestamp()) order by created_at for update skip locked limit 1) update ouf_udp.materialization_job j set state='RUNNING',state_version=state_version+1,claimed_by=:w,lease_until=transaction_timestamp()+(:m*interval '1 millisecond'),attempts=attempts+1,updated_at=transaction_timestamp() from candidate c,ouf_udp.handoff_intake h where j.job_id=c.job_id and h.handoff_id=j.handoff_id returning j.job_id,j.handoff_id,h.type_code,h.payload_json::text,j.integrity_baseline_hash,j.integrity_attempts,j.state_version")
-      .param("w",worker).param("m",lease.toMillis()).query((r,n)->new Claim(r.getObject(1,UUID.class),r.getString(2),r.getString(3),read(r.getString(4)),worker,r.getString(5),r.getInt(6),r.getLong(7))).optional();
+    return db.sql("with candidate as (select job_id from ouf_udp.materialization_job where state='READY' or (state='RUNNING' and lease_until<transaction_timestamp()) or (state='PAUSED' and next_integrity_check_at<=transaction_timestamp()) order by created_at for update skip locked limit 1) update ouf_udp.materialization_job j set state='RUNNING',state_version=state_version+1,claimed_by=:w,lease_until=transaction_timestamp()+(:m*interval '1 millisecond'),attempts=attempts+1,updated_at=transaction_timestamp() from candidate c,ouf_udp.handoff_intake h where j.job_id=c.job_id and h.handoff_id=j.handoff_id returning j.job_id,j.handoff_id,h.type_code,h.payload_json::text,j.integrity_baseline_hash,j.integrity_attempts,j.state_version,j.updated_at,j.lease_until")
+      .param("w",worker).param("m",lease.toMillis()).query((r,n)->new Claim(r.getObject(1,UUID.class),r.getString(2),r.getString(3),read(r.getString(4)),worker,r.getString(5),r.getInt(6),r.getLong(7),r.getTimestamp(8).toInstant(),r.getTimestamp(9).toInstant())).optional();
   }
   public void lockClaim(Claim claim){
     if(db.sql("select 1 from ouf_udp.materialization_job where "+CURRENT_CLAIM+" for update")
@@ -47,7 +47,11 @@ public class ResolutionRepository {
   private Map<String,Object> read(String value){try{return json.readValue(value,new TypeReference<>(){});}catch(Exception e){throw new IllegalStateException("UDP_STORED_JSON_INVALID",e);}}
   private String write(Object value){try{return json.writeValueAsString(value);}catch(Exception e){throw new IllegalStateException("UDP_STORED_JSON_INVALID",e);}}
   private static String safe(String value){return value!=null&&value.matches("UDP_[A-Z0-9_]{1,70}")?value:"UDP_RESOLUTION_FAILED";}
-  public record Claim(UUID jobId,String handoffId,String typeCode,Map<String,Object> payload,String worker,String integrityBaselineHash,int integrityAttempts,long stateVersion){
+  public record Claim(UUID jobId,String handoffId,String typeCode,Map<String,Object> payload,String worker,String integrityBaselineHash,int integrityAttempts,long stateVersion,
+      java.time.Instant claimedAt,java.time.Instant leaseUntil){
+    public Claim(UUID jobId,String handoffId,String typeCode,Map<String,Object> payload,String worker,String integrityBaselineHash,int integrityAttempts,long stateVersion){
+      this(jobId,handoffId,typeCode,payload,worker,integrityBaselineHash,integrityAttempts,stateVersion,null,null);
+    }
     public Claim(UUID jobId,String handoffId,String typeCode,Map<String,Object> payload,String worker,String integrityBaselineHash,int integrityAttempts){this(jobId,handoffId,typeCode,payload,worker,integrityBaselineHash,integrityAttempts,-1);}
   }
 }

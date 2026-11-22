@@ -1,6 +1,6 @@
 // External CI peers only. UDP validates the bearer, grants and publication checksums itself.
 import {createHash, generateKeyPairSync, randomBytes, randomUUID, sign} from 'node:crypto';
-import {existsSync, unlinkSync, writeFileSync} from 'node:fs';
+import {appendFileSync, existsSync, unlinkSync, writeFileSync} from 'node:fs';
 import {createServer} from 'node:http';
 import {join} from 'node:path';
 
@@ -47,7 +47,11 @@ bundle.checksum = 'sha256:' + createHash('sha256').update(JSON.stringify(sorted(
 const bundleRef = [bundle.bundleId, bundle.bundleVersion, bundle.checksum].join(':');
 writeFileSync(join(directory, 'contract-refs.json'), JSON.stringify({...execution, bundleRef}));
 
-createServer((request, response) => {
+const tupleKeys = ['semanticId', 'revisionId', 'publicationSetId'];
+const compact = {semantic_id: binding.semanticId, semantic_version: binding.semanticVersion,
+  status: 'ACTIVE', artifact_type: 'CLASS', revision_id: binding.revisionId,
+  publication_set_id: binding.publicationSetId, publication_checksum: bundle.checksum, content_hash: bundle.checksum};
+createServer(async (request, response) => {
   const url = new URL(request.url, issuer);
   let body;
   if (url.pathname === '/.well-known/openid-configuration') {
@@ -61,14 +65,28 @@ createServer((request, response) => {
     const outage = join(directory, 'unavailable-once');
     if (existsSync(outage)) {
       unlinkSync(outage);
-      response.writeHead(503, {'Retry-After': '1'}).end();
+      response.writeHead(429, {'Retry-After': '1'}).end();
       return;
     }
     body = {tenantId: tenant, sourceId: sourceType.sourceId, checksum: bundle.checksum, bundle};
-  } else if (url.pathname === '/api/semantic/v1/references:resolve' &&
-      ['semanticId','revisionId','publicationSetId'].every(key => url.searchParams.get(key) === binding[key])) {
-    body = {semantic_id: binding.semanticId, semantic_version: binding.semanticVersion,
-      revision_id: binding.revisionId, publication_set_id: binding.publicationSetId};
+  } else if (request.method === 'POST' && url.pathname === '/api/semantic/v1/references:resolve-batch') {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const data = Buffer.concat(chunks);
+    if (data.length > 262144) { response.writeHead(413).end(); return; }
+    let references;
+    try { ({references} = JSON.parse(data)); } catch { response.writeHead(400).end(); return; }
+    if (!Array.isArray(references) || references.length !== 1 ||
+        !tupleKeys.every(key => references[0]?.[key] === binding[key])) {
+      response.writeHead(400).end(); return;
+    }
+    body = {contract: 'ouf.semantic.reference-batch.v1', registryVersion: 'ci-set-1',
+      results: [{index: 0, ...references[0], outcome: 'RESOLVED', resolved: compact}]};
+    appendFileSync(join(directory, 'reference-methods'), 'POST\n');
+  } else if (request.method === 'GET' && url.pathname === '/api/semantic/v1/references:resolve' &&
+      tupleKeys.every(key => url.searchParams.get(key) === binding[key])) {
+    body = compact;
+    appendFileSync(join(directory, 'reference-methods'), 'GET\n');
   } else {
     response.writeHead(404).end(); return;
   }

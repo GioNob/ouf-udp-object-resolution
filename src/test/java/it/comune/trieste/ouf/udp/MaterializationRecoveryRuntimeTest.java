@@ -363,6 +363,18 @@ class MaterializationRecoveryRuntimeTest {
     assertThat(db.sql("select r.source_handoff_id from ouf_udp.materialization_observation o join ouf_udp.object_revision r using(revision_id) where o.handoff_id='pass-two'").query(String.class).single()).isEqualTo("pass-two");
   }
 
+  @Test void authorizedReviewShowsOnlyRejectedPinCoordinates()throws Exception{
+    var job=fixture("review-pin");
+    String code="UDP_SEMANTIC_REFERENCE_UNRESOLVABLE", revision=new UUID(0,1008).toString();
+    db.sql("update ouf_udp.materialization_job set safe_failure_code=:code where job_id=:j").param("code",code).param("j",job).update();
+    db.sql("insert into ouf_udp.handoff_event(event_id,handoff_id,event_type,safe_detail) values(gen_random_uuid(),'review-pin','REFERENCE_INTEGRITY_QUARANTINED',cast(:detail as jsonb))")
+        .param("detail",json.writeValueAsString(Map.of("safeFailureCode",code,"index",1007,"semanticId","urn:p:1007",
+            "revisionId",revision,"unrelated","fixture-only"))).update();
+    var view=recovery.review(job,human(),scope->{});
+    assertThat(view.safeFailureCode()).isEqualTo(code);
+    assertThat(view.referenceFailure()).isEqualTo(Map.of("index",1007,"semanticId","urn:p:1007","revisionId",revision));
+  }
+
   private UUID sourceRaw(){
     UUID raw=UUID.randomUUID();
     db.sql("insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,media_type,"

@@ -1,24 +1,17 @@
-# Native semantic reference capacity
+# Published semantic references in UDP
 
-The governed file channel accepts up to 32 exact semantic references per published
-configuration. Native class and property artifacts have separate revision and
-publication identifiers: a class plus twenty properties needs 21 bindings. A
-containing published ontology may instead need one binding, but an arbitrary
-wrapper must not be invented to conceal independent revisions.
+UDP reads the publication envelope once per `resolveContracts` invocation and verifies its checksum before resolving the pins. Each existing point-of-use check starts again from the frozen bundle. Requests to the Gateway use the existing rotating service bearer, tenant visibility and historical coordinates.
 
-UDP historical resolution now uses the same 32-reference bound as the MCP file
-channel and Ingestion's compatibility/admission path. Every historical binding
-still resolves its exact semantic ID, version, revision and publication. The
-existing publication-membership and configuration-checksum checks remain.
-No frozen schema, authorization, identity decision, HUMAN gate or database
-migration changes. This is a bounded implementation capacity profile; the PET
-does not prescribe the former limit of twenty semantic references.
+The normal route is `POST /api/semantic/v1/references:resolve-batch`. UDP counts the bytes of the UTF-8 JSON it sends, including the array wrapper and separators. On HTTP 413 the current block is halved and the smaller item ceiling applies to the rest of that verification. A singleton that exceeds either reader or server request limits fails with `UDP_SEMANTIC_REFERENCE_TOO_LARGE`.
 
-The HTTP regression covers 21 and 32 references, rejection of 33 before semantic
-requests, and mismatch in the last reference. It is a component test, not proof
-of deployed Teatri ingestion, identity matching or serving.
+All replies in one pass must carry the same opaque registry version. On change UDP discards the pass, including its pending item rejection, and starts at index zero. Continued churn produces `UDP_SEMANTIC_REGISTRY_VERSION_UNSTABLE`. An accepted pass has one ordered result per tuple with matching block-local index. Historical resolution accepts ACTIVE, DEPRECATED and RETIRED members of the published set. The local canonical D-084 digest and the signed publication pin must both match the registry digest.
 
-Requests retain the existing 2 MiB response and five-second complete-exchange
-bounds. Slow resolution does not extend worker leases or authorize stale
-materialization; the existing claim fences remain mandatory. No new retry
-session or target performance SLO is introduced.
+A 404 or 405 on the batch route selects the previous GET protocol for the **entire** verification. The GETs use the installation interval and fresh credentials. Each new verification probes the batch endpoint again. The release sequence upgrades Semantic first. Historical structured types have one additional proof requirement for CONCEPT pins. The v1 compact fields omit the concept's vocabulary definition and digest. UDP checks the full GET for those pins under the same pacing and tuple checks, preserving the existing comparison and vocabulary membership validation.
+
+UDP records a rejected element in the fenced job and its quarantine event. `UDP_SEMANTIC_REFERENCE_UNRESOLVABLE` covers missing or invisible members. `UDP_SEMANTIC_REFERENCE_MISMATCH` covers inconsistent pins, including status and D-084. Safe evidence carries the zero-based **publication** index, semantic ID and revision ID. Unsafe or oversized identifiers are represented by their digest. The scoped handoff status and authorized materialization review expose the coordinates. The worker must pass the complete verification before canonical effects.
+
+An HTTP 429, 503 or transport timeout returns to the existing durable publication-recovery scheduler. The owner persists the due time, episode start and attempt counts, releases the claim and checks the fence on recovery. The wait respects the later of the jittered backoff, Retry-After (seconds or HTTP date) and the advertised rate-limit window. Positive remaining capacity spaces local reads. Zero remaining waits for reset. Each route also has a configured minimum interval. A quota seen by one process grants no capacity to another.
+
+UDP consumes one already-durable handoff per materialization job. The partition checkpoint belongs to Ingestion. Within a UDP verification the persisted handoff stays at the same position until materialization commits. Successful blocks, publication reads and worker changes therefore count as zero checkpoint progress. The dependency episode retains its original deadline. A retry starts the full verification again. A check that cannot fit in the remaining claim time returns to durable recovery. Installations using the legacy GET route must allow enough throughput for a complete pass within a claim.
+
+See the [UDP configuration register](CONFIGURATION_REGISTER.md) for the byte/count bounds, development pacing defaults, capture and restore. The 3 MiB default applies to the entire Onboarding HTTP envelope. Onboarding admission uses the smaller of the installed UDP and Ingestion bounds.

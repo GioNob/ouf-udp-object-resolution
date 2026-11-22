@@ -24,7 +24,7 @@ public class PublishedResolutionLoop {
   @Scheduled(fixedDelayString="${ouf.udp.execution.poll-delay-ms:1000}",initialDelayString="${ouf.udp.execution.initial-delay-ms:1000}")
   public void tick(){
     var claimed=jobs.claim(worker,Duration.ofMinutes(2));if(claimed.isEmpty())return;var claim=claimed.orElseThrow();
-    try{
+    try(var window=GatewayReadPacing.forClaim(claim)){
       if(!gate.verify(claim))return;
       var refs=HandoffIntakeService.object(claim.payload(),"contractRefs");
       var profiles=configuration.resolve(HandoffIntakeService.text(refs,"bundleRef"),claim.typeCode());
@@ -70,6 +70,7 @@ public class PublishedResolutionLoop {
         }
         jobs.complete(claim);
       });
+    }catch(SemanticReferenceFailure failure){gate.reject(claim,failure);
     }catch(PublicationAccessFailure failure){gate.transportFailure(claim,failure);
     }catch(RuntimeException failure){if(!"UDP_RESOLUTION_LEASE_LOST".equals(failure.getMessage()))jobs.fail(claim,failure.getMessage());LOG.warn("UDP_AUTOMATIC_RESOLUTION_INCOMPLETE");}
   }

@@ -22,6 +22,9 @@ class PublicationDependencyRecoveryRuntimeTest {
  }
  @Autowired HandoffIntakeService intake;@Autowired ResolutionRepository jobs;
  @Autowired MaterializationReferenceGate gate;@Autowired PublicationDependencyRecovery recovery;
+ @Autowired ObjectResolutionService objectResolution;
+ @Autowired CanonicalMaterializer canonicalMaterializer;
+ @Autowired org.springframework.transaction.support.TransactionTemplate transactions;
  @Autowired JdbcClient db;@MockitoBean HistoricalContractCatalog catalog;
  @BeforeEach void clean(){
   db.sql("truncate table ouf_udp.handoff_intake restart identity cascade").update();reset(catalog);
@@ -83,15 +86,83 @@ class PublicationDependencyRecoveryRuntimeTest {
   assertThat(db.sql("select state from ouf_udp.handoff_intake").query(String.class).single()).isEqualTo("PROCESSED");
   assertThat(db.sql("select count(*) from ouf_udp.handoff_event where event_type='RESOLUTION_FAILED'").query(Long.class).single()).isZero();
  }
+ @Test void rateLimitedSecondBatchResumesOnlyAfterPersistedAdmissionAndRechecksAllPins(
+     @org.junit.jupiter.api.io.TempDir java.nio.file.Path temp) throws Exception {
+  try(var peer=new ReferenceBatchFixture(temp,1024,"resume",0)){
+   accept("resume",peer);
+   for(int status:new int[]{429,503}){
+    peer.transientAt=1000;peer.transientStatus=status;
+    var client=peer.client();
+    doAnswer(call->client.resolveContracts(call.getArgument(0))).when(catalog).resolve(anyMap());
+    var attempt=claim("worker-"+status);
+    assertThat(gate.verify(attempt)).isFalse();
+    assertThat(state()).isEqualTo("PAUSED");
+    assertThat(db.sql("select next_integrity_check_at>=transaction_timestamp()+interval '1 second' from ouf_udp.materialization_job")
+        .query(Boolean.class).single()).isTrue();
+    assertThat(jobs.claim("too-early",Duration.ofMinutes(2))).isEmpty();
+    due(); // Move the persisted due time; the replacement has no in-memory admission history.
+   }
+   var fresh=peer.client();
+   doAnswer(call->fresh.resolveContracts(call.getArgument(0))).when(catalog).resolve(anyMap());
+   var loop=new PublishedResolutionLoop(jobs,fresh,gate,objectResolution,canonicalMaterializer,null,db,transactions);
+   loop.tick();
+   assertThat(state()).isEqualTo("SUCCEEDED");
+   assertThat(accept("resume",peer).duplicate()).isTrue();
+   loop.tick();
+   assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id='resume'").query(Long.class).single()).isOne();
+   assertThat(db.sql("select count(*) from ouf_udp.property_contribution where handoff_id='resume'").query(Long.class).single()).isEqualTo(1024);
+   assertThat(peer.starts).containsExactly(0,1000,0,1000,0,1000);
+   assertThat(attempts()).isZero();
+   assertThat(db.sql("select dependency_cumulative_attempts from ouf_udp.materialization_job").query(Long.class).single()).isEqualTo(3);
+  }
+ }
+ @Test void oneMissingPinQuarantinesTheEntireHandoffWithExactSafeEvidence(
+     @org.junit.jupiter.api.io.TempDir java.nio.file.Path temp) throws Exception {
+  try(var peer=new ReferenceBatchFixture(temp,1024,"missing",0)){
+   accept("missing-pin",peer);
+   var client=peer.client();
+   doAnswer(call->client.resolveContracts(call.getArgument(0))).when(catalog).resolve(anyMap());
+   peer.transientAt=1000;
+   assertThat(gate.verify(claim("pre-revocation"))).isFalse();
+   assertThat(state()).isEqualTo("PAUSED");
+   due();
+   var replacement=peer.client();
+   doAnswer(call->replacement.resolveContracts(call.getArgument(0))).when(catalog).resolve(anyMap());
+   peer.missing=1007;
+   var materializer=mock(CanonicalMaterializer.class);
+   var resolver=mock(ObjectResolutionService.class);
+   new PublishedResolutionLoop(jobs,replacement,gate,resolver,materializer,null,db,null).tick();
+   assertThat(state()).isEqualTo("QUARANTINED");
+   assertThat(db.sql("select safe_failure_code from ouf_udp.materialization_job").query(String.class).single())
+       .isEqualTo("UDP_SEMANTIC_REFERENCE_UNRESOLVABLE");
+   var event=db.sql("select safe_detail->>'index' idx,safe_detail->>'semanticId' id,safe_detail->>'revisionId' rev from ouf_udp.handoff_event where event_type='REFERENCE_INTEGRITY_QUARANTINED'").query().singleRow();
+   assertThat(event).containsEntry("idx","1007").containsEntry("id",peer.id(1007)).containsEntry("rev",peer.revision(1007));
+   assertThat(db.sql("select count(*) from ouf_udp.materialization_observation where handoff_id='missing-pin'").query(Long.class).single()).isZero();
+   assertThat(db.sql("select count(*) from ouf_udp.handoff_event where event_type='REFERENCE_INTEGRITY_PASSED'").query(Long.class).single()).isZero();
+   assertThat(peer.starts).containsExactly(0,1000,0,1000);
+   var status=intake.handoff("missing-pin");
+   assertThat(status).containsEntry("failure_code","UDP_SEMANTIC_REFERENCE_UNRESOLVABLE");
+   assertThat(((com.fasterxml.jackson.databind.JsonNode)status.get("referenceFailure")).required("index").asInt()).isEqualTo(1007);
+   verifyNoInteractions(resolver,materializer);
+  }
+ }
  private ResolutionRepository.Claim claim(String worker){return jobs.claim(worker,Duration.ofMinutes(2)).orElseThrow();}
  private String state(){return db.sql("select state from ouf_udp.materialization_job").query(String.class).single();}
  private int attempts(){return db.sql("select dependency_attempts from ouf_udp.materialization_job").query(Integer.class).single();}
  private void due(){db.sql("update ouf_udp.materialization_job set next_integrity_check_at=transaction_timestamp()-interval '1 second'").update();}
  private HistoricalContractCatalog.Resolution ready(){return new HistoricalContractCatalog.Resolution(List.of(),List.of(),"sha256:"+"a".repeat(64));}
+ private HandoffIntakeService.Receipt accept(String id,ReferenceBatchFixture peer){
+  var values=new LinkedHashMap<String,Object>();
+  for(int i=0;i<ReferenceBatchFixture.COUNT;i++)values.put(peer.id(i),id+"-"+i);
+  return accept(id,peer.refs,values,"cameras","FILE");
+ }
  private void accept(String id){
-  intake.accept(new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-"+id),Map.entry("ingestionId","ing-"+id),
-   Map.entry("sourceIdentity",Map.of("sourceId","roads","typeCode","ROAD","sourceObjectId",id)),Map.entry("operation","UPSERT"),
-   Map.entry("canonicalPayload",Map.of("code",id,"name","Road")),Map.entry("contractRefs",Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1")),
+  accept(id,Map.of("sourceSchemaRef","schema://road/1","bundleRef","bundle://road/1","semanticPublicationSetRef","semantic://publication/1","adapterProfileRef","adapter://rest/1"),Map.of("code",id,"name","Road"),"roads","ROAD");
+ }
+ private HandoffIntakeService.Receipt accept(String id,Map<String,Object> refs,Map<String,Object> values,String source,String type){
+  return intake.accept(new LinkedHashMap<>(Map.ofEntries(Map.entry("handoffId",id),Map.entry("ingestionRunId","run-"+id),Map.entry("ingestionId","ing-"+id),
+   Map.entry("sourceIdentity",Map.of("sourceId",source,"typeCode",type,"sourceObjectId",id,"observedAt","2026-01-01T00:00:00Z")),Map.entry("operation","UPSERT"),
+   Map.entry("canonicalPayload",values),Map.entry("contractRefs",refs),
    Map.entry("lineageId","lineage-"+id),Map.entry("contentHash","sha256:"+"d".repeat(64)),Map.entry("acquiredAt","2026-01-01T00:00:00Z"),Map.entry("changeRepresentation",Map.of("mode","FULL_SNAPSHOT")))));
  }
 }

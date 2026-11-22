@@ -17,8 +17,14 @@ final class PublicationAccessFailure extends IllegalStateException {
   static PublicationAccessFailure invalid(){return new PublicationAccessFailure("UDP_PUBLICATION_RESPONSE_INVALID",false,null);}
   static PublicationAccessFailure credential(){return new PublicationAccessFailure("UDP_PUBLICATION_CREDENTIAL_UNAVAILABLE",false,null);}
   static PublicationAccessFailure status(int status,String retryAfter,Instant now){
+    return status(status,retryAfter,now,null);
+  }
+  static PublicationAccessFailure deferred(Instant due){
+    return new PublicationAccessFailure("UDP_PUBLICATION_UNAVAILABLE",true,due);
+  }
+  static PublicationAccessFailure status(int status,String retryAfter,Instant now,Instant quota){
     if(Set.of(408,429,500,502,503,504).contains(status))
-      return new PublicationAccessFailure("UDP_PUBLICATION_UNAVAILABLE",true,retryAfter(retryAfter,now));
+      return deferred(GatewayReadPacing.later(retryAfter(retryAfter,now),quota));
     return new PublicationAccessFailure(status==401||status==403?"UDP_PUBLICATION_ACCESS_DENIED":
       status==404||status==410?"UDP_PUBLICATION_REFERENCE_NOT_FOUND":"UDP_PUBLICATION_HTTP_PERMANENT",false,null);
   }

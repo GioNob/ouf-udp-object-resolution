@@ -22,7 +22,25 @@ public class HandoffIntakeService {
   public Receipt accept(Map<String,Object> payload){
     contracts.validate("/contracts/rc3/ingestion/handoff-payload-v1.json",payload);String id=text(payload,"handoffId"),hash=text(payload,"contentHash");Map<String,Object> identity=object(payload,"sourceIdentity");String receipt="udp://handoffs/"+id;List<Map<String,Object>> prior=db.sql("select content_hash,receipt_ref,payload_json=cast(:payload as jsonb) payload_matches from ouf_udp.handoff_intake where handoff_id=:h").param("h",id).param("payload",write(payload)).query().listOfRows();if(!prior.isEmpty())return duplicate(hash,prior.getFirst());String encoded=write(payload);SourceRaw sourceRaw=executionEnabled?verifySourceRaw(payload,identity):null;UUID rawLakeObject=null;if(lakeRequired){if(rawRetentionDays<=0||rawRetentionClass.isBlank()||rawAccessLabel.isBlank()||tenantId.isBlank())throw new IllegalStateException("UDP_LAKE_RETENTION_POLICY_REQUIRED");var raw=lake.store(encoded.getBytes(StandardCharsets.UTF_8),tenantId,text(identity,"sourceId"),text(identity,"typeCode"),"RAW","application/json",rawRetentionClass,rawAccessLabel,OffsetDateTime.now().plusDays(rawRetentionDays),String.valueOf(payload.getOrDefault("correlationId",id)));if(!"VERIFIED".equals(raw.state()))throw new IllegalStateException("UDP_LAKE_RAW_NOT_VERIFIED");rawLakeObject=raw.id();}UUID finalRawLakeObject=rawLakeObject;return transactions.execute(status->{if(sourceRaw!=null)lockSourceRaw(sourceRaw);int inserted=db.sql("insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,content_hash,payload_json,receipt_ref,raw_lake_object_id) values(:h,:r,:i,:s,:t,:o,:c,cast(:p as jsonb),:x,:lake) on conflict(handoff_id) do nothing").param("h",id).param("r",text(payload,"ingestionRunId")).param("i",text(payload,"ingestionId")).param("s",text(identity,"sourceId")).param("t",text(identity,"typeCode")).param("o",text(identity,"sourceObjectId")).param("c",hash).param("p",encoded).param("x",receipt).param("lake",finalRawLakeObject,Types.OTHER).update();if(inserted==0)return duplicate(hash,db.sql("select content_hash,receipt_ref,payload_json=cast(:payload as jsonb) payload_matches from ouf_udp.handoff_intake where handoff_id=:h").param("h",id).param("payload",write(payload)).query().singleRow());db.sql("insert into ouf_udp.materialization_job(job_id,handoff_id) values(gen_random_uuid(),:h)").param("h",id).update();if(sourceRaw!=null){if(sourceRaw.segment()!=null)retainRaw(sourceRaw.segment().pack());db.sql("update ouf_udp.handoff_intake set source_raw_lake_object_id=:raw where handoff_id=:h").param("raw",sourceRaw.id()).param("h",id).update();retainRaw(sourceRaw.id());}event(id,"HANDOFF_DURABLE",finalRawLakeObject==null?Map.of("receiptRef",receipt):Map.of("receiptRef",receipt,"rawLakeObjectId",finalRawLakeObject.toString()));return new Receipt(receipt,true,false);});
   }
-  public Map<String,Object> handoff(String id){return db.sql("select handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,content_hash,receipt_ref,raw_lake_object_id,state,received_at,processed_at,failure_code from ouf_udp.handoff_intake where handoff_id=:h").param("h",id).query().listOfRows().stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_HANDOFF_NOT_FOUND"));}
+  public Map<String,Object> handoff(String id){
+    var row=db.sql("""
+        select h.handoff_id,h.ingestion_run_id,h.ingestion_id,h.source_id,h.type_code,h.source_object_id,
+          h.content_hash,h.receipt_ref,h.raw_lake_object_id,h.state,h.received_at,h.processed_at,h.failure_code,
+          j.safe_failure_code job_code,
+        """+SemanticReferenceFailure.RETAINED_DETAIL_SQL+"""
+          reference_failure from ouf_udp.handoff_intake h left join ouf_udp.materialization_job j using(handoff_id)
+          where h.handoff_id=:id
+        """).param("id",id).query().listOfRows().stream().findFirst()
+        .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"UDP_HANDOFF_NOT_FOUND"));
+    var view=new LinkedHashMap<>(row);
+    Object reason=view.remove("job_code");
+    if(view.remove("reference_failure") instanceof String detail){
+      view.put("failure_code",reason);
+      try{view.put("referenceFailure",json.readTree(detail));}
+      catch(java.io.IOException malformed){throw new IllegalStateException("UDP_STORED_JSON_INVALID");}
+    }
+    return view;
+  }
   private SourceRaw verifySourceRaw(Map<String,Object> payload,Map<String,Object> identity){
     String ref=text(payload,"rawObjectRef");if(!ref.startsWith("lake://"))throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,"UDP_RAW_REFERENCE_REQUIRED");
     UUID id;try{id=UUID.fromString(ref.substring(7));}catch(IllegalArgumentException e){throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,"UDP_RAW_REFERENCE_INVALID");}

@@ -9,7 +9,7 @@ import java.util.function.Consumer;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 /** Governed retry of the original durable job, without canonical effects, preserving approved CREATE_NEW decisions. */
@@ -18,16 +18,18 @@ public class MaterializationRecoveryService {
   public static final String CAPABILITY="udp.materialization.retry";
   private static final Set<String> TECHNICAL_CODES=Set.of(
       "UDP_REFERENCE_INTEGRITY_CONTRACT_INVALID","UDP_REFERENCE_INTEGRITY_CATALOG_INVALID",
-      "UDP_REFERENCE_INTEGRITY_MISSING");
+      "UDP_REFERENCE_INTEGRITY_MISSING","UDP_SEMANTIC_REFERENCE_MISMATCH","UDP_SEMANTIC_REFERENCE_UNRESOLVABLE",
+      "UDP_SEMANTIC_REFERENCE_TOO_LARGE");
   private final JdbcClient db;
+  private final TransactionTemplate transactions;
   private final ObjectMapper json;
   private final HistoricalContractCatalog catalog;
   @org.springframework.beans.factory.annotation.Autowired private org.springframework.beans.factory.ObjectProvider<PublishedRuntimeConfiguration> publications;
-  public MaterializationRecoveryService(JdbcClient db,ObjectMapper json,HistoricalContractCatalog catalog){
+  public MaterializationRecoveryService(JdbcClient db,ObjectMapper json,HistoricalContractCatalog catalog,TransactionTemplate transactions){
+    this.transactions=transactions;
     this.db=db;this.json=json;this.catalog=catalog;
   }
 
-  @Transactional(readOnly=true)
   public Review review(UUID jobId,TrustedHumanContext actor,Consumer<ResourceContext> authorize){
     actor.require(CAPABILITY);
     Map<String,Object> row=load(jobId,actor.tenantId(),false);
@@ -35,7 +37,6 @@ public class MaterializationRecoveryService {
     return review(row);
   }
 
-  @Transactional
   public Receipt retry(UUID jobId,Request request,TrustedHumanContext actor,
       Consumer<ResourceContext> authorize){
     actor.require(CAPABILITY);
@@ -44,6 +45,15 @@ public class MaterializationRecoveryService {
         ||!request.expectedSnapshotHash().matches("sha256:[a-f0-9]{64}")
         ||request.reason()==null||request.reason().isBlank()||request.reason().length()>2000
         ||request.reason().chars().anyMatch(Character::isISOControl))throw badRequest();
+    var observed=load(jobId,actor.tenantId(),false);
+    authorize.accept(resource(observed,actor.tenantId()));
+    // A previously accepted operation may be replayed after its job has moved on.
+    Review checked=version(observed)==request.expectedVersion() ? review(observed) : null;
+    return transactions.execute(status->acceptRetry(jobId,request,actor,authorize,observed,checked));
+  }
+
+  private Receipt acceptRetry(UUID jobId,Request request,TrustedHumanContext actor,
+      Consumer<ResourceContext> authorize,Map<String,Object> observed,Review current){
     // Serialize same operation IDs across jobs; the append-only event PK is the durable key.
     db.sql("select pg_advisory_xact_lock(hashtextextended(:operation,0))")
         .param("operation",request.operationId().toString()).query().singleRow();
@@ -64,7 +74,8 @@ public class MaterializationRecoveryService {
           ((Number)detail.get("acceptedVersion")).longValue(),String.valueOf(row.get("state")),true);
     }
     if(version(row)!=request.expectedVersion())throw conflict("UDP_MATERIALIZATION_RETRY_STALE");
-    Review current=review(row);
+    // Revalidate the entire local input under the original locks after paced external reads.
+    if(current==null||!row.equals(observed))throw conflict("UDP_MATERIALIZATION_RETRY_STALE");
     if(!current.retryEligible())throw conflict("UDP_MATERIALIZATION_RETRY_INELIGIBLE");
     if(!current.contractReady())throw conflict("UDP_MATERIALIZATION_RETRY_REFERENCES_UNAVAILABLE");
     if(!current.snapshotHash().equals(request.expectedSnapshotHash()))
@@ -104,6 +115,7 @@ public class MaterializationRecoveryService {
         +"h.state intake_state,h.payload_json#>>'{contractRefs,bundleRef}' bundle_ref,h.ingestion_run_id,h.source_id,h.type_code,h.source_object_id,h.content_hash,h.payload_json::text payload,"
         +"l.lake_object_id,l.state lake_state,l.state_version lake_version,l.access_label,"
         +"l.tenant_id,"
+        +SemanticReferenceFailure.RETAINED_DETAIL_SQL+" reference_failure,"
         +"(exists(select 1 from ouf_udp.resolution_decision d where d.handoff_id=h.handoff_id)) decision_present,"
         +"(exists(select 1 from ouf_udp.materialization_observation o where o.handoff_id=h.handoff_id) "
         +"or exists(select 1 from ouf_udp.object_revision r where r.source_handoff_id=h.handoff_id) "
@@ -166,12 +178,14 @@ public class MaterializationRecoveryService {
         &&(!Boolean.TRUE.equals(row.get("decision_present"))||approvedNewIdentity(row)||pendingReevaluation(row))
         &&Set.of("VERIFIED","COMPACTED","COLD").contains(row.get("lake_state"))&&compatibleBinding(row);
     String baseline=null;String check="NOT_ELIGIBLE";
+    Map<String,Object> referenceFailure=row.get("reference_failure") instanceof String detail ? read(detail) : null;
     if(eligible){
       try{
         var result=catalog.resolve(HandoffIntakeService.object(read(String.valueOf(row.get("payload"))),"contractRefs"));
         if(result.ready()&&result.baselineHash()!=null){baseline=result.baselineHash();check="READY";}
         else check="MISSING";
-      }catch(IllegalArgumentException invalid){check="CONTRACT_INVALID";}
+      }catch(SemanticReferenceFailure rejected){check=rejected.getMessage();referenceFailure=rejected.detail;}
+      catch(IllegalArgumentException invalid){check="CONTRACT_INVALID";}
       catch(IllegalStateException unavailable){check="CATALOG_UNAVAILABLE";}
     }
     Map<String,Object> snapshot=new TreeMap<>();
@@ -185,7 +199,7 @@ public class MaterializationRecoveryService {
         String.valueOf(row.get("state")),version(row),String.valueOf(row.get("intake_state")),
         Objects.toString(row.get("safe_failure_code"),null),eligible,"READY".equals(check),check,
         baseline,digest(snapshot),((Number)row.get("attempts")).intValue(),
-        ((Number)row.get("integrity_attempts")).intValue());
+        ((Number)row.get("integrity_attempts")).intValue(),referenceFailure);
   }
   private boolean pendingReevaluation(Map<String,Object> row){
     try{
@@ -246,7 +260,7 @@ public class MaterializationRecoveryService {
   public record Request(UUID operationId,Long expectedVersion,String expectedSnapshotHash,String reason){}
   public record Review(UUID jobId,String handoffId,String ingestionRunId,String sourceId,String state,long stateVersion,
       String intakeState,String safeFailureCode,boolean retryEligible,boolean contractReady,String contractCheck,
-      String verifiedBaselineHash,String snapshotHash,int attempts,int integrityAttempts){}
+      String verifiedBaselineHash,String snapshotHash,int attempts,int integrityAttempts,Map<String,Object> referenceFailure){}
   public record Receipt(UUID operationId,UUID jobId,String handoffId,long acceptedVersion,String state,boolean repeated){}
 }
 

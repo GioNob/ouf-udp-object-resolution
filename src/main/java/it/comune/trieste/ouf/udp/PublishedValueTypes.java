@@ -24,6 +24,10 @@ final class PublishedValueTypes {
   }
 
   void bind(Map<String,Object> binding, Map<String,Object> actual, Function<Object,String> hash) {
+    bind(binding,actual,hash,false);
+  }
+
+  void bind(Map<String,Object> binding, Map<String,Object> actual, Function<Object,String> hash, boolean compact) {
     String id = text(binding,"semanticId");
     String set = text(binding,"publicationSetId");
     Object artifactType = actual.get("artifact_type");
@@ -31,7 +35,7 @@ final class PublishedValueTypes {
     if (valueMap != binding.containsKey("valueMapRef")) throw definitionError();
     if (valueMap || "DATATYPE".equals(artifactType)) {
       if (!(actual.get("status") instanceof String status) || !Set.of("ACTIVE","DEPRECATED","RETIRED").contains(status)
-          || !object(binding.get("definition")).equals(actual.get("definition"))
+          || (!compact && !object(binding.get("definition")).equals(actual.get("definition")))
           || !text(binding,"definitionSha256").equals(actual.get("definitionSha256"))) throw definitionError();
       embedded(binding,hash);
       return;
