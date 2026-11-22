@@ -150,7 +150,7 @@ public class ScopedIdentityCandidateRepository {
     String legacy=policy.allowAutoNew()+"\u0002"+String.join("\u0001",parts)
         +"\u0002"+String.join("\u0001",rules);
     if(policy.signals().stream().anyMatch(signal->signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1))
-      legacy+="\u0002exact-json-numbers-v1";
+      legacy+="\u0002binary64-geometry-json-v2";
     if(policy.distinctRules().isEmpty())return hash(legacy);
     List<String> distinct=policy.distinctRules().stream().map(rule->rule.id()+"\u0000"+rule.assertionRef()
         +"\u0000"+String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();

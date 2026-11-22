@@ -20,6 +20,13 @@ public final class UdpPorts {
       String id=CanonicalValueType.BASE.get(datatype);
       return id==null?null:CanonicalValueType.base(id,false);
     }
+    Object normalizeGeometry(Object value){
+      var type=canonicalType();
+      if(value==null || type==null || !type.containsGeometry())return value;
+      if(!type.list() && reconciliation!=null && "MULTI".equals(reconciliation.cardinality()) && value instanceof List<?> items)
+        return items.stream().map(type::normalizeItemGeometry).toList();
+      return type.normalizeGeometry(value);
+    }
     public PropertyRule{authorityOrder=List.copyOf(authorityOrder);if(reconciliation!=null)LinkedPropertyReconciler.validate(datatype,reconciliation,authorityOrder,valueType);}
   }
   public record MaterializationProfile(String policyRef,List<PropertyRule> properties,Set<String> bitemporalProperties,int checkpointInterval) {

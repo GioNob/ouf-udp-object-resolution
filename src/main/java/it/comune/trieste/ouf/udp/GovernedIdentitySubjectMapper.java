@@ -17,21 +17,22 @@ public final class GovernedIdentitySubjectMapper {
     if(!policy.sourceId().equals(source.get("sourceId"))
         ||!(publicationValue instanceof String publication)||publication.isBlank())throw invalid();
     PublishedRuntimeConfiguration.validateComparators(policy,materialization);
-    Map<String,String> fields=new HashMap<>();
+    Map<String,UdpPorts.PropertyRule> fields=new HashMap<>();
     for(var rule:materialization.properties()){
       if(rule.propertyIri()==null||rule.propertyIri().isBlank()
           ||rule.sourceField()==null||rule.sourceField().isBlank())throw invalid();
-      if(fields.putIfAbsent(rule.propertyIri(),rule.sourceField())!=null)throw invalid();
+      if(fields.putIfAbsent(rule.propertyIri(),rule)!=null)throw invalid();
     }
     Map<String,GovernedIdentityEngine.Value> values=new HashMap<>();
     for(var signal:policy.signals()){
-      String field=fields.get(signal.id());
-      if(field==null||!signal.semanticRef().equals(signal.id()+"@"+publication))throw invalid();
+      var rule=fields.get(signal.id());
+      if(rule==null||!signal.semanticRef().equals(signal.id()+"@"+publication))throw invalid();
+      String field=rule.sourceField();
       Object raw=canonical.get(field);
       if(canonical.containsKey(field)){
         String encoded;
         if(signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1){
-          try{encoded=new ObjectMapper().writeValueAsString(raw);}
+          try{encoded=new ObjectMapper().writeValueAsString(rule.normalizeGeometry(raw));}
           catch(Exception invalid){throw invalid();}
         }else if(raw instanceof String || raw instanceof Number || raw instanceof Boolean)encoded=String.valueOf(raw);
         else throw invalid();

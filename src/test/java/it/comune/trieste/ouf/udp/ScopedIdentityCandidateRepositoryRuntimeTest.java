@@ -234,18 +234,28 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     var mapping=new UdpPorts.MaterializationProfile("policy://typed",List.of(
         new UdpPorts.PropertyRule("key","key",CanonicalValueType.XSD+"integer","OPEN",List.of()),
         new UdpPorts.PropertyRule("flag","flag",CanonicalValueType.XSD+"boolean","OPEN",List.of()),
-        new UdpPorts.PropertyRule("items","items","list","OPEN",List.of(),null,CanonicalValueType.base("decimal",true))));
+        new UdpPorts.PropertyRule("items","items","list","OPEN",List.of(),null,CanonicalValueType.base("decimal",true)),
+        new UdpPorts.PropertyRule("location","location",CanonicalValueType.GEO,"OPEN",List.of())));
     var payload=envelope("typed","record");
-    payload.put("canonicalPayload",Map.of("code","record","key",integer,"flag",false,"items",List.of("1.2","7")));
+    var point=Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",
+        List.of(new java.math.BigDecimal("13.75000000000000001"),45,5)));
+    payload.put("canonicalPayload",Map.of("code","record","key",integer,"flag",false,"items",List.of("1.2","7"),"location",point));
     intake.accept(payload);
     UUID object=resolver.resolve("candidate-typed",payload,new UdpPorts.ResolutionProfile(
         "CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code")).targetUrbanObjectId();
     materializer.materialize("candidate-typed",object,payload,mapping);
+    assertThat(db.sql("select value_json #>> '{geoJson,coordinates}' from ouf_udp.property_value where property_iri='location'")
+        .query(String.class).single()).isEqualTo("[13.75, 45, 5]");
+    assertThat(db.sql("select canonical_payload #>> '{location,geoJson,coordinates}' from ouf_udp.urban_object_current_state where urban_object_id=:id")
+        .param("id",object).query(String.class).single()).isEqualTo("[13.75, 45, 5]");
     var signals=mapping.properties().stream().map(rule->new GovernedIdentityEngine.Signal(rule.propertyIri(),
         rule.propertyIri()+"@semantic://publication/1",rule.canonicalType().comparator(),false,false,"assertion://"+rule.propertyIri())).toList();
     var policy=new GovernedIdentityEngine.Policy("policy://identity/typed","1","default","ouf:Road","registry",5,true,signals,
-        List.of(new GovernedIdentityEngine.SufficientRule("all",Set.of("key","flag","items"),"assertion://all")));
+        List.of(new GovernedIdentityEngine.SufficientRule("all",Set.of("key","flag","items","location"),"assertion://all")));
     assertThat(backfill.rebuild(policy).indexedObjects()).isOne();
+    var equivalent=Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",
+        List.of(new java.math.BigDecimal("13.74999999999999999"),45,5)));
+    payload.put("canonicalPayload",Map.of("code","record","key",integer,"flag",false,"items",List.of("1.2","7"),"location",equivalent));
     var incoming=new GovernedIdentitySubjectMapper().map("candidate-typed",payload,mapping,policy);
     var retrieved=candidates.retrieve(policy,incoming);
     assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(object);

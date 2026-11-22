@@ -214,6 +214,12 @@ public final class GovernedIdentityEngine {
   }
   private static Object sortedJson(Object value) {
     if(value instanceof Map<?,?> map){
+      // Recognize the D-084 envelope by its complete geometry shape. Ordinary
+      // structured components (including canonical decimal strings) stay exact.
+      if(CanonicalGeometry.isEnvelope(map)) {
+        try {map=CanonicalGeometry.normalize(map);}
+        catch(IllegalArgumentException notGeometry) { /* A JSON_V1 object can have the same field names. */ }
+      }
       Map<String,Object> sorted=new TreeMap<>();
       map.forEach((key,item)->sorted.put(String.valueOf(key),sortedJson(item)));
       return sorted;

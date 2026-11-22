@@ -21,9 +21,10 @@ class ValueTypesContractTest {
   }
   @Test void d084ContractDigestAndComparators() throws Exception {
     byte[] bytes=Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json"));
-    assertEquals("4b90e85ecd1573404612ef0a0ee627feffaa9c189fe4363e82079bd07824c333",digest(bytes));
+    assertEquals("3b85052e253b985f1082527eb595d2f02e5336047203deb3503a9766c1324295",digest(bytes));
     var contract=JSON.readTree(bytes);
     assertEquals("ouf.value-types.v1",contract.get("schema").asText());
+    assertEquals(2,contract.get("revision").intValue());
     assertEquals(CanonicalValueType.BASE.size(),contract.get("baseTypes").size());
     for(var entry:contract.get("baseTypes")){
       String type=entry.get("id").asText();
@@ -46,7 +47,7 @@ class ValueTypesContractTest {
         new Sample("concept","https://example.org/città/uno",List.of("relative/path","broken space:1")),
         new Sample("geometry",point,List.of(Map.of("type","Point","coordinates",List.of(13,45)),
             Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of("13",45))),
-            Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of(13,new BigDecimal("90.000000000000000001")))))));
+            Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of(13,new BigDecimal("90.00000000000001")))))));
     for(var sample:samples){
       var scalar=CanonicalValueType.base(sample.type(),false);
       validate(scalar,sample.canonical());
@@ -280,6 +281,73 @@ class ValueTypesContractTest {
     assertNotEquals(GovernedIdentityEngine.normalize(json,a),GovernedIdentityEngine.normalize(json,b.replace("[1,2]","[2,1]")));
     assertNotEquals(GovernedIdentityEngine.normalize(json,a),GovernedIdentityEngine.normalize(json,b.replace(PRECISE,PRECISE+"1")));
     assertEquals(PRECISE,GovernedIdentityEngine.normalize(GovernedIdentityEngine.ComparatorKind.DECIMAL_V1,PRECISE));
+  }
+  @Test void d084r2SharedWhitespaceVectorsAtCanonicalBoundary() throws Exception {
+    var vectors=JSON.readTree(Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json")))
+        .required("whitespace").required("vectors");
+    var trimmed=List.of("12.50","-0.0","+007","\u001c12","\ufeff12","Via Roma","","","A1","A1");
+    assertEquals(trimmed.size(),vectors.size());
+    var exact=new UdpPorts.PropertyRule("text","urn:text",CanonicalValueType.XSD+"string","OPEN",List.of(),
+        new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null));
+    var nfc=new UdpPorts.PropertyRule("text","urn:text",CanonicalValueType.XSD+"string","OPEN",List.of(),
+        new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","NFC_TRIM",1,"UNBOUNDED",null,null));
+    var types=new PublishedValueTypes();
+    var optional=field("value","date","ONE",false,Map.of());
+    bind(types,"urn:optionalDate",List.of(optional,field("present","boolean","ONE",true,Map.of())));
+    for(int i=0;i<vectors.size();i++){
+      var vector=vectors.get(i);
+      String cell=vector.required("cell").asText(), result=vector.required("result").asText();
+      assertEquals(trimmed.get(i),ValueWhitespace.trim(cell));
+      assertEquals("ABSENT".equals(result),ValueWhitespace.isEmpty(cell));
+      switch(vector.required("reader").asText()){
+        case "DECIMAL_DOT_V1" -> validate(CanonicalValueType.base("decimal",false),result);
+        case "INTEGER_V1" -> {
+          var integer=CanonicalValueType.base("integer",false);
+          rejected(integer,cell);
+          if(!"INVALID".equals(result))validate(integer,result);
+        }
+        case "TEXT_NFC_TRIM_V1" -> assertEquals("ABSENT".equals(result)?null:result,LinkedPropertyReconciler.normalize(cell,nfc));
+        case "DATE_ISO_V1" -> {
+          rejected(CanonicalValueType.base("date",false),cell);
+          validate(structured(types,"urn:optionalDate"),Map.of("present",true));
+        }
+        case "VALUE_MAP_V1" -> assertEquals("A1",ValueWhitespace.trim(cell)); // UDP consumes the mapped concept.
+        case "IDENTITY" -> assertEquals(result,LinkedPropertyReconciler.normalize(cell,exact));
+        default -> throw new AssertionError("Unexpected shared vector");
+      }
+    }
+    assertEquals("",LinkedPropertyReconciler.normalize("",exact));
+    assertEquals("\u2003\u00a0\t",LinkedPropertyReconciler.normalize("\u2003\u00a0\t",exact));
+    assertEquals("\u001c\ufeff",LinkedPropertyReconciler.normalize("\u001c\ufeff",nfc));
+  }
+  @Test void d084r2Binary64GeometrySurvivesDoubleReread() throws Exception {
+    var point=Map.of("type","Point","coordinates",List.of(new BigDecimal("9007199254740993"),
+        new BigDecimal("-0.0000000000000000000000000000000000000001"),Double.MIN_VALUE));
+    var geometry=Map.of("crs","EPSG:3003","geoJson",Map.of("type","GeometryCollection","geometries",List.of(point,
+         Map.of("type","Point","coordinates",List.of(-0.0,1e21,1e-6)))));
+    var shape=CanonicalValueType.base("geometry",false);
+    validate(shape,geometry);
+    String canonical=JSON.writeValueAsString(shape.normalizeGeometry(geometry));
+    assertEquals("{\"crs\":\"EPSG:3003\",\"geoJson\":{\"geometries\":[{\"coordinates\":[9007199254740992,-1e-40,5e-324],\"type\":\"Point\"},"
+        +"{\"coordinates\":[0,1e+21,0.000001],\"type\":\"Point\"}],\"type\":\"GeometryCollection\"}}",canonical);
+    var reread=JSON.readValue(canonical,Object.class); // Default predecessor JSON mapper.
+    assertEquals(canonical,JSON.writeValueAsString(shape.normalizeGeometry(reread)));
+    var json=GovernedIdentityEngine.ComparatorKind.JSON_V1;
+    String observed="{\"amount\":\""+PRECISE+"\",\"shapes\":["+JSON.writeValueAsString(geometry)+"]}";
+    String expected="{\"amount\":\""+PRECISE+"\",\"shapes\":["+canonical+"]}";
+    assertEquals(expected,GovernedIdentityEngine.normalize(json,observed));
+    assertNotEquals(expected,GovernedIdentityEngine.normalize(json,expected.replace(PRECISE,PRECISE+"1")));
+    assertNotEquals(expected,GovernedIdentityEngine.normalize(json,expected.replace("9007199254740992","9007199254740994")));
+  }
+  @Test void d084r2RejectsMeasureWktAndInvalidCoordinates() {
+    var shape=CanonicalValueType.base("geometry",false);
+    for(Object invalid:List.of("POINT M (13 45 9)","POINT ZM (13 45 10 9)",
+        Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of(13,45,10,9))),
+        Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",List.of(13,45,Double.NaN))),
+        Map.of("crs","EPSG:3003","geoJson",Map.of("type","Point","coordinates",List.of(new BigDecimal("1e309"),1)))))
+      rejected(shape,invalid);
+    validate(shape,Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",
+        List.of(13,new BigDecimal("90.000000000000000001"),10))));
   }
   private static CanonicalValueType structured(PublishedValueTypes types,String iri){
     return types.composition(Map.of("kind","STRUCTURED","typeRef",iri+"@"+SET),iri);

@@ -131,13 +131,31 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
     try {return iri!=null && URI.create(iri).isAbsolute();}
     catch (IllegalArgumentException e) {return false;}
   }
+  boolean containsGeometry() {
+    return "geometry".equals(type) || components.values().stream().anyMatch(c -> c.shape().containsGeometry());
+  }
+  Object normalizeGeometry(Object value) {
+    if (!containsGeometry()) return value;
+    if (!list) return normalizeItemGeometry(value);
+    if (!(value instanceof List<?> items)) throw dataError();
+    return items.stream().map(this::normalizeItemGeometry).toList();
+  }
+  Object normalizeItemGeometry(Object value) {
+    if ("geometry".equals(type)) return CanonicalGeometry.normalize(value);
+    if (!containsGeometry()) return value;
+    if (!(value instanceof Map<?,?> fields)) throw dataError();
+    var normalized = new TreeMap<String,Object>();
+    fields.forEach((key, field) -> {
+      if (!(key instanceof String name)) throw dataError();
+      var component = components.get(key);
+      normalized.put(name, component == null ? field : component.shape().normalizeGeometry(field));
+    });
+    return normalized;
+  }
   static void validateBase(String type, Object value, BiConsumer<String,Map<?,?>> geometry) {
     if ("geometry".equals(type)) {
-      if (!(value instanceof Map<?,?> envelope) || !envelope.keySet().equals(Set.of("crs","geoJson"))
-          || !(envelope.get("crs") instanceof String crs) || !crs.matches("EPSG:[1-9][0-9]{0,5}")
-          || !(envelope.get("geoJson") instanceof Map<?,?> geo)) throw dataError();
-      checkGeometry(geo,"EPSG:4326".equals(crs));
-      geometry.accept(crs,geo);
+      var envelope = CanonicalGeometry.normalize(value);
+      geometry.accept((String)envelope.get("crs"),(Map<?,?>)envelope.get("geoJson"));
       return;
     }
     if ("boolean".equals(type)) {
@@ -158,39 +176,6 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
       };
       if (!valid) throw dataError();
     } catch (DateTimeParseException e) {throw dataError();}
-  }
-  private static void checkGeometry(Map<?,?> geo, boolean geographic) {
-    if (!(geo.get("type") instanceof String kind)) throw dataError();
-    if ("GeometryCollection".equals(kind)) {
-      if (!(geo.get("geometries") instanceof List<?> children) || children.isEmpty()) throw dataError();
-      for (Object item : children) {
-        if (!(item instanceof Map<?,?> child)) throw dataError();
-        checkGeometry(child,geographic);
-      }
-      return;
-    }
-    int depth = switch (kind) {
-      case "Point" -> 0;
-      case "MultiPoint","LineString" -> 1;
-      case "MultiLineString","Polygon" -> 2;
-      case "MultiPolygon" -> 3;
-      default -> throw dataError();
-    };
-    coordinates(geo.get("coordinates"),depth,geographic);
-  }
-  private static void coordinates(Object raw, int depth, boolean geographic) {
-    if (!(raw instanceof List<?> parts) || parts.isEmpty()) throw dataError();
-    if (depth>0) {
-      for (Object part : parts) coordinates(part,depth-1,geographic);
-      return;
-    }
-    if (parts.size()!=2) throw dataError(); // UDP spatial policy is two-dimensional.
-    for (int axis=0; axis<2; axis++) {
-      Object coordinate=parts.get(axis);
-      if (!(coordinate instanceof Number n) || n instanceof Double || n instanceof Float) throw dataError();
-      if (geographic && new BigDecimal(n.toString()).abs().compareTo(BigDecimal.valueOf(axis==0?180:90))>0)
-        throw dataError();
-    }
   }
   static int compare(String type, String a, String b) {
     return switch (type) {
