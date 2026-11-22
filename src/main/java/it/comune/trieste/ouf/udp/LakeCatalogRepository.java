@@ -27,7 +27,7 @@ public class LakeCatalogRepository {
       var previous=latest.get();
       var object=previous.object();
       if(!label.equals(object.accessLabel())||!retentionClass.equals(object.retentionClass())
-          ||!mediaType.equals(object.mediaType())||size!=object.size())throw new IllegalStateException("UDP_LAKE_COPY_POLICY_CONFLICT");
+          ||!mediaType.equals(object.mediaType())||size!=object.size())throw new CopyPolicyConflict();
       if(!"RAW".equals(tier)||!Set.of("COMPACTED","FAILED","QUARANTINED").contains(object.state()))return object;
       copyNo=Math.incrementExact(previous.number());
     }
@@ -43,6 +43,49 @@ public class LakeCatalogRepository {
     return get(id);
   }
   private record Copy(LakeObject object,long number){}
+  static final class CopyPolicyConflict extends IllegalStateException {
+    CopyPolicyConflict(){super("UDP_LAKE_COPY_POLICY_CONFLICT");}
+  }
+
+  @Transactional public Optional<LakeObject> claimWrite(LakeObject object,String owner,String correlation){
+    var claimed=db.sql("""
+        update ouf_udp.lake_object
+        set state=case when state='FAILED' then 'STAGED' else state end,
+            lease_owner=:owner,lease_until=clock_timestamp()+interval '5 minutes',
+            lease_generation=lease_generation+1,state_version=state_version+1
+        where lake_object_id=:id and tier in ('NORMALIZED','CURATED') and state=:state and state_version=:version
+          and state in ('FAILED','STAGED','DURABLE') and (lease_until is null or lease_until<=clock_timestamp())
+        returning *
+        """).param("owner",owner).param("id",object.id()).param("state",object.state()).param("version",object.version())
+        .query((rs,n)->map(rs)).optional();
+    if(claimed.isPresent()&&"FAILED".equals(object.state())){
+      event(object.id(),"FAILED","STAGED","SYSTEM","",correlation,"LAKE_OBJECT_STATE_CHANGED",
+          Map.of("reason","UDP_LAKE_IDENTICAL_CONTENT_RETRY"));
+    }
+    return claimed;
+  }
+
+  @Transactional public Optional<LakeObject> advanceWrite(LakeObject object,String to,String correlation,Map<String,Object> detail){
+    boolean keepLease="STAGED".equals(object.state())&&"DURABLE".equals(to);
+    var updated=db.sql("""
+        update ouf_udp.lake_object
+        set state=:to,state_version=state_version+1,
+            verified_at=case when :to='VERIFIED' then transaction_timestamp() else verified_at end,
+            lease_owner=case when :keepLease then lease_owner else null end,
+            lease_until=case when :keepLease then lease_until else null end
+        where lake_object_id=:id and tier in ('NORMALIZED','CURATED') and state=:from and state_version=:version
+          and lease_owner=:owner and lease_generation=:generation and lease_until>clock_timestamp()
+        returning *
+        """).param("to",to).param("keepLease",keepLease).param("id",object.id()).param("from",object.state())
+        .param("version",object.version()).param("owner",object.leaseOwner()).param("generation",object.leaseGeneration())
+        .query((rs,n)->map(rs)).optional();
+    if(updated.isPresent()){
+      String eventType=to.equals(object.state())?"LAKE_OBJECT_VERIFICATION_INTERRUPTED":"LAKE_OBJECT_STATE_CHANGED";
+      event(object.id(),object.state(),to,"SYSTEM","",correlation,eventType,detail);
+    }
+    return updated;
+  }
+
   public record Segment(UUID pack,String locator,String hash,long packSize,long offset,long length,String state,String catalogLocator){}
   public Segment compactedSegment(LakeObject input){
     return db.sql("""

@@ -16,7 +16,7 @@ jobs:
     env:
       PREDECESSOR: ${{ inputs.predecessor || 'ebc5a3221a9071b158a233441abf4db99270fee3' }}
       PREDECESSOR_SCHEMA: '38'
-      CANDIDATE_SCHEMA: '38'
+      CANDIDATE_SCHEMA: '39'
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0, persist-credentials: false}
