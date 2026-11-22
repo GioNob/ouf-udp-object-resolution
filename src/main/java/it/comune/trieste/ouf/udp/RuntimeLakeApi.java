@@ -25,6 +25,10 @@ public class RuntimeLakeApi {
     if(!"VERIFIED".equals(object.state()))throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"UDP_LAKE_NOT_DURABLE");
     String ref="lake://"+object.id();return ResponseEntity.created(URI.create(ref)).body(Map.of("objectRef",ref,"contentHash",object.hash(),"durable",true));
   }
+  @ExceptionHandler(LakeLifecycleService.StoreRejected.class)
+  ResponseEntity<Map<String,String>> storeRejected(LakeLifecycleService.StoreRejected error){
+    return ResponseEntity.status(error.getStatusCode()).body(Map.of("code",error.getReason()));
+  }
   static String hash(byte[] value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));}catch(Exception e){throw new IllegalStateException("UDP_HASH_FAILED",e);}}
   public record Write(String runId,String sourceId,String typeCode,String sourceObjectId,String zone,String contentBase64,String contentHash,String idempotencyKey){}
 }

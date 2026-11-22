@@ -2,6 +2,8 @@
 
 Il predecessore supportato per D-080 è `7809a0fdf6bd70cf02e15a4630f8fe9cd59695be`, in esercizio con V37. Il ritorno riavvia quell'immagine sul database V38 popolato, con Flyway attivo, validazione e `*:future`. La qualifica della coppia richiede un'esecuzione verde del job `predecessor-return`.
 
+Dal rilascio della PR #52 il predecessore in esercizio è `ebc5a3221a9071b158a233441abf4db99270fee3`, già su V38 (immagine costruita dal merge di prova `3acd707c`). Il job `predecessor-return` dei candidati successivi, a partire dai tipi di valore (task-41, D-084), lo usa con `PREDECESSOR_SCHEMA=38`: lo scenario A/B/A resta lo stesso, con predecessore e candidato sulla stessa versione Flyway.
+
 ## Dipendenze verificate sul ponte
 
 | Oggetto | Scritture e letture a `7809a0fd` | Contratto V38 |

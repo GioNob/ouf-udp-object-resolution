@@ -12,7 +12,7 @@ import java.util.*;
 /** Versioned, deterministic property reconciliation. No identity decisions or I/O. */
 public final class LinkedPropertyReconciler {
   public static final String POLICY="urn:ouf:policy:linked-object-property-reconciliation:v1";
-  private static final ObjectMapper JSON=new ObjectMapper().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+  private static final ObjectMapper JSON=new ObjectMapper().enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
   private LinkedPropertyReconciler(){}
   public record Rule(String policyRef,String cardinality,String normalizerRef,int normalizerVersion,
                      String validity,String revisionField,String deletionField){
@@ -29,13 +29,19 @@ public final class LinkedPropertyReconciler {
                        List<Member> members,List<Map<String,Object>> candidates,String evidenceHash){}
   // Preserve published datatype IRIs; resolve only the exact supported string alias for comparison.
   static String comparisonDatatype(String datatype){return "http://www.w3.org/2001/XMLSchema#string".equals(datatype)?"string":datatype;}
-  static void validate(String datatype,Rule rule,List<String> order){
+  static void validate(String datatype,Rule rule,List<String> order,CanonicalValueType shape){
+    if(datatype==null)throw invalid();
     datatype=comparisonDatatype(datatype);
-    if(!Set.of("string","number","integer","boolean","object").contains(Objects.toString(datatype,""))
+    if(shape==null&&!CanonicalValueType.BASE.containsKey(datatype)&&!Set.of("string","number","integer","boolean","object").contains(Objects.toString(datatype,""))
         ||"NFC_TRIM".equals(rule.normalizerRef())&&!"string".equals(datatype)
         ||rule.deletionField()!=null&&order.isEmpty()||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(String::isBlank))throw invalid();
   }
-  static boolean absent(Object value){return value==null||value instanceof String s&&s.isBlank();}
+  static boolean absent(Object value,UdpPorts.PropertyRule rule){
+    if(value==null)return true;
+    if(!(value instanceof String s))return false;
+    if(rule.canonicalType()==null)return s.isBlank(); // Legacy property reconciliation.
+    return "NFC_TRIM".equals(rule.reconciliation().normalizerRef()) && ValueWhitespace.isEmpty(s);
+  }
   /** Build exactly the same candidate for preview and commit from a canonical handoff. */
   static Map<String,Object> incoming(String handoff,Map<String,Object> envelope,UdpPorts.PropertyRule rule){
     var config=rule.reconciliation();var payload=HandoffIntakeService.object(envelope,"canonicalPayload");
@@ -43,19 +49,34 @@ public final class LinkedPropertyReconciler {
     if(config.deletionField()!=null&&payload.containsKey(config.deletionField())){
       if(!(payload.get(config.deletionField()) instanceof Boolean))throw invalidValue();deletion=Boolean.TRUE.equals(payload.get(config.deletionField()));
     }
-    Object value=payload.get(rule.sourceField());if(!deletion&&absent(value))return null;
+    Object value=payload.get(rule.sourceField());if(!deletion&&absent(value,rule))return null;
     var provenance=new LinkedHashMap<String,Object>();provenance.put("handoffRef","handoff://"+handoff);provenance.put("ingestionRunId",envelope.get("ingestionRunId"));provenance.put("lineageRef",envelope.get("lineageId"));provenance.put("sourceIdentity",source);provenance.put("rawObjectRef",envelope.get("rawObjectRef"));provenance.put("contractRefs",envelope.get("contractRefs"));provenance.put("propertyIri",rule.propertyIri());provenance.put("reconciliationRule",config);
     if(deletion){if(!rule.authorityOrder().contains(String.valueOf(source.get("sourceId"))))throw invalidValue();value=null;provenance.put("explicitPropertyDeletion",true);}
     else if("MULTI".equals(config.cardinality())&&value instanceof List<?> items){for(Object item:items)normalize(item,rule);}
     else normalize(value,rule);
+    value=rule.normalizeGeometry(value);
     if(config.revisionField()!=null){Object revision=payload.get(config.revisionField());if(!(revision instanceof Number))throw invalidValue();var n=new BigDecimal(revision.toString());if(n.signum()<0||n.stripTrailingZeros().scale()>0)throw invalidValue();provenance.put("sourceRecordRevision",revision);}
     var row=new LinkedHashMap<String,Object>();row.put("contribution_id",UUID.nameUUIDFromBytes((handoff+"\n"+rule.propertyIri()).getBytes(StandardCharsets.UTF_8)));row.put("source_id",source.get("sourceId"));row.put("access_label",rule.accessLabel());row.put("value_json",write(value));row.put("value_hash",hash(value));row.put("provenance",write(provenance));var identity=new TreeMap<>(source);identity.remove("observedAt");row.put("source_identity",write(identity));return row;
   }
   static String write(Object value){try{return JSON.writeValueAsString(value);}catch(Exception e){throw invalidValue();}}
   static Object normalize(Object value,UdpPorts.PropertyRule rule){
-    if(absent(value))return null;
+    if(absent(value,rule))return null;
+    var type=rule.canonicalType();
+    if(type!=null && !"string".equals(comparisonDatatype(rule.datatype()))){
+      try{
+        if(type.list() && "MULTI".equals(rule.reconciliation().cardinality()))type.validateItem(value,(crs,geo)->{});
+        else type.validate(value,(crs,geo)->{});
+      }catch(IllegalArgumentException e){throw invalidValue();}
+      return canonical(type.list() && "MULTI".equals(rule.reconciliation().cardinality())
+          ?type.normalizeItemGeometry(value):type.normalizeGeometry(value));
+    }
     return switch(comparisonDatatype(rule.datatype())){
-      case "string" -> {if(!(value instanceof String s))throw invalidValue();yield "NFC_TRIM".equals(rule.reconciliation().normalizerRef())?Normalizer.normalize(s.strip(),Normalizer.Form.NFC):s;}
+      case "string" -> {
+        if(!(value instanceof String s))throw invalidValue();
+        if(!"NFC_TRIM".equals(rule.reconciliation().normalizerRef()))yield s;
+        yield type==null?Normalizer.normalize(s.strip(),Normalizer.Form.NFC)
+            :ValueWhitespace.trim(Normalizer.normalize(s,Normalizer.Form.NFC));
+      }
       case "number","integer" -> {if(!(value instanceof Number))throw invalidValue();BigDecimal n;try{n=new BigDecimal(value.toString()).stripTrailingZeros();}catch(NumberFormatException e){throw invalidValue();}if("integer".equals(rule.datatype())&&n.scale()>0)throw invalidValue();yield n;}
       case "boolean" -> {if(!(value instanceof Boolean))throw invalidValue();yield value;}
       case "object" -> {if(!(value instanceof Map<?,?> map)||map.containsKey("geoJson")||map.containsKey("coordinates")||map.containsKey("geometries"))throw invalidValue();yield canonical(value);}
@@ -76,7 +97,7 @@ public final class LinkedPropertyReconciler {
         if(from!=null&&now.isBefore(from))continue;
       }
       if(deleted(row)&&(!rule.authorityOrder().contains(String.valueOf(row.get("source_id")))||rule.reconciliation().deletionField()==null))throw invalidValue();
-      if(!deleted(row)&&absent(decode(row.get("value_json"))))continue;
+      if(!deleted(row)&&absent(decode(row.get("value_json")),rule))continue;
       int rank=rule.authorityOrder().indexOf(String.valueOf(row.get("source_id")));row.put("authority_rank",rank<0?10000:rank);active.add(row);
     }
     if(rule.reconciliation().revisionField()!=null){
@@ -113,7 +134,11 @@ public final class LinkedPropertyReconciler {
     var members=new ArrayList<Member>();for(var entry:values.entrySet())members.add(new Member(entry.getValue(),List.copyOf(sources.get(entry.getKey()))));
     if(members.isEmpty())return new Result("NO_VALID_CONTRIBUTION",current,false,false,List.of(),candidates,evidence);
     Object value="MULTI".equals(rule.reconciliation().cardinality())?members.stream().map(Member::value).toList():members.getFirst().value();
-    return new Result(selected!=null?"HUMAN_SELECTED":Objects.equals(canonical(current),canonical(value))?"UNCHANGED":current==null?"ADDED":"RECONCILED",value,true,false,List.copyOf(members),candidates,evidence);
+    return new Result(selected!=null?"HUMAN_SELECTED":sameValue(rule,current,value)?"UNCHANGED":current==null?"ADDED":"RECONCILED",value,true,false,List.copyOf(members),candidates,evidence);
+  }
+  private static boolean sameValue(UdpPorts.PropertyRule rule,Object current,Object value){
+    try{return Objects.equals(canonical(rule.normalizeGeometry(current)),canonical(value));}
+    catch(IllegalArgumentException incompatibleHistoricalValue){return false;}
   }
   private static Map<String,Object> evidence(Map<String,Object> row,Object original,Object normalized){var item=new LinkedHashMap<String,Object>();item.put("contributionId",row.get("contribution_id"));item.put("sourceId",row.get("source_id"));item.put("accessLabel",row.get("access_label"));item.put("originalValue",original);item.put("normalizedValue",normalized);item.put("provenance",provenance(row));return Collections.unmodifiableMap(item);}
   static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_PROPERTY_RECONCILIATION_PROFILE_UNSUPPORTED");}

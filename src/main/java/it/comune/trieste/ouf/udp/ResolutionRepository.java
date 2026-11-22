@@ -21,6 +21,18 @@ public class ResolutionRepository {
         .param("j",claim.jobId()).param("w",claim.worker()).param("v",claim.stateVersion()).param("handoff",claim.handoffId())
         .query(Integer.class).optional().isEmpty())throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
   }
+  @Transactional public void recordMaterializationType(Claim claim,String canonicalType){
+    lockClaim(claim);
+    var recorded=db.sql("""
+        select safe_detail->>'canonicalType' from ouf_udp.handoff_event
+        where handoff_id=:h and event_type='MATERIALIZATION_TYPE_VERIFIED'
+        """).param("h",claim.handoffId()).query(String.class).optional();
+    if(recorded.isEmpty()){
+      event(claim.handoffId(),"MATERIALIZATION_TYPE_VERIFIED",Map.of("canonicalType",canonicalType));
+    }else if(!recorded.orElseThrow().equals(canonicalType)){
+      throw new IllegalStateException("UDP_MATERIALIZATION_TYPE_DRIFT");
+    }
+  }
   @Transactional public void integrityPassed(Claim claim,String baselineHash){int n=db.sql("update ouf_udp.materialization_job set integrity_baseline_hash=:hash,missing_ref_hashes='[]'::jsonb,integrity_checked_at=transaction_timestamp(),next_integrity_check_at=null,safe_failure_code=null,updated_at=transaction_timestamp() where "+CURRENT_CLAIM).param("hash",baselineHash).param("j",claim.jobId()).param("w",claim.worker()).param("v",claim.stateVersion()).param("handoff",claim.handoffId()).update();if(n!=1)throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");event(claim.handoffId(),"REFERENCE_INTEGRITY_PASSED",Map.of("baselineHash",baselineHash));}
   @Transactional public void pause(Claim claim,List<String> missing,long delayMillis,int maxAttempts){int next=claim.integrityAttempts()+1;String state=next>=maxAttempts?"QUARANTINED":"PAUSED";int n=db.sql("update ouf_udp.materialization_job set state=:state,state_version=state_version+1,claimed_by=null,lease_until=null,missing_ref_hashes=cast(:missing as jsonb),integrity_attempts=:attempts,integrity_checked_at=transaction_timestamp(),next_integrity_check_at=case when :state='PAUSED' then transaction_timestamp()+(:delay*interval '1 millisecond') else null end,safe_failure_code='UDP_REFERENCE_INTEGRITY_MISSING',updated_at=transaction_timestamp() where "+CURRENT_CLAIM).param("state",state).param("missing",write(missing)).param("attempts",next).param("delay",delayMillis).param("j",claim.jobId()).param("w",claim.worker()).param("v",claim.stateVersion()).param("handoff",claim.handoffId()).update();if(n!=1)throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");event(claim.handoffId(),"PAUSED".equals(state)?"REFERENCE_INTEGRITY_PAUSED":"REFERENCE_INTEGRITY_QUARANTINED",Map.of("missingRefHashes",missing,"integrityAttempt",next));}
   @Transactional public void quarantine(Claim claim,String code){quarantine(claim,code,Map.of());}

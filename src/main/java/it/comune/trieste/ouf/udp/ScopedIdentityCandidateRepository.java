@@ -133,7 +133,7 @@ public class ScopedIdentityCandidateRepository {
   private String scalar(Object encoded){
     if(!(encoded instanceof String text))return null;
     try{Object value=json.readValue(text,Object.class);
-      return value instanceof String || value instanceof Number ? String.valueOf(value):null;
+      return value instanceof String || value instanceof Number || value instanceof Boolean ? String.valueOf(value):null;
     }catch(Exception failure){throw new IllegalStateException("UDP_INDEXED_VALUE_INVALID",failure);}
   }
   static String hash(String value){try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
@@ -149,6 +149,8 @@ public class ScopedIdentityCandidateRepository {
             +String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();
     String legacy=policy.allowAutoNew()+"\u0002"+String.join("\u0001",parts)
         +"\u0002"+String.join("\u0001",rules);
+    if(policy.signals().stream().anyMatch(signal->signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1))
+      legacy+="\u0002binary64-geometry-json-v2";
     if(policy.distinctRules().isEmpty())return hash(legacy);
     List<String> distinct=policy.distinctRules().stream().map(rule->rule.id()+"\u0000"+rule.assertionRef()
         +"\u0000"+String.join("\u0000",new TreeSet<>(rule.signalIds()))).sorted().toList();

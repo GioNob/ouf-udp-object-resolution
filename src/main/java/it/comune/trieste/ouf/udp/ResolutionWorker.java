@@ -21,6 +21,8 @@ public class ResolutionWorker {
       var resolutionProfile=resolutionConfig.resolve(bundle,claim.typeCode());
       var materializationProfile=materializationConfig.resolve(bundle,claim.typeCode());
       referenceGate.profilesReady(claim);
+      materializer.validatePayload(claim.payload(),materializationProfile);
+      jobs.recordMaterializationType(claim,resolutionProfile.canonicalType());
       transactions.executeWithoutResult(status->{
         jobs.lockClaim(claim);
         materializer.rememberProfile(claim.handoffId(),resolutionProfile.canonicalType(),bundle,materializationProfile);

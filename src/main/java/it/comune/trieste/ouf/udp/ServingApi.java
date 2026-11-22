@@ -14,9 +14,9 @@ public class ServingApi {
   private final GovernedServingService service;public ServingApi(GovernedServingService service){this.service=service;}
   @GetMapping("/objects/{id}") Map<String,Object> current(@PathVariable UUID id,HttpServletRequest r){return service.current(id,context(r));}
   @GetMapping("/objects/{id}/history") GovernedServingService.Page<Map<String,Object>> history(@PathVariable UUID id,@RequestParam(defaultValue="50") int pageSize,@RequestParam(required=false) String cursor,@RequestParam(required=false) OffsetDateTime asOf,HttpServletRequest r){return service.history(id,pageSize,cursor,asOf,context(r));}
-  @GetMapping("/objects") GovernedServingService.Page<Map<String,Object>> search(@RequestParam String type,@RequestParam(defaultValue="50") int pageSize,@RequestParam(required=false) String cursor,HttpServletRequest r){return service.search(type,pageSize,cursor,context(r));}
+  @GetMapping("/objects") GovernedServingService.SearchPage search(@RequestParam String type,@RequestParam(defaultValue="50") int pageSize,@RequestParam(required=false) String cursor,HttpServletRequest r){return service.search(type,pageSize,cursor,context(r));}
   // The mediated MCP request is JSON; keep the same owner-side admission and row filtering as GET.
-  @PostMapping("/objects/search") GovernedServingService.Page<Map<String,Object>> searchPost(@RequestBody JsonNode body,HttpServletRequest r){
+  @PostMapping("/objects/search") GovernedServingService.SearchPage searchPost(@RequestBody JsonNode body,HttpServletRequest r){
     if(body==null||!body.isObject()||body.size()>3||!body.has("type")||!body.get("type").isTextual()||body.get("type").asText().isBlank()||body.get("type").asText().length()>128||body.get("type").asText().contains("*")||body.get("type").asText().contains("%")
       ||body.has("pageSize")&&(!body.get("pageSize").canConvertToInt()||body.get("pageSize").asInt()<1||body.get("pageSize").asInt()>100)
       ||body.has("cursor")&&(!body.get("cursor").isTextual()||body.get("cursor").asText().isBlank()||body.get("cursor").asText().length()>128))

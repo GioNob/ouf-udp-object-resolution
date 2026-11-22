@@ -1,5 +1,6 @@
 spring:
   http.converters.preferred-json-mapper: jackson2
+  jackson2.deserialization.use-big-decimal-for-floats: true
   application.name: ouf-udp-object-resolution
   datasource:
     url: ${OUF_UDP_DB_URL}

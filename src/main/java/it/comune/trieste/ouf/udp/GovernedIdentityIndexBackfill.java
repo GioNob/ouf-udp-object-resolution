@@ -138,13 +138,13 @@ public class GovernedIdentityIndexBackfill {
       try{scalar=json.readValue((String)row.get("value_json"),Object.class);}
       catch(Exception failure){throw invalid("VALUE_INVALID");}
       boolean structured=signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1;
-      if(!structured&&!(scalar instanceof String||scalar instanceof Number))throw invalid("VALUE_UNSUPPORTED");
+      if(!structured&&!(scalar instanceof String||scalar instanceof Number||scalar instanceof Boolean))throw invalid("VALUE_UNSUPPORTED");
       String normalized;
       try{normalized=GovernedIdentityEngine.normalize(signal.comparator(),
           structured?(String)row.get("value_json"):String.valueOf(scalar));}
       catch(IllegalArgumentException failure){throw invalid("COMPARATOR_UNSUPPORTED");}
       Object canonical=current.get(property);
-      if(!current.containsKey(property)||!structured&&!(canonical instanceof String||canonical instanceof Number))
+      if(!current.containsKey(property)||!structured&&!(canonical instanceof String||canonical instanceof Number||canonical instanceof Boolean))
         throw invalid("CURRENT_VALUE_UNSUPPORTED");
       String canonicalNormalized;
       try{canonicalNormalized=GovernedIdentityEngine.normalize(signal.comparator(),
