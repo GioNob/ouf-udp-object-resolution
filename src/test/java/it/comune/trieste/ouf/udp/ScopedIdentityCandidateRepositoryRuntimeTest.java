@@ -228,6 +228,29 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .param("p",policy.ref()).query(Boolean.class).single()).isTrue();
   }
 
+  @Test void d084TypedCandidateTokensMatchTheIncomingSignal(){
+    clearObjects();
+    String integer="999999999999999999999999999999999999999999999";
+    var mapping=new UdpPorts.MaterializationProfile("policy://typed",List.of(
+        new UdpPorts.PropertyRule("key","key",CanonicalValueType.XSD+"integer","OPEN",List.of()),
+        new UdpPorts.PropertyRule("flag","flag",CanonicalValueType.XSD+"boolean","OPEN",List.of()),
+        new UdpPorts.PropertyRule("items","items","list","OPEN",List.of(),null,CanonicalValueType.base("decimal",true))));
+    var payload=envelope("typed","record");
+    payload.put("canonicalPayload",Map.of("code","record","key",integer,"flag",false,"items",List.of("1.2","7")));
+    intake.accept(payload);
+    UUID object=resolver.resolve("candidate-typed",payload,new UdpPorts.ResolutionProfile(
+        "CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code")).targetUrbanObjectId();
+    materializer.materialize("candidate-typed",object,payload,mapping);
+    var signals=mapping.properties().stream().map(rule->new GovernedIdentityEngine.Signal(rule.propertyIri(),
+        rule.propertyIri()+"@semantic://publication/1",rule.canonicalType().comparator(),false,false,"assertion://"+rule.propertyIri())).toList();
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/typed","1","default","ouf:Road","registry",5,true,signals,
+        List.of(new GovernedIdentityEngine.SufficientRule("all",Set.of("key","flag","items"),"assertion://all")));
+    assertThat(backfill.rebuild(policy).indexedObjects()).isOne();
+    var incoming=new GovernedIdentitySubjectMapper().map("candidate-typed",payload,mapping,policy);
+    var retrieved=candidates.retrieve(policy,incoming);
+    assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(object);
+    assertThat(new GovernedIdentityEngine().decide(policy,incoming,retrieved).outcome()).isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+  }
   @Test void structuredCanonicalValuesAreIndexedAndComparedAcrossJsonKeyOrder(){
     clearObjects();
     Map<String,Object> envelope=envelope("json","ignored");

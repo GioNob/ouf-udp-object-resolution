@@ -12,7 +12,7 @@ import java.util.*;
 /** Versioned, deterministic property reconciliation. No identity decisions or I/O. */
 public final class LinkedPropertyReconciler {
   public static final String POLICY="urn:ouf:policy:linked-object-property-reconciliation:v1";
-  private static final ObjectMapper JSON=new ObjectMapper().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+  private static final ObjectMapper JSON=new ObjectMapper().enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
   private LinkedPropertyReconciler(){}
   public record Rule(String policyRef,String cardinality,String normalizerRef,int normalizerVersion,
                      String validity,String revisionField,String deletionField){
@@ -29,9 +29,10 @@ public final class LinkedPropertyReconciler {
                        List<Member> members,List<Map<String,Object>> candidates,String evidenceHash){}
   // Preserve published datatype IRIs; resolve only the exact supported string alias for comparison.
   static String comparisonDatatype(String datatype){return "http://www.w3.org/2001/XMLSchema#string".equals(datatype)?"string":datatype;}
-  static void validate(String datatype,Rule rule,List<String> order){
+  static void validate(String datatype,Rule rule,List<String> order,CanonicalValueType shape){
+    if(datatype==null)throw invalid();
     datatype=comparisonDatatype(datatype);
-    if(!Set.of("string","number","integer","boolean","object").contains(Objects.toString(datatype,""))
+    if(shape==null&&!CanonicalValueType.BASE.containsKey(datatype)&&!Set.of("string","number","integer","boolean","object").contains(Objects.toString(datatype,""))
         ||"NFC_TRIM".equals(rule.normalizerRef())&&!"string".equals(datatype)
         ||rule.deletionField()!=null&&order.isEmpty()||new HashSet<>(order).size()!=order.size()||order.stream().anyMatch(String::isBlank))throw invalid();
   }
@@ -54,6 +55,14 @@ public final class LinkedPropertyReconciler {
   static String write(Object value){try{return JSON.writeValueAsString(value);}catch(Exception e){throw invalidValue();}}
   static Object normalize(Object value,UdpPorts.PropertyRule rule){
     if(absent(value))return null;
+    var type=rule.canonicalType();
+    if(type!=null && !"string".equals(comparisonDatatype(rule.datatype()))){
+      try{
+        if(type.list() && "MULTI".equals(rule.reconciliation().cardinality()))type.validateItem(value,(crs,geo)->{});
+        else type.validate(value,(crs,geo)->{});
+      }catch(IllegalArgumentException e){throw invalidValue();}
+      return canonical(value);
+    }
     return switch(comparisonDatatype(rule.datatype())){
       case "string" -> {if(!(value instanceof String s))throw invalidValue();yield "NFC_TRIM".equals(rule.reconciliation().normalizerRef())?Normalizer.normalize(s.strip(),Normalizer.Form.NFC):s;}
       case "number","integer" -> {if(!(value instanceof Number))throw invalidValue();BigDecimal n;try{n=new BigDecimal(value.toString()).stripTrailingZeros();}catch(NumberFormatException e){throw invalidValue();}if("integer".equals(rule.datatype())&&n.scale()>0)throw invalidValue();yield n;}

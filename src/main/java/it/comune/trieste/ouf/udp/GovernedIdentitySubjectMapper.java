@@ -16,6 +16,7 @@ public final class GovernedIdentitySubjectMapper {
     Object publicationValue=refs.get("semanticPublicationSetRef");
     if(!policy.sourceId().equals(source.get("sourceId"))
         ||!(publicationValue instanceof String publication)||publication.isBlank())throw invalid();
+    PublishedRuntimeConfiguration.validateComparators(policy,materialization);
     Map<String,String> fields=new HashMap<>();
     for(var rule:materialization.properties()){
       if(rule.propertyIri()==null||rule.propertyIri().isBlank()
@@ -32,7 +33,7 @@ public final class GovernedIdentitySubjectMapper {
         if(signal.comparator()==GovernedIdentityEngine.ComparatorKind.JSON_V1){
           try{encoded=new ObjectMapper().writeValueAsString(raw);}
           catch(Exception invalid){throw invalid();}
-        }else if(raw instanceof String || raw instanceof Number)encoded=String.valueOf(raw);
+        }else if(raw instanceof String || raw instanceof Number || raw instanceof Boolean)encoded=String.valueOf(raw);
         else throw invalid();
         values.put(signal.id(),new GovernedIdentityEngine.Value(signal.semanticRef(),encoded,
             "handoff://"+handoffId+"#canonicalPayload/"+field));

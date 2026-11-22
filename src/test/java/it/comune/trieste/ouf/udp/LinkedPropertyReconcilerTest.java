@@ -19,8 +19,19 @@ class LinkedPropertyReconcilerTest {
       assertThat(LinkedPropertyReconciler.normalize(" A ",restored)).isEqualTo(normalizer.equals("EXACT_TYPED")?" A ":"A");
       assertThatThrownBy(()->LinkedPropertyReconciler.normalize(42,restored)).hasMessage("UDP_PROPERTY_CONTRIBUTION_INVALID");
     }
-    for(String invalid:List.of("xsd:string","https://www.w3.org/2001/XMLSchema#string","http://www.w3.org/2001/XMLSchema#date"))
+    for(String invalid:List.of("xsd:string","https://www.w3.org/2001/XMLSchema#string","http://www.w3.org/2001/XMLSchema#Date"))
       assertThatThrownBy(()->new UdpPorts.PropertyRule("name","name",invalid,"OPEN",List.of(),new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null))).hasMessage("UDP_PROPERTY_RECONCILIATION_PROFILE_UNSUPPORTED");
+  }
+  @Test void d084ExactTypedLinkedValuesPreserveNumericStringsAndLegacyNumbers(){
+    var policy=new LinkedPropertyReconciler.Rule(LinkedPropertyReconciler.POLICY,"SINGLE","EXACT_TYPED",1,"UNBOUNDED",null,null);
+    String precise="999999999999999999999999999999999.1";
+    var decimal=new UdpPorts.PropertyRule("name","name",CanonicalValueType.XSD+"decimal","OPEN",List.of(),policy);
+    assertThat(result(decimal,null,row("registry","a",precise,decimal)).value()).isEqualTo(precise);
+    assertThatThrownBy(()->LinkedPropertyReconciler.normalize("1.00",decimal)).hasMessage("UDP_PROPERTY_CONTRIBUTION_INVALID");
+    var legacy=new UdpPorts.PropertyRule("name","name","integer","OPEN",List.of(),policy);
+    assertThat(LinkedPropertyReconciler.normalize(12,legacy)).isEqualTo(new java.math.BigDecimal("12"));
+    var list=new UdpPorts.PropertyRule("name","name","list","OPEN",List.of(),policy,CanonicalValueType.base("decimal",true));
+    assertThat(result(list,null,row("file","a",List.of("2","1.2"),list)).value()).isEqualTo(List.of("2","1.2"));
   }
   static final OffsetDateTime NOW=OffsetDateTime.parse("2026-10-17T12:00:00Z");
   @Test @SuppressWarnings("unchecked") void expiredRevisionNeverResurrectsSupersededValueAndFutureRevisionWaits(){

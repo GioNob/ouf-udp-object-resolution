@@ -30,9 +30,17 @@ public class GovernedIdentityPreflight {
     if(!sourceId.equals(source.get("sourceId")))throw invalid("SOURCE");
     var udp=object(object(object(configuration,"extractionProfile"),"runtime"),"udp");
     var resolution=object(udp,"resolution");
-    var materialization=json.convertValue(object(udp,"materialization"),UdpPorts.MaterializationProfile.class);
-    Set<String> mapped=new HashSet<>();
-    if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||mappings.isEmpty())throw invalid("MAPPING");
+    var compositions=PublishedRuntimeConfiguration.compositions(semantic);
+    var types=new PublishedValueTypes();
+    if(configuration.get("semanticReferenceBindings") instanceof List<?> bindings){
+      for(Object item:bindings){
+        var binding=PublishedValueTypes.object(item);
+        if(binding.containsKey("definition"))types.embedded(binding,this::hash);
+      }
+    }
+    var materialization=PublishedRuntimeConfiguration.materialization(json,object(udp,"materialization"),compositions,types);
+    Set<String> mapped=new HashSet<>(compositions.keySet());
+    if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||(mappings.isEmpty()&&mapped.isEmpty()))throw invalid("MAPPING");
     for(Object entry:mappings){if(!(entry instanceof Map<?,?> mapping)
         ||!(mapping.get("targetPropertyIri") instanceof String iri)||iri.isBlank()
         ||!mapped.add(iri))throw invalid("MAPPING");}
@@ -48,6 +56,7 @@ public class GovernedIdentityPreflight {
             &&canonicalClass.equals(target.get("classIri"))))throw invalid("CLASS");
     var policy=PublishedIdentityPolicy.decode(json,resolution,actor.tenantId(),sourceId,
         canonicalClass,mapped);
+    PublishedRuntimeConfiguration.validateComparators(policy,materialization);
     // Serialize with existing scope materialization/rebuild writers. Repeated delivery of
     // the same immutable review reconciles its live proof instead of replacing coverage.
     locks.acquire(policy.tenantId(),policy.canonicalClass());

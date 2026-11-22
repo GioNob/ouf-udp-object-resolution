@@ -32,6 +32,7 @@ components:
       type: object
       additionalProperties: true
       properties:
+        propertyDatatypes: {type: object, additionalProperties: {type: string}, description: Published datatype for each visible key in properties}
         geometry: {type: object, description: EPSG4326 serving geometry in XY longitude/latitude order}
         geometryCrs: {type: string, const: 'EPSG:4326'}
         canonicalGeometry:

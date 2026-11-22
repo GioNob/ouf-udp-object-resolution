@@ -24,7 +24,12 @@ public class PublishedRuntimeConfiguration {
     http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).followRedirects(HttpClient.Redirect.NEVER).build();
   }
   public Profiles resolve(String ref,String type){
-    var envelope=get("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(ref));
+    return resolve(ref,type,publication(ref),null);
+  }
+  private Map<String,Object> publication(String ref){
+    return get("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(ref));
+  }
+  private Profiles resolve(String ref,String type,Map<String,Object> envelope,Map<String,Object> refs){
     var bundle=object(envelope,"bundle");var unsigned=new TreeMap<>(bundle);unsigned.remove("checksum");
     String hash=hash(unsigned);
     if(!tenant.equals(envelope.get("tenantId"))||!hash.equals(bundle.get("checksum"))||!hash.equals(envelope.get("checksum"))||!ref.equals(text(bundle,"bundleId")+":"+text(bundle,"bundleVersion")+":"+hash))throw invalid();
@@ -38,7 +43,19 @@ public class PublishedRuntimeConfiguration {
     if(!governed&&!Set.of("strategyId","strategyVersion","policyRef","canonicalType","canonicalKeyProperty","matchProperty","weighted")
         .containsAll(resolutionDefinition.keySet()))throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
     UdpPorts.ResolutionProfile resolution=governed?null:json.convertValue(resolutionDefinition,UdpPorts.ResolutionProfile.class);
-    UdpPorts.MaterializationProfile materialization=json.convertValue(object(profile,"materialization"),UdpPorts.MaterializationProfile.class);
+    var compositions=compositions(semantic);
+    var types=new PublishedValueTypes();
+    var rawMaterialization=object(profile,"materialization");
+    if(!(rawMaterialization.get("properties") instanceof List<?> rawProperties))throw invalid();
+    boolean structured=rawProperties.stream().map(PublishedValueTypes::object).map(p->text(p,"datatype"))
+        .anyMatch(d->CanonicalValueType.absolute(d)&&!CanonicalValueType.BASE.containsKey(d));
+    if(refs!=null){
+      var execution=object(object(object(bundle,"extractionProfile"),"runtime"),"execution");
+      for(String key:List.of("sourceSchemaRef","semanticPublicationSetRef","adapterProfileRef"))if(!text(execution,key).equals(text(refs,key)))throw invalid();
+      for(String key:List.of("mappingRefs","authorityPolicyRef","relationshipResolutionStrategyRefs"))if(!Objects.equals(execution.get(key),refs.get(key)))throw invalid();
+    }
+    if(refs!=null || structured) verifyBindings(bundle,structured?types:null);
+    var materialization=materialization(json,rawMaterialization,compositions,types);
     if(!governed&&java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
         resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank()))
       throw new IllegalArgumentException("UDP_RESOLUTION_PROFILE_UNSUPPORTED");
@@ -48,13 +65,16 @@ public class PublishedRuntimeConfiguration {
     var labels=new HashMap<String,String>();
     if(!(bundle.get("dataAccessPolicies") instanceof List<?> policies)||policies.isEmpty())throw invalid();
     for(Object p:policies){if(!(p instanceof Map<?,?> policy)||!Set.of("PROPERTY","RELATIONSHIP").contains(policy.get("scope")))throw invalid();labels.put(String.valueOf(policy.get("scope"))+":"+policy.get("target"),String.valueOf(policy.get("label")));}
-    if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||mappings.isEmpty())throw invalid();
-    var targets=new HashSet<String>();for(Object m:mappings){if(!(m instanceof Map<?,?> mapping))throw invalid();targets.add(String.valueOf(mapping.get("targetPropertyIri")));}
+    if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||(mappings.isEmpty()&&compositions.isEmpty()))throw invalid();
+    var targets=new HashSet<String>();for(Object m:mappings){if(!(m instanceof Map<?,?> mapping))throw invalid();if(!targets.add(String.valueOf(mapping.get("targetPropertyIri"))))throw invalid();}
+    for(var entry:compositions.entrySet())if(!targets.add(entry.getKey()) ||
+        !text(entry.getValue(),"dataAccessLabel").equals(labels.get("PROPERTY:"+entry.getKey())))throw invalid();
     for(var property:materialization.properties())if(!targets.remove(property.propertyIri())||!property.sourceField().equals(property.propertyIri())||!property.accessLabel().equals(labels.get("PROPERTY:"+property.propertyIri())))throw invalid();
     if(!targets.isEmpty())throw invalid();
     GovernedIdentityEngine.Policy identity=governed?PublishedIdentityPolicy.decode(json,resolutionDefinition,
         tenant,text(source,"sourceId"),canonicalClass,Set.copyOf(materialization.properties().stream()
             .map(UdpPorts.PropertyRule::propertyIri).toList())):null;
+    if(identity!=null) validateComparators(identity,materialization);
     UdpPorts.SpatialProfile spatial=null;
     if(profile.containsKey("spatial")){
       spatial=json.convertValue(object(profile,"spatial"),UdpPorts.SpatialProfile.class);
@@ -93,24 +113,63 @@ public class PublishedRuntimeConfiguration {
   }
   public HistoricalContractCatalog.Resolution resolveContracts(Map<String,Object> refs){
     String ref=text(refs,"bundleRef");
-    var envelope=get("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(ref));
+    var envelope=publication(ref);
     String type=text(object(object(object(envelope,"bundle"),"semanticMapping"),"sourceType"),"typeCode");
-    var profiles=resolve(ref,type);var bundle=profiles.bundle();
-    var execution=object(object(object(bundle,"extractionProfile"),"runtime"),"execution");
+    var bundle=resolve(ref,type,envelope,refs).bundle();
     var resolved=new ArrayList<HistoricalContractCatalog.ResolvedRef>();
-    for(String key:List.of("sourceSchemaRef","semanticPublicationSetRef","adapterProfileRef"))if(!text(execution,key).equals(text(refs,key)))throw invalid();
-    for(String key:List.of("mappingRefs","authorityPolicyRef","relationshipResolutionStrategyRefs"))if(!Objects.equals(execution.get(key),refs.get(key)))throw invalid();
+    resolved.add(new HistoricalContractCatalog.ResolvedRef("BUNDLE",ref,text(bundle,"bundleVersion"),text(bundle,"checksum")));
+    return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),hash(refs));
+  }
+  private void verifyBindings(Map<String,Object> bundle,PublishedValueTypes types){
+    var execution=object(object(object(bundle,"extractionProfile"),"runtime"),"execution");
     Object raw=bundle.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw invalid();
     boolean publicationFound=false;
     for(Object item:bindings){if(!(item instanceof Map<?,?>))throw invalid();@SuppressWarnings("unchecked")var binding=(Map<String,Object>)item;
-      String id=text(binding,"semanticId"),revision=UUID.fromString(text(binding,"revisionId")).toString(),publication=UUID.fromString(text(binding,"publicationSetId")).toString();
+      String id=text(binding,"semanticId"),revision=uuid(binding,"revisionId"),publication=uuid(binding,"publicationSetId");
       var actual=get("/api/semantic/v1/references:resolve?semanticId="+escape(id)+"&revisionId="+revision+"&publicationSetId="+publication);
       if(!id.equals(actual.get("semantic_id"))||!text(binding,"semanticVersion").equals(actual.get("semantic_version"))||!revision.equals(actual.get("revision_id"))||!publication.equals(actual.get("publication_set_id")))throw invalid();
-      publicationFound|=publication.equals(refs.get("semanticPublicationSetRef"));
+      if(types!=null)types.bind(binding,actual,this::hash);
+      publicationFound|=publication.equals(execution.get("semanticPublicationSetRef"));
     }
     if(!publicationFound)throw invalid();
-    resolved.add(new HistoricalContractCatalog.ResolvedRef("BUNDLE",ref,text(bundle,"bundleVersion"),text(bundle,"checksum")));
-    return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),hash(refs));
+  }
+  static Map<String,Map<String,Object>> compositions(Map<String,Object> semantic){
+    var result=new HashMap<String,Map<String,Object>>();
+    if(!(semantic.getOrDefault("compositions",List.of()) instanceof List<?> items))throw invalid();
+    for(Object raw:items){
+      var composition=PublishedValueTypes.object(raw);
+      if(result.putIfAbsent(text(composition,"targetPropertyIri"),composition)!=null)throw invalid();
+    }
+    return result;
+  }
+  static UdpPorts.MaterializationProfile materialization(ObjectMapper json,Map<String,Object> raw,
+      Map<String,Map<String,Object>> compositions,PublishedValueTypes types){
+    if(!(raw.get("properties") instanceof List<?> properties))throw invalid();
+    var rules=new ArrayList<Map<String,Object>>();
+    for(Object item:properties){
+      var rule=new LinkedHashMap<>(PublishedValueTypes.object(item));
+      if(rule.containsKey("valueType"))throw invalid(); // Only the registry verification path builds this shape.
+      var composition=compositions.get(text(rule,"propertyIri"));
+      String datatype=text(rule,"datatype");
+      if(composition!=null)rule.put("valueType",types.composition(composition,datatype));
+      else if(CanonicalValueType.absolute(datatype)&&!CanonicalValueType.BASE.containsKey(datatype))
+        rule.put("valueType",types.pinned(datatype));
+      else if("list".equals(datatype))throw CanonicalValueType.definitionError();
+      rules.add(rule);
+    }
+    var projected=new LinkedHashMap<>(raw);projected.put("properties",rules);
+    return json.convertValue(projected,UdpPorts.MaterializationProfile.class);
+  }
+  static void validateComparators(GovernedIdentityEngine.Policy policy,UdpPorts.MaterializationProfile materialization){
+    var comparators=new HashMap<String,GovernedIdentityEngine.ComparatorKind>();
+    for(var signal:policy.signals())comparators.put(signal.id(),signal.comparator());
+    for(var rule:materialization.properties()){
+      var type=rule.canonicalType();
+      if(type==null || !comparators.containsKey(rule.propertyIri()))continue;
+      var expected=rule.reconciliation()!=null&&"MULTI".equals(rule.reconciliation().cardinality())
+          ?GovernedIdentityEngine.ComparatorKind.JSON_V1:type.comparator();
+      if(comparators.get(rule.propertyIri())!=expected)throw new IllegalArgumentException("UDP_IDENTITY_DATATYPE_COMPARATOR_INVALID");
+    }
   }
   @SuppressWarnings("unchecked") private Map<String,Object> get(String path){
     String credential;
@@ -141,6 +200,11 @@ public class PublishedRuntimeConfiguration {
   private String hash(Object value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(value)));}catch(Exception e){throw invalid();}}
   @SuppressWarnings("unchecked") static Map<String,Object> object(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof Map<?,?> value))throw invalid();return (Map<String,Object>)value;}
   static String text(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof String value)||value.isBlank())throw invalid();return value;}
+  private static String uuid(Map<String,Object> binding,String field){
+    try{
+      return UUID.fromString(text(binding,field)).toString();
+    }catch(IllegalArgumentException failure){throw invalid();}
+  }
   private static String escape(String value){return URLEncoder.encode(value,StandardCharsets.UTF_8);}
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_PINNED_PROFILE_INVALID");}
   public record Profiles(Map<String,Object> bundle,UdpPorts.ResolutionProfile resolution,UdpPorts.MaterializationProfile materialization,UdpPorts.SpatialProfile spatial,UdpPorts.RelationshipProfile relationships,GovernedIdentityEngine.Policy identity){
