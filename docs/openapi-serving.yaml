@@ -6,7 +6,16 @@ paths:
   /api/udp/v1/objects/{id}/history:
     get: {operationId: readObjectHistory, x-ouf-capability: urban.object.history.read, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized revision page}}}
   /api/udp/v1/objects:
-    get: {operationId: searchObjects, x-ouf-capability: urban.object.search, x-ouf-required-indexed-filter: type, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true, responses: {'200': {description: Authorized object page}}}
+    get: {operationId: searchObjects, x-ouf-capability: urban.object.search, x-ouf-required-indexed-filter: type, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true,
+          responses: {'200': {description: Authorized object page, content: {application/json: {schema: {$ref: '#/components/schemas/ObjectSearchPage'}}}}}}
+  /api/udp/v1/objects/search:
+    post: {operationId: searchObjectsMediated, x-ouf-capability: urban.object.search, x-ouf-mcp-eligible: true,
+           responses: {'200': {description: Authorized object page, content: {application/json: {schema: {$ref: '#/components/schemas/ObjectSearchPage'}}}}}}
+  /api/udp/v1/operations/acquisition:
+    post: {operationId: readAcquisitionEvidence, x-ouf-capability: urban.acquisition.read, x-ouf-max-page-size: 100, x-ouf-mcp-eligible: true,
+           requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AcquisitionEvidenceQuery'}}}},
+           responses: {'200': {description: Authorized acquisition evidence page, content: {application/json: {schema: {$ref: '#/components/schemas/AcquisitionEvidencePage'}}}},
+                       '403': {description: Owner authorization denied}}}
   /api/udp/v1/objects/related-search:
     post: {operationId: relatedSearch, x-ouf-capability: urban.object.related_search, x-ouf-max-target-types: 10, x-ouf-max-results: 200, x-ouf-mcp-eligible: true, responses: {'200': {description: Typed fixed-join cross-domain correlation}}}
   /api/udp/v1/objects/{id}/relationships:
@@ -28,6 +37,55 @@ paths:
 
 components:
   schemas:
+    SearchOutcome:
+      type: string
+      enum: [NO_OBJECTS, MATERIALIZATION_PENDING, PARTIAL, COMPLETE, INCOMPLETE]
+    SearchOutcomePage:
+      type: object
+      required: [items, partial, outcome]
+      properties:
+        items: {type: array, items: {type: object}}
+        partial: {type: boolean, description: Legacy page flag}
+        outcome: {$ref: '#/components/schemas/SearchOutcome'}
+        pollAfterSeconds: {type: integer, minimum: 5, maximum: 3600}
+      if:
+        properties:
+          outcome: {const: MATERIALIZATION_PENDING}
+      then:
+        required: [pollAfterSeconds]
+      else:
+        properties:
+          pollAfterSeconds: false
+    ObjectSearchPage:
+      allOf:
+        - {$ref: '#/components/schemas/SearchOutcomePage'}
+        - type: object
+          required: [nextCursor]
+          properties:
+            nextCursor: {type: [string, 'null']}
+    AcquisitionEvidenceQuery:
+      type: object
+      additionalProperties: false
+      required: [sourceId, runId]
+      properties:
+        sourceId: {type: string, minLength: 1, maxLength: 200}
+        runId: {type: string, format: uuid}
+        limit: {type: integer, minimum: 1, maximum: 100, default: 50}
+        afterHandoffId: {type: string, minLength: 1, maxLength: 200}
+    AcquisitionEvidencePage:
+      allOf:
+        - {$ref: '#/components/schemas/SearchOutcomePage'}
+        - type: object
+          required: [schema, sourceId, runId, nextHandoffId, authorization, authorizationDecisionRef, ingestionAckProven, redactionReasons]
+          properties:
+            schema: {const: ouf.udp.acquisition-evidence.v1}
+            sourceId: {type: string}
+            runId: {type: string, format: uuid}
+            nextHandoffId: {type: [string, 'null']}
+            authorization: {type: string, enum: [AUTHORIZED, REDACTED]}
+            authorizationDecisionRef: {type: string}
+            ingestionAckProven: {const: false}
+            redactionReasons: {type: array, items: {type: string}}
     CurrentObject:
       type: object
       additionalProperties: true

@@ -160,6 +160,9 @@ class GovernedServingRuntimeTest {
     var json=new com.fasterxml.jackson.databind.ObjectMapper();
     var page1=json.readTree(firstPage.getResponse().getContentAsString());
     assertThat(page1.path("items").size()).isEqualTo(1);
+    assertThat(page1.path("outcome").asText()).isEqualTo("PARTIAL");
+    assertThat(page1.path("partial").asBoolean()).isFalse();
+    assertThat(page1.has("pollAfterSeconds")).isFalse();
     String cursor=page1.path("nextCursor").asText();
     assertThat(cursor).isNotBlank().doesNotContain(first.objectId.toString()).doesNotContain(second.objectId.toString());
     var secondPage=http.perform(searchPost(json.writeValueAsString(Map.of("type","ouf:Asset","pageSize",1,"cursor",cursor)))
@@ -167,6 +170,8 @@ class GovernedServingRuntimeTest {
       .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
     var page2=json.readTree(secondPage.getResponse().getContentAsString());
     assertThat(page2.path("items").size()).isEqualTo(1);
+    assertThat(page2.path("outcome").asText()).isEqualTo("COMPLETE");
+    assertThat(page2.has("pollAfterSeconds")).isFalse();
     assertThat(Set.of(page1.path("items").get(0).path("urbanObjectId").asText(),page2.path("items").get(0).path("urbanObjectId").asText()))
       .containsExactlyInAnyOrder(first.objectId.toString(),second.objectId.toString());
     assertThat(page2.path("nextCursor").isNull()).isTrue();

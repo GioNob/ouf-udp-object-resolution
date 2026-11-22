@@ -30,6 +30,7 @@ public class PublishedResolutionLoop {
       var profiles=configuration.resolve(HandoffIntakeService.text(refs,"bundleRef"),claim.typeCode());
       gate.profilesReady(claim);
       materializer.validatePayload(claim.payload(),profiles.materialization());
+      jobs.recordMaterializationType(claim,profiles.canonicalType());
       tx.executeWithoutResult(status->{
         jobs.lockClaim(claim);
         db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))").param("key","resolution:"+profiles.canonicalType()).query().singleRow();
