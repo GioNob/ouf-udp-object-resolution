@@ -143,8 +143,20 @@ class ValueTypesContractTest {
     }
   }
   private static void valueMap(PublishedValueTypes registry,String id,String set,String vocabulary) {
-    registry.bind(Map.of("semanticId",id,"publicationSetId",set,"valueMapRef",id+"@"+set,"vocabularyRef",vocabulary),
-        Map.of("semantic_id",id,"publication_set_id",set),ValueTypesContractTest::hash);
+    var pin=valueMapPin(id,set,vocabulary+"@"+SET);
+    registry.bind(pin,resolvedValueMap(pin),ValueTypesContractTest::hash);
+  }
+  private static Map<String,Object> valueMapPin(String id,String set,String target) {
+    var definition=Map.of("targetVocabulary",target,"entries",List.of(Map.of("code","R","concept","urn:red")));
+    return new HashMap<>(Map.of("semanticId",id,"semanticVersion","1","revisionId",new UUID(0,42).toString(),
+        "publicationSetId",set,"valueMapRef",id+"@"+set,"targetVocabulary",target,
+        "definition",definition,"definitionSha256",hash(definition).substring(7)));
+  }
+  private static Map<String,Object> resolvedValueMap(Map<String,Object> pin) {
+    return Map.of("semantic_id",pin.get("semanticId"),"semantic_version",pin.get("semanticVersion"),
+        "revision_id",pin.get("revisionId"),"publication_set_id",pin.get("publicationSetId"),
+        "artifact_type","VALUE_MAP","status","ACTIVE","definition",pin.get("definition"),
+        "definitionSha256",pin.get("definitionSha256"));
   }
   @Test void d084CompactedManyKeepsOnlyCommonProducerEvidence() {
     var registry=new PublishedValueTypes();
@@ -181,11 +193,46 @@ class ValueTypesContractTest {
     validate(retained,Map.of("n","9007199254740993"));
   }
   @Test void d084ValueMapPinMustMatchThePublishedCoordinate() {
-    for (var pin:List.of(Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef","urn:other@"+SET,"vocabularyRef","urn:v"),
-        Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef","urn:map@"+SET,"vocabularyRef","relative"),
-        Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef","urn:map@"+SET))) {
+    var good=valueMapPin("urn:map",SET,"urn:v@"+SET);
+    for (var change:List.of(Map.of("valueMapRef","urn:other@"+SET),Map.of("targetVocabulary","urn:other@"+SET),
+        Map.of("vocabularyRef","urn:other"))) {
+      var pin=new HashMap<>(good);
+      pin.putAll(change);
       assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
-          ()->new PublishedValueTypes().bind(new HashMap<>(pin),Map.of(),ValueTypesContractTest::hash)).getMessage());
+          ()->new PublishedValueTypes().bind(pin,resolvedValueMap(good),ValueTypesContractTest::hash)).getMessage());
+    }
+    var missing=new HashMap<>(good);
+    missing.remove("targetVocabulary");
+    assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
+        ()->new PublishedValueTypes().bind(missing,resolvedValueMap(good),ValueTypesContractTest::hash)).getMessage());
+  }
+  @Test void d084EmbeddedValueMapBuildsTheSameProofAsTheResolvedPin() {
+    String vocabulary="https://example.org/vocab@colours";
+    var pin=valueMapPin("urn:map",SET,vocabulary+"@"+new UUID(0,43));
+    pin.put("vocabularyRef",vocabulary); // A matching historical alias is allowed.
+    var resolved=new PublishedValueTypes();
+    resolved.bind(pin,resolvedValueMap(pin),ValueTypesContractTest::hash);
+    var embedded=new PublishedValueTypes();
+    embedded.embedded(pin,ValueTypesContractTest::hash);
+    var definition=Map.of("components",List.of(field("colour","concept","ONE",true,Map.of("vocabularyRef",vocabulary))));
+    var typePin=pin("urn:record",definition,hash(definition).substring(7));
+    var expression=Map.<String,Object>of("kind","STRUCTURED","typeRef","urn:record@"+SET,
+        "components",List.of(Map.of("component","colour","fieldName","code","reader","VALUE_MAP_V1",
+            "transformParams",Map.of("valueMapRef","urn:map"))));
+    for(var types:List.of(resolved,embedded)){
+      types.embedded(typePin,ValueTypesContractTest::hash);
+      validate(types.composition(expression,"urn:record"),Map.of("colour","urn:red"));
+      assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
+          ()->structured(types,"urn:map")).getMessage());
+      assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
+          ()->types.pinned("urn:map")).getMessage());
+    }
+    assertEquals(resolved.composition(expression,"urn:record"),embedded.composition(expression,"urn:record"));
+    var otherPin=Map.<String,Object>of("semanticId","urn:map","publicationSetId",new UUID(0,44).toString());
+    resolved.bind(otherPin,Map.of("artifact_type","PROPERTY"),ValueTypesContractTest::hash);
+    embedded.recordReference(otherPin);
+    for(var types:List.of(resolved,embedded)){
+      unverified(types.composition(expression,"urn:record"),Map.of("colour","urn:red"));
     }
   }
   private static void unverified(CanonicalValueType shape,Object value) {

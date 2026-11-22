@@ -26,21 +26,17 @@ final class PublishedValueTypes {
   void bind(Map<String,Object> binding, Map<String,Object> actual, Function<Object,String> hash) {
     String id = text(binding,"semanticId");
     String set = text(binding,"publicationSetId");
-    String coordinate = id+"@"+set;
-    uniquePins.merge(id,coordinate,(a,b)->"");
-    if (binding.containsKey("valueMapRef")) {
-      String ref = text(binding,"valueMapRef");
-      String vocabulary = text(binding,"vocabularyRef");
-      requirePublicationSet(set);
-      if (!ref.equals(coordinate) || !absolute(vocabulary) || valueMaps.putIfAbsent(ref,vocabulary)!=null)
-        throw definitionError();
-    }
-    if ("DATATYPE".equals(actual.get("artifact_type"))) {
+    Object artifactType = actual.get("artifact_type");
+    boolean valueMap = "VALUE_MAP".equals(artifactType);
+    if (valueMap != binding.containsKey("valueMapRef")) throw definitionError();
+    if (valueMap || "DATATYPE".equals(artifactType)) {
       if (!(actual.get("status") instanceof String status) || !Set.of("ACTIVE","DEPRECATED","RETIRED").contains(status)
           || !object(binding.get("definition")).equals(actual.get("definition"))
           || !text(binding,"definitionSha256").equals(actual.get("definitionSha256"))) throw definitionError();
       embedded(binding,hash);
-    } else if ("CONCEPT".equals(actual.get("artifact_type"))) {
+      return;
+    }
+    if ("CONCEPT".equals(artifactType)) {
       // The resolver has already matched this revision in a PUBLISHED historical set.
       var definition = object(actual.get("definition"));
       if (binding.containsKey("definitionSha256") || binding.containsKey("definition")
@@ -52,14 +48,42 @@ final class PublishedValueTypes {
     } else if (binding.containsKey("definitionSha256") || binding.containsKey("definition")) {
       throw definitionError();
     }
+    recordReference(id,set);
+  }
+
+  static boolean hasEmbeddedDefinition(Map<?,?> binding) {
+    return binding.containsKey("definitionSha256") || binding.containsKey("valueMapRef");
+  }
+
+  // Include all known coordinates when resolving an unqualified reader alias.
+  void recordReference(Map<String,Object> binding) {
+    if (binding.get("semanticId") instanceof String id && binding.get("publicationSetId") instanceof String set)
+      recordReference(id,set);
+  }
+
+  private void recordReference(String id,String set) {
+    uniquePins.merge(id,id+"@"+set,(a,b)->"");
   }
 
   // Preflight can validate this frozen proposal locally. Runtime also calls bind against references:resolve.
   void embedded(Map<String,Object> binding, Function<Object,String> hash) {
-    String ref=text(binding,"semanticId")+"@"+text(binding,"publicationSetId");
+    String id = text(binding,"semanticId");
+    String set = text(binding,"publicationSetId");
+    String ref = id+"@"+set;
     var definition=object(binding.get("definition"));
-    if (!hash.apply(definition).equals("sha256:"+text(binding,"definitionSha256"))
-        || definitions.putIfAbsent(ref,definition)!=null) throw definitionError();
+    if (!hash.apply(definition).equals("sha256:"+text(binding,"definitionSha256"))) throw definitionError();
+    if (binding.containsKey("valueMapRef")) {
+      if (!ref.equals(text(binding,"valueMapRef"))) throw definitionError();
+      semanticId(ref);
+      String target = text(binding,"targetVocabulary");
+      String vocabulary = semanticId(target);
+      if (!target.equals(definition.get("targetVocabulary"))
+          || (binding.containsKey("vocabularyRef") && !vocabulary.equals(binding.get("vocabularyRef")))
+          || valueMaps.putIfAbsent(ref,vocabulary)!=null) throw definitionError();
+    } else if (definitions.putIfAbsent(ref,definition)!=null) {
+      throw definitionError();
+    }
+    recordReference(id,set);
   }
 
   CanonicalValueType pinned(String datatype) {

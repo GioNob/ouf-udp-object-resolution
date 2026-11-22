@@ -31,7 +31,8 @@ public class PublishedRuntimeConfiguration {
   }
   private Profiles resolve(String ref,String type,Map<String,Object> envelope,Map<String,Object> refs){
     var bundle=object(envelope,"bundle");var unsigned=new TreeMap<>(bundle);unsigned.remove("checksum");
-    String hash=hash(unsigned);
+    Object rawBindings=bundle.get("semanticReferenceBindings");
+    String hash=canonicalPublicationHash(json,unsigned);
     if(!tenant.equals(envelope.get("tenantId"))||!hash.equals(bundle.get("checksum"))||!hash.equals(envelope.get("checksum"))||!ref.equals(text(bundle,"bundleId")+":"+text(bundle,"bundleVersion")+":"+hash))throw invalid();
     var semantic=object(bundle,"semanticMapping");var source=object(semantic,"sourceType");
     if(!type.equals(source.get("typeCode"))||!envelope.get("sourceId").equals(source.get("sourceId")))throw invalid();
@@ -54,9 +55,9 @@ public class PublishedRuntimeConfiguration {
       for(String key:List.of("sourceSchemaRef","semanticPublicationSetRef","adapterProfileRef"))if(!text(execution,key).equals(text(refs,key)))throw invalid();
       for(String key:List.of("mappingRefs","authorityPolicyRef","relationshipResolutionStrategyRefs"))if(!Objects.equals(execution.get(key),refs.get(key)))throw invalid();
     }
-    boolean embeddedTypes=bundle.get("semanticReferenceBindings") instanceof List<?> bindings
-        && bindings.stream().anyMatch(b->b instanceof Map<?,?> pin && pin.containsKey("definitionSha256"));
-    if(refs!=null || structured || embeddedTypes) verifyBindings(bundle,types,structured);
+    boolean embeddedDefinitions=rawBindings instanceof List<?> bindings
+        && bindings.stream().anyMatch(b->b instanceof Map<?,?> pin && PublishedValueTypes.hasEmbeddedDefinition(pin));
+    if(refs!=null || structured || embeddedDefinitions) verifyBindings(bundle,types,structured);
     var materialization=materialization(json,rawMaterialization,compositions,types);
     if(!governed&&java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
         resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank()))
@@ -120,7 +121,7 @@ public class PublishedRuntimeConfiguration {
     var bundle=resolve(ref,type,envelope,refs).bundle();
     var resolved=new ArrayList<HistoricalContractCatalog.ResolvedRef>();
     resolved.add(new HistoricalContractCatalog.ResolvedRef("BUNDLE",ref,text(bundle,"bundleVersion"),text(bundle,"checksum")));
-    return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),hash(refs));
+    return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),contractRefsHash(refs));
   }
   private void verifyBindings(Map<String,Object> bundle,PublishedValueTypes types,boolean structured){
     var execution=object(object(object(bundle,"extractionProfile"),"runtime"),"execution");
@@ -130,8 +131,9 @@ public class PublishedRuntimeConfiguration {
       String id=text(binding,"semanticId"),revision=uuid(binding,"revisionId"),publication=uuid(binding,"publicationSetId");
       var actual=get("/api/semantic/v1/references:resolve?semanticId="+escape(id)+"&revisionId="+revision+"&publicationSetId="+publication);
       if(!id.equals(actual.get("semantic_id"))||!text(binding,"semanticVersion").equals(actual.get("semantic_version"))||!revision.equals(actual.get("revision_id"))||!publication.equals(actual.get("publication_set_id")))throw invalid();
-      if(structured || "DATATYPE".equals(actual.get("artifact_type")) || binding.containsKey("definitionSha256"))
-        types.bind(binding,actual,this::hash);
+      if(structured || "DATATYPE".equals(actual.get("artifact_type")) || "VALUE_MAP".equals(actual.get("artifact_type"))
+          || PublishedValueTypes.hasEmbeddedDefinition(binding))
+        types.bind(binding,actual,definition->canonicalPublicationHash(json,definition));
       publicationFound|=publication.equals(execution.get("semanticPublicationSetRef"));
     }
     if(!publicationFound)throw invalid();
@@ -200,7 +202,15 @@ public class PublishedRuntimeConfiguration {
     try{return json.readValue(response.body(),Map.class);}
     catch(java.io.IOException failure){throw PublicationAccessFailure.invalid();}
   }
-  private String hash(Object value){try{return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(value)));}catch(Exception e){throw invalid();}}
+  private String contractRefsHash(Map<String,Object> refs){try{return sha256(json.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS,true).writeValueAsBytes(refs));}catch(Exception e){throw invalid();}}
+  static String canonicalPublicationHash(ObjectMapper json,Object value){
+    // Onboarding and the Registry encode compact JSON as UTF-8, including supplementary characters.
+    try{return sha256(json.writer(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).without(SerializationFeature.INDENT_OUTPUT)
+        .writeValueAsString(value).getBytes(StandardCharsets.UTF_8));}catch(Exception e){throw invalid();}
+  }
+  private static String sha256(byte[] bytes)throws java.security.NoSuchAlgorithmException{
+    return "sha256:"+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+  }
   @SuppressWarnings("unchecked") static Map<String,Object> object(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof Map<?,?> value))throw invalid();return (Map<String,Object>)value;}
   static String text(Map<String,Object> parent,String key){if(!(parent.get(key) instanceof String value)||value.isBlank())throw invalid();return value;}
   private static String uuid(Map<String,Object> binding,String field){

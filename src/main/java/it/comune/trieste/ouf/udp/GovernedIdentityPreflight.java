@@ -35,8 +35,12 @@ public class GovernedIdentityPreflight {
     if(configuration.get("semanticReferenceBindings") instanceof List<?> bindings){
       for(Object item:bindings){
         var binding=PublishedValueTypes.object(item);
-        if(binding.containsKey("definitionSha256"))types.embedded(binding,this::hash);
-        else if(binding.containsKey("definition")){
+        if(PublishedValueTypes.hasEmbeddedDefinition(binding)){
+          types.embedded(binding,definition->PublishedRuntimeConfiguration.canonicalPublicationHash(json,definition));
+          continue;
+        }
+        types.recordReference(binding);
+        if(binding.containsKey("definition")){
           var definition=PublishedValueTypes.object(binding.get("definition"));
           if(!(definition.get("vocabularyRef") instanceof String vocabulary) || !CanonicalValueType.absolute(vocabulary))
             throw CanonicalValueType.definitionError();
