@@ -49,8 +49,12 @@ class PublishedRelationshipBindingTest {
     var udp=map(runtime,"udp");udp.remove("relationships");
     var set=new UUID(1,1).toString();map(runtime,"execution").put("semanticPublicationSetRef",set);
     String root="urn:d084:record", child="urn:d084:detail";
+    String mapId="urn:d084:map", vocabulary="urn:d084:colours";
+    var items=List.of("first","second").stream().map(prefix->Map.of("structured",Map.of("typeRef",child+"@"+set,
+        "components",List.of(Map.of("component","value","fieldName",prefix,"reader","DECIMAL_DOT_V1"),
+            Map.of("component","colour","fieldName",prefix+"Code","reader","VALUE_MAP_V1","transformParams",Map.of("valueMapRef",mapId)))))).toList();
     map(b,"semanticMapping").put("compositions",List.of(Map.of("kind","STRUCTURED","targetPropertyIri","urn:record",
-        "dataAccessLabel","OPEN","typeRef",root+"@"+set)));
+        "dataAccessLabel","OPEN","typeRef",root+"@"+set,"components",List.of(Map.of("component","value","items",items)))));
     ((List<Object>)b.get("dataAccessPolicies")).add(Map.of("scope","PROPERTY","target","urn:record","label","OPEN"));
     ((List<Object>)map(udp,"materialization").get("properties")).add(Map.of("sourceField","urn:record",
         "propertyIri","urn:record","datatype",root,"accessLabel","OPEN","authorityOrder",List.of()));
@@ -58,19 +62,34 @@ class PublishedRelationshipBindingTest {
     var bindings=new ArrayList<Map<String,Object>>();
     for(String iri:List.of(root,child)){
       String revision=UUID.randomUUID().toString();
-      var definition=Map.of("components",List.of(Map.of("name","value","type",iri.equals(root)?child+"@"+set:"decimal",
-          "cardinality","ONE","required",true)));
+      var fields=new ArrayList<Map<String,Object>>();
+      fields.add(Map.of("name","value","type",iri.equals(root)?child+"@"+set:"decimal",
+          "cardinality",iri.equals(root)?"MANY":"ONE","required",true));
+      if(iri.equals(child))fields.add(Map.of("name","colour","type","concept","cardinality","ONE","required",true,
+          "constraints",Map.of("vocabularyRef",vocabulary)));
+      var definition=Map.of("components",fields);
       String digest=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(
           json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsBytes(definition)));
       bindings.add(Map.of("semanticId",iri,"semanticVersion","1","revisionId",revision,
           "publicationSetId",set,"definition",definition,"definitionSha256",digest));
       responses.put(iri,new HashMap<>(Map.of("semantic_id",iri,"semantic_version","1","revision_id",revision,
-          "publication_set_id",set,"artifact_type","DATATYPE","status","ACTIVE","definition",definition,"definitionSha256",digest)));
+          "publication_set_id",set,"artifact_type","DATATYPE","status",iri.equals(root)?"DEPRECATED":"RETIRED","definition",definition,"definitionSha256",digest)));
     }
+    String revision=UUID.randomUUID().toString();
+    bindings.add(Map.of("semanticId",mapId,"semanticVersion","1","revisionId",revision,"publicationSetId",set,
+        "valueMapRef",mapId+"@"+set,"vocabularyRef",vocabulary));
+    responses.put(mapId,new HashMap<>(Map.of("semantic_id",mapId,"semantic_version","1","revision_id",revision,"publication_set_id",set)));
     b.put("semanticReferenceBindings",bindings);
     var profile=resolve(b,responses).materialization();
     var type=profile.properties().getLast().canonicalType();
-    type.validate(Map.of("value",Map.of("value","98765432109876543210.1")),(crs,geo)->{});
+    type.validate(Map.of("value",List.of(Map.of("value","98765432109876543210.1","colour","urn:red"),
+        Map.of("value","0","colour","urn:blue"))),(crs,geo)->{});
+    responses.get(mapId).put("revision_id",UUID.randomUUID().toString());
+    assertThatThrownBy(()->resolve(b,responses)).hasMessage("UDP_PINNED_PROFILE_INVALID");
+    responses.get(mapId).put("revision_id",revision);
+    responses.get(child).put("status","DRAFT");
+    assertThatThrownBy(()->resolve(b,responses)).hasMessage("UDP_PINNED_DATATYPE_INVALID");
+    responses.get(child).put("status","RETIRED");
     responses.get(child).put("definitionSha256","0".repeat(64));
     assertThatThrownBy(()->resolve(b,responses)).hasMessage("UDP_PINNED_DATATYPE_INVALID");
   }

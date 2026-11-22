@@ -10,6 +10,8 @@ final class PublishedValueTypes {
   private final Map<String, Map<String,Object>> definitions = new HashMap<>();
   private final Map<String, Set<String>> vocabularyMembers = new HashMap<>();
   private final Map<String,String> conceptVocabularies = new HashMap<>();
+  private final Map<String,String> valueMaps = new HashMap<>();
+  private final Map<String,String> uniquePins = new HashMap<>();
   private static final Map<String,String> READER_TYPES = readerTypes();
 
   private static Map<String,String> readerTypes() {
@@ -23,19 +25,32 @@ final class PublishedValueTypes {
 
   void bind(Map<String,Object> binding, Map<String,Object> actual, Function<Object,String> hash) {
     String id = text(binding,"semanticId");
-    if ("DATATYPE".equals(actual.get("artifact_type")) && (binding.containsKey("definition") || binding.containsKey("definitionSha256"))) {
-      if (!object(binding.get("definition")).equals(actual.get("definition"))
+    String set = text(binding,"publicationSetId");
+    String coordinate = id+"@"+set;
+    uniquePins.merge(id,coordinate,(a,b)->"");
+    if (binding.containsKey("valueMapRef")) {
+      String ref = text(binding,"valueMapRef");
+      String vocabulary = text(binding,"vocabularyRef");
+      requirePublicationSet(set);
+      if (!ref.equals(coordinate) || !absolute(vocabulary) || valueMaps.putIfAbsent(ref,vocabulary)!=null)
+        throw definitionError();
+    }
+    if ("DATATYPE".equals(actual.get("artifact_type"))) {
+      if (!(actual.get("status") instanceof String status) || !Set.of("ACTIVE","DEPRECATED","RETIRED").contains(status)
+          || !object(binding.get("definition")).equals(actual.get("definition"))
           || !text(binding,"definitionSha256").equals(actual.get("definitionSha256"))) throw definitionError();
       embedded(binding,hash);
-    } else if (binding.containsKey("definitionSha256") || binding.containsKey("definition")) {
-      throw definitionError();
     } else if ("CONCEPT".equals(actual.get("artifact_type"))) {
       // The resolver has already matched this revision in a PUBLISHED historical set.
       var definition = object(actual.get("definition"));
+      if (binding.containsKey("definitionSha256") || binding.containsKey("definition")
+          && !definition.equals(binding.get("definition"))) throw definitionError();
       String vocabulary=text(definition,"vocabularyRef");
       String previous=conceptVocabularies.putIfAbsent(id,vocabulary);
       if (previous!=null && !previous.equals(vocabulary)) throw definitionError();
       vocabularyMembers.computeIfAbsent(vocabulary, ignored -> new HashSet<>()).add(id);
+    } else if (binding.containsKey("definitionSha256") || binding.containsKey("definition")) {
+      throw definitionError();
     }
   }
 
@@ -56,7 +71,10 @@ final class PublishedValueTypes {
     if ("STRUCTURED".equals(comp.get("kind"))) {
       String ref = text(comp,"typeRef");
       if (BASE.containsKey(datatype) || !datatype.equals(semanticId(ref))) throw definitionError();
-      return compile(ref,false,new HashSet<>(),new int[1]);
+      var shape = compile(ref,false,new HashSet<>(),new int[1]);
+      if (valueMaps.isEmpty()) return shape;
+      var proof = structuredProof(shape,comp);
+      return proof.empty() ? shape : new CanonicalValueType(ref,false,shape.components(),proof);
     }
     if (!"CONSTRUCTOR".equals(comp.get("kind"))) throw definitionError();
     String output = switch (text(comp,"constructorId")) {
@@ -102,14 +120,56 @@ final class PublishedValueTypes {
     path.remove(id);
     return new CanonicalValueType(ref,list,components);
   }
+  private ValueMapProof structuredProof(CanonicalValueType shape,Map<String,Object> expression) {
+    if (!shape.type().equals(expression.get("typeRef"))
+        || !(expression.getOrDefault("components",List.of()) instanceof List<?> builders)) throw definitionError();
+    var fields = new TreeMap<String,ValueMapProof>();
+    var seen = new HashSet<String>();
+    for (Object raw : builders) {
+      var builder = object(raw);
+      String name = text(builder,"component");
+      var component = shape.components().get(name);
+      if (component==null || !seen.add(name)) throw definitionError();
+      ValueMapProof proof;
+      if (builder.containsKey("items")) {
+        if (!component.shape().list() || !builder.keySet().equals(Set.of("component","items"))
+            || !(builder.get("items") instanceof List<?> items)) throw definitionError();
+        var proofs = items.stream().map(item->builderProof(component,object(item),false)).toList();
+        proof = proofs.stream().allMatch(ValueMapProof::empty) ? ValueMapProof.NONE : new ValueMapProof(null,Map.of(),proofs);
+      } else proof = builderProof(component,builder,component.shape().list());
+      if (!proof.empty()) fields.put(name,proof);
+    }
+    return fields.isEmpty() ? ValueMapProof.NONE : new ValueMapProof(null,fields,List.of());
+  }
+  private ValueMapProof builderProof(Component component,Map<String,Object> builder,boolean list) {
+    if (builder.containsKey("structured")) {
+      if (list || component.shape().components().isEmpty() || builder.containsKey("reader") || builder.containsKey("constructor"))
+        throw definitionError();
+      return structuredProof(component.shape(),object(builder.get("structured")));
+    }
+    if (!(component.constraints().get("vocabularyRef") instanceof String vocabulary)) return ValueMapProof.NONE;
+    Object params;
+    if (list && builder.get("constructor") instanceof Map<?,?> constructor && !builder.containsKey("reader")
+        && "LIST_SPLIT_V1".equals(constructor.get("constructorId")) && constructor.get("params") instanceof Map<?,?> split
+        && "VALUE_MAP_V1".equals(split.get("itemReader"))) params = split.get("itemReaderParams");
+    else if (!list && "VALUE_MAP_V1".equals(builder.get("reader")) && !builder.containsKey("constructor")
+        && builder.get("fieldName") instanceof String field && !field.isBlank()) params = builder.get("transformParams");
+    else return ValueMapProof.NONE;
+    if (!(params instanceof Map<?,?> reader) || !reader.keySet().equals(Set.of("valueMapRef"))
+        || !(reader.get("valueMapRef") instanceof String ref)) return ValueMapProof.NONE;
+    String coordinate = valueMaps.containsKey(ref) ? ref : uniquePins.get(ref);
+    return vocabulary.equals(valueMaps.get(coordinate)) ? new ValueMapProof(vocabulary,Map.of(),List.of()) : ValueMapProof.NONE;
+  }
   private static String semanticId(String ref) {
     int split = ref.lastIndexOf('@');
     if (split<=0 || !absolute(ref.substring(0,split))) throw definitionError();
+    requirePublicationSet(ref.substring(split+1));
+    return ref.substring(0,split);
+  }
+  private static void requirePublicationSet(String set) {
     try {
-      String set = ref.substring(split+1);
       if (!UUID.fromString(set).toString().equals(set)) throw definitionError();
     } catch (IllegalArgumentException e) {throw definitionError();}
-    return ref.substring(0,split);
   }
   private static void validateConstraints(String type, Map<String,Object> constraints) {
     Set<String> allowed = switch (type) {
@@ -125,10 +185,11 @@ final class PublishedValueTypes {
         Object value = entry.getValue();
         switch (entry.getKey()) {
           case "maxLength" -> {
-            if (!(value instanceof Number) || !value.toString().matches("0|[1-9][0-9]*"))
+            if (!(value instanceof Integer || value instanceof Long || value instanceof java.math.BigInteger)
+                || value.toString().startsWith("-"))
               throw definitionError();
           }
-          case "vocabularyRef" -> {if (!(value instanceof String s) || s.isBlank()) throw definitionError();}
+          case "vocabularyRef" -> {if (!(value instanceof String s) || !absolute(s)) throw definitionError();}
           default -> {
             validateBase(type,value,(crs,geo)->{});
           }

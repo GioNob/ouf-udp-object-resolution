@@ -9,7 +9,9 @@ import java.util.*;
 import java.util.function.BiConsumer;
 
 /** Compiled property shape. A nested type is identified by its exact publication reference. */
-public record CanonicalValueType(String type, boolean list, Map<String,Component> components) {
+public record CanonicalValueType(String type, boolean list, Map<String,Component> components,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    ValueMapProof valueMapProof) {
   static final String XSD = "http://www.w3.org/2001/XMLSchema#";
   static final String GEO = "http://www.opengis.net/ont/geosparql#geoJSONLiteral";
   static final Map<String,String> BASE = Map.of(
@@ -26,6 +28,50 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
   public CanonicalValueType {
     components = Collections.unmodifiableSortedMap(new TreeMap<>(components));
   }
+  public CanonicalValueType(String type,boolean list,Map<String,Component> components) {
+    this(type,list,components,null);
+  }
+  /** Attestation from the published builder at this path. Only a VALUE_MAP_V1 leaf carries a vocabulary. */
+  public record ValueMapProof(String vocabulary,Map<String,ValueMapProof> fields,List<ValueMapProof> items) {
+    static final ValueMapProof NONE = new ValueMapProof(null,Map.of(),List.of());
+    public ValueMapProof {
+      fields = Collections.unmodifiableSortedMap(new TreeMap<>(fields));
+      items = List.copyOf(items);
+    }
+    boolean empty(){return vocabulary==null && fields.isEmpty() && items.isEmpty();}
+    private ValueMapProof sharedWith(ValueMapProof other) {
+      if (empty() || other.empty()) return NONE;
+      if (equals(other)) return this;
+      var common = new TreeMap<String,ValueMapProof>();
+      fields.forEach((name,field)->{
+        var shared=field.sharedWith(other.fields.getOrDefault(name,NONE));
+        if (!shared.empty()) common.put(name,shared);
+      });
+      if (!common.isEmpty()) return new ValueMapProof(null,common,List.of());
+      if (items.isEmpty() || items.size()!=other.items.size()) return NONE;
+      var sharedItems = new ArrayList<ValueMapProof>();
+      for (int i=0;i<items.size();i++) sharedItems.add(items.get(i).sharedWith(other.items.get(i)));
+      return sharedItems.stream().allMatch(ValueMapProof::empty) ? NONE : new ValueMapProof(null,Map.of(),sharedItems);
+    }
+    private List<ValueMapProof> origins(int count) {
+      if (items.isEmpty()) return Collections.nCopies(count,this); // LIST_SPLIT_V1 has one producer.
+      if (count==items.size()) return items;
+      if (count>items.size()) return Collections.nCopies(count,NONE);
+      // With k omitted inputs, output i can originate at i..i+k. Intersect each window
+      // using block prefixes and suffixes so a sparse MANY does not rescan every builder per value.
+      int width=items.size()-count+1;
+      var prefix=new ValueMapProof[items.size()];
+      var suffix=new ValueMapProof[items.size()];
+      for (int i=0;i<items.size();i++) {
+        prefix[i]=i%width==0 ? items.get(i) : prefix[i-1].sharedWith(items.get(i));
+        int j=items.size()-1-i;
+        suffix[j]=j==items.size()-1 || (j+1)%width==0 ? items.get(j) : suffix[j+1].sharedWith(items.get(j));
+      }
+      var result=new ArrayList<ValueMapProof>(count);
+      for (int i=0;i<count;i++) result.add(suffix[i].sharedWith(prefix[i+width-1]));
+      return result;
+    }
+  }
   static CanonicalValueType base(String id, boolean list) {
     if (!BASE.containsValue(id)) throw definitionError();
     return new CanonicalValueType(id,list,Map.of());
@@ -40,12 +86,21 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
     };
   }
   void validate(Object value, BiConsumer<String,Map<?,?>> geometry) {
+    validate(value,geometry,valueMapProof==null ? ValueMapProof.NONE : valueMapProof,null);
+  }
+  private void validate(Object value,BiConsumer<String,Map<?,?>> geometry,ValueMapProof proof,Component component) {
     if (list) {
       if (!(value instanceof List<?> items) || items.isEmpty()) throw dataError();
-      for (Object item : items) validateItem(item,geometry);
-    } else validateItem(value,geometry);
+      var origins = proof.origins(items.size());
+      for (int i=0;i<items.size();i++) {
+        validateItem(items.get(i),geometry,origins.get(i),component);
+      }
+    } else validateItem(value,geometry,proof,component);
   }
   void validateItem(Object value, BiConsumer<String,Map<?,?>> geometry) {
+    validateItem(value,geometry,valueMapProof==null ? ValueMapProof.NONE : valueMapProof,null);
+  }
+  private void validateItem(Object value,BiConsumer<String,Map<?,?>> geometry,ValueMapProof proof,Component enclosing) {
     if (!components.isEmpty()) {
       if (!(value instanceof Map<?,?> fields) || fields.isEmpty()
           || !components.keySet().containsAll(fields.keySet())) throw dataError();
@@ -56,12 +111,11 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
           continue;
         }
         Object field = fields.get(entry.getKey());
-        component.shape().validate(field,geometry);
-        if (component.shape().list()) {
-          for (Object item : (List<?>)field) constrain(component,item);
-        } else constrain(component,field);
+        var origin = proof.fields().getOrDefault(entry.getKey(),ValueMapProof.NONE);
+        component.shape().validate(field,geometry,origin,component);
       }
     } else validateBase(type,value,geometry);
+    if (enclosing!=null) constrain(enclosing,value,proof);
   }
   boolean hasGeometry(Object value) {
     if (list) return ((List<?>)value).stream().anyMatch(this::itemHasGeometry);
@@ -146,7 +200,7 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
       default -> throw definitionError();
     };
   }
-  private static void constrain(Component component, Object value) {
+  private static void constrain(Component component, Object value,ValueMapProof proof) {
     var limits = component.constraints();
     if (limits.isEmpty()) return;
     String type = component.shape().type();
@@ -155,7 +209,8 @@ public record CanonicalValueType(String type, boolean list, Map<String,Component
         || limits.containsKey("maxInclusive") && compare(type,s,limits.get("maxInclusive").toString())>0
         || limits.containsKey("maxLength") && new BigDecimal(limits.get("maxLength").toString())
             .compareTo(BigDecimal.valueOf(s.codePointCount(0,s.length())))<0) throw dataError();
-    if (limits.containsKey("vocabularyRef") && !component.vocabularyMembers().contains(s))
+    if (limits.containsKey("vocabularyRef") && !limits.get("vocabularyRef").equals(proof.vocabulary())
+        && !component.vocabularyMembers().contains(s))
       throw new IllegalArgumentException("UDP_CONCEPT_MEMBERSHIP_UNVERIFIED");
   }
   static IllegalArgumentException dataError() {return new IllegalArgumentException("UDP_DATA_VALUE_NONCANONICAL");}

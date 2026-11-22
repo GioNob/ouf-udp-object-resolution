@@ -21,7 +21,7 @@ class ValueTypesContractTest {
   }
   @Test void d084ContractDigestAndComparators() throws Exception {
     byte[] bytes=Files.readAllBytes(Path.of("contracts/ouf-value-types-v1.json"));
-    assertEquals("c046646c3030f1bcf4460741bbd09351f9bb501cb054d8ed45ce2e7d98dd4247",digest(bytes));
+    assertEquals("4b90e85ecd1573404612ef0a0ee627feffaa9c189fe4363e82079bd07824c333",digest(bytes));
     var contract=JSON.readTree(bytes);
     assertEquals("ouf.value-types.v1",contract.get("schema").asText());
     assertEquals(CanonicalValueType.BASE.size(),contract.get("baseTypes").size());
@@ -95,6 +95,156 @@ class ValueTypesContractTest {
         ()->validate(shape,Map.of("code","urn:colour:blue"))).getMessage());
     rejected(shape,Map.of("code","urn:colour:red","day","2024-02-28"));
     rejected(shape,Map.of("code","urn:colour:red","time",List.of("2024-02-29T00:00:00.100000001Z")));
+  }
+  @Test void d084PinnedValueMapMembershipIsScopedToTheBuilder() throws Exception {
+    var registry=new PublishedValueTypes();
+    String map="urn:map@"+SET, other="urn:another-map@"+SET;
+    valueMap(registry,"urn:map",SET,"urn:colours");
+    valueMap(registry,"urn:another-map",SET,"urn:other-vocabulary");
+    registry.bind(Map.of("semanticId","urn:pinned","publicationSetId",SET,"definition",Map.of("vocabularyRef","urn:colours")),
+        Map.of("artifact_type","CONCEPT","definition",Map.of("vocabularyRef","urn:colours")),ValueTypesContractTest::hash);
+    bind(registry,"urn:palette",List.of(
+        field("colours","concept","MANY",true,Map.of("vocabularyRef","urn:colours")),
+        field("accent","concept","ONE",false,Map.of("vocabularyRef","urn:colours"))));
+    var direct=Map.of("fieldName","colour","reader","VALUE_MAP_V1","transformParams",Map.of("valueMapRef",map));
+    var split=Map.of("constructorId","LIST_SPLIT_V1","inputs",List.of(Map.of("role","value","fieldName","codes","reader","IDENTITY")),
+        "params",Map.of("itemReader","VALUE_MAP_V1","itemReaderParams",Map.of("valueMapRef",map),"separator",","));
+    bind(registry,"urn:collection",List.of(field("palettes","urn:palette@"+SET,"MANY",true,Map.of())));
+    for(var colours:List.of(Map.of("component","colours","items",List.of(direct,direct)),Map.of("component","colours","constructor",split))){
+      var components=List.of(colours,
+          Map.of("component","accent","reader","VALUE_MAP_V1","fieldName","g","transformParams",Map.of("valueMapRef",other)));
+      var shape=registry.composition(Map.of("kind","STRUCTURED","typeRef","urn:palette@"+SET,"components",components),"urn:palette");
+      shape=JSON.readValue(JSON.writeValueAsBytes(shape),CanonicalValueType.class);
+      var collection=registry.composition(Map.of("kind","STRUCTURED","typeRef","urn:collection@"+SET,"components",List.of(
+          Map.of("component","palettes","items",List.of(Map.of("structured",Map.of("typeRef","urn:palette@"+SET,"components",components)))))),"urn:collection");
+      validate(collection,Map.of("palettes",List.of(Map.of("colours",List.of("urn:red")))));
+      validate(shape,Map.of("colours",List.of("urn:red","urn:blue")));
+      validate(shape,Map.of("colours",List.of("urn:red"),"accent","urn:pinned"));
+      rejected(shape,Map.of("colours",List.of("relative")));
+      for(var invalid:List.of(Map.of("colours",List.of("urn:red"),"accent","urn:green"),
+          Map.of("colours",List.of("urn:red"),"accent","urn:red"))) {
+        unverified(shape,invalid);
+      }
+    }
+    var mixed=registry.composition(Map.of("kind","STRUCTURED","typeRef","urn:palette@"+SET,"components",List.of(
+        Map.of("component","colours","items",List.of(direct,Map.of("fieldName","g","reader","VALUE_MAP_V1",
+            "transformParams",Map.of("valueMapRef",other)))))),"urn:palette");
+    validate(mixed,Map.of("colours",List.of("urn:red","urn:pinned")));
+    unverified(mixed,Map.of("colours",List.of("urn:pinned","urn:red")));
+    unverified(mixed,Map.of("colours",List.of("urn:red")));
+    validate(mixed,Map.of("colours",List.of("urn:pinned")));
+    valueMap(registry,"urn:map",new UUID(0,3).toString(),"urn:colours");
+    for (String ref:List.of("urn:map","urn:map@"+new UUID(0,2))) {
+      var shape=registry.composition(Map.of("kind","STRUCTURED","typeRef","urn:palette@"+SET,"components",List.of(
+          Map.of("component","colours","items",List.of(Map.of("fieldName","c","reader","VALUE_MAP_V1",
+              "transformParams",Map.of("valueMapRef",ref)))))),"urn:palette");
+      unverified(shape,Map.of("colours",List.of("urn:red")));
+    }
+  }
+  private static void valueMap(PublishedValueTypes registry,String id,String set,String vocabulary) {
+    registry.bind(Map.of("semanticId",id,"publicationSetId",set,"valueMapRef",id+"@"+set,"vocabularyRef",vocabulary),
+        Map.of("semantic_id",id,"publication_set_id",set),ValueTypesContractTest::hash);
+  }
+  @Test void d084CompactedManyKeepsOnlyCommonProducerEvidence() {
+    var registry=new PublishedValueTypes();
+    valueMap(registry,"urn:map",SET,"urn:v");
+    valueMap(registry,"urn:other",SET,"urn:other-vocabulary");
+    registry.bind(Map.of("semanticId","urn:pinned","publicationSetId",SET),
+        Map.of("artifact_type","CONCEPT","definition",Map.of("vocabularyRef","urn:v")),ValueTypesContractTest::hash);
+    var concept=Map.<String,Object>of("vocabularyRef","urn:v");
+    bind(registry,"urn:row",List.of(field("a","concept","ONE",true,concept),field("b","concept","ONE",true,concept)));
+    bind(registry,"urn:rows",List.of(field("rows","urn:row@"+SET,"MANY",true,Map.of())));
+    var items=new ArrayList<Map<String,Object>>();
+    for(String mapId:List.of("urn:map","urn:map","urn:other","urn:other")){
+      var a=Map.of("component","a","reader","VALUE_MAP_V1","fieldName","a","transformParams",Map.of("valueMapRef","urn:map@"+SET));
+      var b=Map.of("component","b","reader","VALUE_MAP_V1","fieldName","b","transformParams",Map.of("valueMapRef",mapId+"@"+SET));
+      items.add(Map.of("structured",Map.of("typeRef","urn:row@"+SET,"components",List.of(a,b))));
+    }
+    var shape=registry.composition(Map.of("kind","STRUCTURED","typeRef","urn:rows@"+SET,"components",List.of(
+        Map.of("component","rows","items",items))),"urn:rows");
+    var mapped=Map.of("a","urn:blue","b","urn:blue");
+    var pinned=Map.of("a","urn:blue","b","urn:pinned");
+    validate(shape,Map.of("rows",List.of(mapped,pinned,pinned)));
+    unverified(shape,Map.of("rows",List.of(mapped,mapped,pinned)));
+    unverified(shape,Map.of("rows",List.of(mapped,pinned,mapped)));
+    validate(shape,Map.of("rows",List.of(pinned)));
+  }
+  @Test void d084HistoricalShapeWithoutMapProofRoundTrips() throws Exception {
+    var registry=new PublishedValueTypes();
+    bind(registry,"urn:part",List.of(field("n","integer","ONE",true,Map.of())));
+    var shape=structured(registry,"urn:part");
+    var json=JSON.valueToTree(shape);
+    assertEquals(false,json.has("valueMapProof"));
+    var retained=JSON.treeToValue(json,CanonicalValueType.class);
+    assertEquals(shape,retained);
+    validate(retained,Map.of("n","9007199254740993"));
+  }
+  @Test void d084ValueMapPinMustMatchThePublishedCoordinate() {
+    for (var pin:List.of(Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef","urn:other@"+SET,"vocabularyRef","urn:v"),
+        Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef","urn:map@"+SET,"vocabularyRef","relative"),
+        Map.of("semanticId","urn:map","publicationSetId",SET,"valueMapRef","urn:map@"+SET))) {
+      assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
+          ()->new PublishedValueTypes().bind(new HashMap<>(pin),Map.of(),ValueTypesContractTest::hash)).getMessage());
+    }
+  }
+  private static void unverified(CanonicalValueType shape,Object value) {
+    assertEquals("UDP_CONCEPT_MEMBERSHIP_UNVERIFIED",assertThrows(IllegalArgumentException.class,
+        ()->validate(shape,value)).getMessage());
+  }
+  @Test void d084CanonicalConstraintTypes() {
+    record Invalid(String type,String key,Object value) {}
+    for (var invalid : List.of(
+        new Invalid("integer","minInclusive",1), new Invalid("integer","maxInclusive","01"),
+        new Invalid("decimal","minInclusive",new BigDecimal("1.5")), new Invalid("decimal","maxInclusive","1.0"),
+        new Invalid("date","minInclusive","2026-02-29"), new Invalid("datetime","maxInclusive","2026-01-01T01:00:00+01:00"),
+        new Invalid("string","maxLength","2"), new Invalid("string","maxLength",new BigDecimal("2")),
+        new Invalid("string","maxLength",-1), new Invalid("concept","vocabularyRef","relative/path"))) {
+      var registry=new PublishedValueTypes();
+      bind(registry,"urn:limits",List.of(field("part",invalid.type(),"ONE",true,Map.of(invalid.key(),invalid.value()))));
+      assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
+          ()->structured(registry,"urn:limits")).getMessage());
+    }
+    var registry=new PublishedValueTypes();
+    bind(registry,"urn:range",List.of(field("count","integer","ONE",true,
+        Map.of("minInclusive","9007199254740993","maxInclusive","9007199254740994")),
+        field("name","string","ONE",false,Map.of("maxLength",new java.math.BigInteger("18446744073709551615")))));
+    var shape=structured(registry,"urn:range");
+    validate(shape,Map.of("count","9007199254740993","name","abc"));
+    rejected(shape,Map.of("count","9007199254740992"));
+  }
+  @Test void d084HistoricalDatatypeStates() {
+    var definition=Map.of("components",List.of(field("n","integer","ONE",true,Map.of())));
+    var digest=hash(definition).substring(7);
+    var binding=pin("urn:historical",definition,digest);
+    var actual=new HashMap<String,Object>(Map.of("artifact_type","DATATYPE","definition",definition,"definitionSha256",digest));
+    for(String status:List.of("ACTIVE","DEPRECATED","RETIRED")){
+      var registry=new PublishedValueTypes();
+      actual.put("status",status);
+      registry.bind(binding,actual,ValueTypesContractTest::hash);
+      validate(structured(registry,"urn:historical"),Map.of("n","1"));
+    }
+    for(String status:Arrays.asList("DRAFT","REVOKED","UNKNOWN",null)){
+      actual.put("status",status);
+      assertEquals("UDP_PINNED_DATATYPE_INVALID",assertThrows(IllegalArgumentException.class,
+          ()->new PublishedValueTypes().bind(binding,actual,ValueTypesContractTest::hash)).getMessage());
+    }
+  }
+  @Test void d084ManyStructuredItemsAreCanonicalObjects() {
+    var registry=new PublishedValueTypes();
+    bind(registry,"urn:part",List.of(field("n","integer","ONE",true,Map.of())));
+    bind(registry,"urn:parent",List.of(field("parts","urn:part@"+SET,"MANY",false,Map.of()),
+        field("name","string","ONE",true,Map.of())));
+    var builders=List.of("first","second").stream().map(field->Map.of("structured",Map.of(
+        "typeRef","urn:part@"+SET,"components",List.of(Map.of("component","n","fieldName",field,"reader","INTEGER_V1"))))).toList();
+    var shape=registry.composition(Map.of("kind","STRUCTURED","typeRef","urn:parent@"+SET,"components",List.of(
+        Map.of("component","parts","items",builders),Map.of("component","name","fieldName","title","reader","IDENTITY"))),"urn:parent");
+    var nameOnly=Map.of("name","x");
+    validate(shape,nameOnly);
+    validate(shape,Map.of("name","x","parts",List.of(Map.of("n","2"),Map.of("n","1"))));
+    for(Object invalid:List.of(List.of(),Map.of("n","1"),List.of(Map.of("n","1"),"2"),
+        List.of(Map.of("n","1"),Map.of("n",2)),List.of(Map.of("extra",true)))) {
+      rejected(shape,Map.of("name","x","parts",invalid));
+    }
   }
   @Test void d084RegistryIntegrityAndDefinitionLimits() {
     var registry=new PublishedValueTypes();

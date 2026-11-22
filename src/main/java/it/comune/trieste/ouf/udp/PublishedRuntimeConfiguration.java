@@ -54,7 +54,9 @@ public class PublishedRuntimeConfiguration {
       for(String key:List.of("sourceSchemaRef","semanticPublicationSetRef","adapterProfileRef"))if(!text(execution,key).equals(text(refs,key)))throw invalid();
       for(String key:List.of("mappingRefs","authorityPolicyRef","relationshipResolutionStrategyRefs"))if(!Objects.equals(execution.get(key),refs.get(key)))throw invalid();
     }
-    if(refs!=null || structured) verifyBindings(bundle,structured?types:null);
+    boolean embeddedTypes=bundle.get("semanticReferenceBindings") instanceof List<?> bindings
+        && bindings.stream().anyMatch(b->b instanceof Map<?,?> pin && pin.containsKey("definitionSha256"));
+    if(refs!=null || structured || embeddedTypes) verifyBindings(bundle,types,structured);
     var materialization=materialization(json,rawMaterialization,compositions,types);
     if(!governed&&java.util.stream.Stream.of(resolution.strategyId(),resolution.strategyVersion(),resolution.policyRef(),resolution.canonicalType(),
         resolution.canonicalKeyProperty(),resolution.matchProperty()).anyMatch(v->v==null||v.isBlank()))
@@ -120,7 +122,7 @@ public class PublishedRuntimeConfiguration {
     resolved.add(new HistoricalContractCatalog.ResolvedRef("BUNDLE",ref,text(bundle,"bundleVersion"),text(bundle,"checksum")));
     return new HistoricalContractCatalog.Resolution(List.copyOf(resolved),List.of(),hash(refs));
   }
-  private void verifyBindings(Map<String,Object> bundle,PublishedValueTypes types){
+  private void verifyBindings(Map<String,Object> bundle,PublishedValueTypes types,boolean structured){
     var execution=object(object(object(bundle,"extractionProfile"),"runtime"),"execution");
     Object raw=bundle.get("semanticReferenceBindings");if(!(raw instanceof List<?> bindings)||bindings.isEmpty()||bindings.size()>MAX_SEMANTIC_REFERENCES)throw invalid();
     boolean publicationFound=false;
@@ -128,7 +130,8 @@ public class PublishedRuntimeConfiguration {
       String id=text(binding,"semanticId"),revision=uuid(binding,"revisionId"),publication=uuid(binding,"publicationSetId");
       var actual=get("/api/semantic/v1/references:resolve?semanticId="+escape(id)+"&revisionId="+revision+"&publicationSetId="+publication);
       if(!id.equals(actual.get("semantic_id"))||!text(binding,"semanticVersion").equals(actual.get("semantic_version"))||!revision.equals(actual.get("revision_id"))||!publication.equals(actual.get("publication_set_id")))throw invalid();
-      if(types!=null)types.bind(binding,actual,this::hash);
+      if(structured || "DATATYPE".equals(actual.get("artifact_type")) || binding.containsKey("definitionSha256"))
+        types.bind(binding,actual,this::hash);
       publicationFound|=publication.equals(execution.get("semanticPublicationSetRef"));
     }
     if(!publicationFound)throw invalid();
