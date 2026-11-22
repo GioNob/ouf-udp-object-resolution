@@ -92,6 +92,10 @@ copy_lineage(){
     from ouf_udp.handoff_intake h join ouf_udp.lake_object o on o.lake_object_id=h.source_raw_lake_object_id
     where h.handoff_id in ('return-seed','return-restore') order by o.copy_no"
 }
+verified_type(){
+  sql "select safe_detail->>'canonicalType' from ouf_udp.handoff_event
+    where handoff_id='return-change' and event_type='MATERIALIZATION_TYPE_VERIFIED'"
+}
 
 start "$PREDECESSOR" "$PREDECESSOR_SCHEMA"
 node scripts/ci/predecessor-scenario.mjs seed
@@ -117,6 +121,8 @@ test "$(source_raw return-seed state)" = QUARANTINED
 copy_lineage > "$evidence/copy-quarantined.txt"
 touch "$FIXTURE_DIR/unavailable-once"
 node scripts/ci/predecessor-scenario.mjs candidate
+test "$(verified_type)" = 'ci:Worksite'
+verified_type > "$evidence/materialization-type-candidate.txt"
 object_id=$(sql "select urban_object_id from ouf_udp.urban_object where tenant_id='tenant-ci' and canonical_type='ci:Worksite'
   and canonical_key='ci-row' and status='ACTIVE'")
 test "$(sql "select count(distinct (canonical_hash,authority_hash)) from ouf_udp.object_revision where urban_object_id='$object_id'")" = 2
@@ -134,6 +140,8 @@ stop
 start "$PREDECESSOR" "$CANDIDATE_SCHEMA"
 touch "$FIXTURE_DIR/unavailable-once"
 node scripts/ci/predecessor-scenario.mjs return "$object_id"
+verified_type > "$evidence/materialization-type-return.txt"
+diff -u "$evidence/materialization-type-candidate.txt" "$evidence/materialization-type-return.txt"
 retry_events=$(sql "select handoff_id,event_type from ouf_udp.handoff_event
   where handoff_id in ('return-change','after-return') and event_type like 'PUBLICATION_DEPENDENCY_%'
   order by handoff_id,created_at,event_type")

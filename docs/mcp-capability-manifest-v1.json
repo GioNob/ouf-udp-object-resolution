@@ -28,8 +28,18 @@
       "doNotUseWhen": "Do not use for arbitrary expressions, unbounded wildcard scans, relationships or analytics.",
       "preferredAlternatives": ["urban.object.read", "urban.object.related_search"],
       "operationalLimits": {"maxPageSize": 100, "indexedFilterRequired": "type", "correlationBudget": "QUERY"},
-      "resultSemantics": "Returns a bounded page of authorized current projections; it is not an exhaustive export.",
+      "resultSemantics": "Returns a bounded page of authorized current projections, an explicit outcome and a reread delay only for verified pending materialization.",
       "securityNotes": "Only allowlisted filters and projections are accepted; policy filtering precedes return."
+    },
+    {
+      "id": "urban.acquisition.read",
+      "purpose": "Read authorized durable intake and materialization evidence for an exact source and ingestion run.",
+      "useWhen": "Use with a known sourceId and runId to inspect UDP processing.",
+      "doNotUseWhen": "Do not use for raw payload retrieval or to confirm the Ingestion ACK.",
+      "preferredAlternatives": ["urban.object.search", "urban.object.read"],
+      "operationalLimits": {"maxPageSize": 100, "maxPropertiesPerHandoff": 200, "timeoutMs": 10000},
+      "resultSemantics": "Returns a page of authorized evidence with an explicit outcome, a continuation cursor when available and a reread delay only for verified pending materialization.",
+      "securityNotes": "The owner requires urban.object.read, lineage.object.read and lineage.property.read at TENANT_OPERATIONAL scope with retained tenant evidence and current label authorization."
     },
     {
       "id": "urban.relationship.read",

@@ -1,5 +1,6 @@
 package it.comune.trieste.ouf.udp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -9,16 +10,48 @@ import java.util.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class GovernedServingService {
-  private final JdbcClient db;private final ObjectMapper json;public GovernedServingService(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
+  private final JdbcClient db;private final ObjectMapper json;private final AcquisitionEvidenceService acquisition;public GovernedServingService(JdbcClient db,ObjectMapper json,AcquisitionEvidenceService acquisition){this.db=db;this.json=json;this.acquisition=acquisition;}
 
   @Transactional public Map<String,Object> current(UUID id,ServingAuthorizationContext auth){auth.require("urban.object.read");Map<String,Object> object=object(id,auth);auth.requireResource("urban.object.read","object",id,"OPEN",Map.of("canonicalType",String.valueOf(object.get("canonical_type"))));UUID revision=(UUID)object.get("current_revision_id");Map<String,Object> out=identity(object);if(revision!=null){out.put("revisionId",revision);properties(out,id,revision,"urban.object.read",auth);geometry(id,out,auth);}return out;}
   @Transactional public Page<Map<String,Object>> history(UUID id,int requested,String cursor,OffsetDateTime asOf,ServingAuthorizationContext auth){auth.require("urban.object.history.read");object(id,auth);auth.requireResource("urban.object.history.read","object",id,"OPEN",Map.of());int size=size(requested,100);long before=decodeLong(cursor,Long.MAX_VALUE);var spec=db.sql("select revision_id,revision_no,recorded_at,valid_from,valid_to from ouf_udp.object_revision where urban_object_id=:u and revision_no<:b and (cast(:a as timestamptz) is null or recorded_at<=cast(:a as timestamptz)) order by revision_no desc limit :l").param("u",id).param("b",before).param("a",asOf,Types.TIMESTAMP_WITH_TIMEZONE).param("l",size+1);List<Map<String,Object>> rows=spec.query().listOfRows();boolean more=rows.size()>size;if(more)rows=rows.subList(0,size);List<Map<String,Object>> result=new ArrayList<>();for(var row:rows){Map<String,Object> item=new LinkedHashMap<>(row);properties(item,id,(UUID)row.get("revision_id"),"urban.object.history.read",auth);result.add(item);}String next=more?encode(((Number)rows.getLast().get("revision_no")).longValue()):null;return new Page<>(result,next);}
-  @Transactional public Page<Map<String,Object>> search(String type,int requested,String cursor,ServingAuthorizationContext auth){auth.require("urban.object.search");if(type==null||type.isBlank()||type.contains("%")||type.contains("*"))throw new IllegalArgumentException("UDP_INDEXED_TYPE_FILTER_REQUIRED");int size=size(requested,100);UUID after=decodeUuid(cursor);var spec=db.sql("select urban_object_id,canonical_type,status,current_revision_id,revision from ouf_udp.urban_object where tenant_id=:t and canonical_type=:c and status='ACTIVE' and (cast(:a as uuid) is null or urban_object_id>cast(:a as uuid)) order by urban_object_id limit :l").param("t",auth.tenantId()).param("c",type).param("a",after,Types.OTHER).param("l",size+1);List<Map<String,Object>> rows=spec.query().listOfRows();boolean more=rows.size()>size;if(more)rows=rows.subList(0,size);List<Map<String,Object>> result=new ArrayList<>();for(var row:rows){if(!auth.permits("urban.object.search","object",row.get("urban_object_id"),"OPEN",Map.of("canonicalType",String.valueOf(row.get("canonical_type")))))continue;Map<String,Object> item=identity(row);UUID rev=(UUID)row.get("current_revision_id");if(rev!=null)properties(item,(UUID)row.get("urban_object_id"),rev,"urban.object.search",auth);result.add(item);}return new Page<>(result,more&&result.size()==rows.size()?encode(rows.getLast().get("urban_object_id").toString()):null,result.size()!=rows.size());}
+  @Transactional(isolation=Isolation.REPEATABLE_READ,timeout=10)
+  public SearchPage search(String type,int requested,String cursor,ServingAuthorizationContext auth){
+    String capability="urban.object.search";
+    auth.require(capability);
+    if(type==null||type.isBlank()||type.contains("%")||type.contains("*"))
+      throw new IllegalArgumentException("UDP_INDEXED_TYPE_FILTER_REQUIRED");
+    int size=size(requested,100);
+    UUID after=decodeUuid(cursor);
+    var rows=db.sql("""
+        select urban_object_id,canonical_type,status,current_revision_id,revision from ouf_udp.urban_object
+        where tenant_id=:t and canonical_type=:c and status='ACTIVE'
+          and (cast(:a as uuid) is null or urban_object_id>cast(:a as uuid))
+        order by urban_object_id limit :l
+        """).param("t",auth.tenantId()).param("c",type).param("a",after,Types.OTHER)
+        .param("l",size+1).query().listOfRows();
+    boolean more=rows.size()>size;
+    if(more)rows=rows.subList(0,size);
+    var items=new ArrayList<Map<String,Object>>();
+    for(var row:rows){
+      UUID id=(UUID)row.get("urban_object_id");
+      if(!auth.permits(capability,"object",id,"OPEN",Map.of("canonicalType",type)))continue;
+      var item=identity(row);
+      UUID revision=(UUID)row.get("current_revision_id");
+      if(revision!=null)properties(item,id,revision,capability,auth);
+      items.add(item);
+    }
+    boolean redacted=items.size()!=rows.size();
+    String nextCursor=more&&!redacted?encode(rows.getLast().get("urban_object_id").toString()):null;
+    boolean empty=cursor==null&&items.isEmpty();
+    Integer pollAfter=empty&&!redacted?acquisition.pollAfterSeconds(type,null,auth):null;
+    return new SearchPage(items,nextCursor,redacted,SearchOutcome.forPage(nextCursor!=null,redacted,pollAfter,empty),pollAfter);
+  }
   @Transactional public Page<Map<String,Object>> relationships(UUID id,int requested,String cursor,ServingAuthorizationContext auth){return relationships(id,requested,cursor,"OUTBOUND",auth);}
   @Transactional public Page<Map<String,Object>> relationships(UUID id,int requested,String cursor,String direction,ServingAuthorizationContext auth){
     if(!Set.of("OUTBOUND","INBOUND").contains(direction))throw new IllegalArgumentException("UDP_RELATION_DIRECTION_INVALID");boolean inbound="INBOUND".equals(direction);
@@ -53,6 +86,10 @@ public class GovernedServingService {
   private void audit(ServingAuthorizationContext auth,String capability,String resource,String label,String outcome){db.sql("insert into ouf_udp.serving_access_audit(audit_id,principal_type,principal_subject,tenant_id,capability,resource_ref,classification,outcome,authorization_decision_ref,correlation_id) values(gen_random_uuid(),:p,:s,:t,:c,:r,:l,:o,:d,:x)").param("p",auth.principalType()).param("s",auth.subject()).param("t",auth.tenantId()).param("c",capability).param("r",resource).param("l",label==null?"UNRESOLVED":label).param("o",outcome).param("d",auth.decisionRef(capability)).param("x",auth.correlationId()).update();}
   private static int size(int n,int max){if(n<1||n>max)throw new IllegalArgumentException("UDP_PAGE_SIZE_OUT_OF_RANGE");return n;}private static String encode(String value){return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));}private static String encode(long value){return encode(Long.toString(value));}private static String decode(String cursor){try{return new String(Base64.getUrlDecoder().decode(cursor),StandardCharsets.UTF_8);}catch(Exception e){throw new IllegalArgumentException("UDP_CURSOR_INVALID");}}private static long decodeLong(String cursor,long fallback){return cursor==null?fallback:Long.parseLong(decode(cursor));}private static UUID decodeUuid(String cursor){return cursor==null?null:UUID.fromString(decode(cursor));}
   private Map<String,Object> read(String v){try{return json.readValue(v,new TypeReference<>(){});}catch(Exception e){throw new IllegalStateException(e);}}private Object readAny(String v){try{return json.readValue(v,Object.class);}catch(Exception e){throw new IllegalStateException(e);}}
+  public record SearchPage(List<Map<String,Object>> items,String nextCursor,boolean partial,SearchOutcome outcome,
+                           @JsonInclude(JsonInclude.Include.NON_NULL) Integer pollAfterSeconds){
+    public SearchPage{items=List.copyOf(items);}
+  }
   public record Page<T>(List<T> items,String nextCursor,boolean partial){public Page(List<T> items,String nextCursor){this(items,nextCursor,false);}public Page{items=List.copyOf(items);}}
 }
 
