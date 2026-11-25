@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.*;
@@ -20,7 +21,33 @@ import org.springframework.web.server.ResponseStatusException;
 @org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 @SpringBootTest
 class GraphQueryRuntimeTest {
-  @DynamicPropertySource static void database(DynamicPropertyRegistry r){r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));}
+  @DynamicPropertySource
+  static void database(DynamicPropertyRegistry registry) throws java.io.IOException {
+    registry.add("spring.datasource.url", () -> required("OUF_UDP_DB_URL"));
+    registry.add("spring.datasource.username", () -> required("OUF_UDP_DB_USER"));
+    registry.add("spring.datasource.password", () -> required("OUF_UDP_DB_PASSWORD"));
+    var keyFile = java.nio.file.Files.createTempFile("ouf-udp-related-test-", ".key");
+    keyFile.toFile().deleteOnExit();
+    java.nio.file.Files.writeString(keyFile, SearchReceiptFixture.KEY);
+    registry.add("ouf.udp.search.tenant-id", () -> "tenant-a");
+    registry.add("ouf.udp.search.issuer", () -> SearchReceiptFixture.ISSUER);
+    registry.add("ouf.udp.search.audience", () -> "gateway");
+    registry.add("ouf.udp.search.workload", () -> "workload");
+    registry.add("ouf.udp.search.owner-key-file", keyFile::toString);
+  }
+
+  private static MockHttpServletRequestBuilder routePost(String url, String body, Set<String> scopes) throws Exception {
+    byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    var request = post(url).contentType("application/json").content(bytes);
+    if (url.equals(SearchReceiptFixture.RELATED_PATH)) {
+      var receipt = SearchReceiptFixture.payload(url, "urban.object.related_search", bytes,
+          java.time.Instant.now().getEpochSecond());
+      receipt.put("subject", "reader");
+      receipt.put("scope", String.join(" ", new TreeSet<>(scopes)));
+      request.header(SearchReceiptFixture.HEADER, SearchReceiptFixture.signed(receipt));
+    }
+    return request;
+  }
   @Autowired GraphQueryService graph;@Autowired RelatedSearchService related;@Autowired QueryBudgetStore budgets;@Autowired JdbcClient db;
   @Autowired org.springframework.test.web.servlet.MockMvc http;
   private ServingAuthorizationContext auth;
@@ -38,7 +65,8 @@ class GraphQueryRuntimeTest {
   private UUID object(){UUID id=UUID.randomUUID();db.sql("insert into ouf_udp.urban_object(urban_object_id,canonical_type,canonical_key,match_key) values(:i,'ouf:Node',:k,:k)").param("i",id).param("k",id.toString()).update();return id;}
   private void edge(String handoff,UUID source,UUID target,String relation,String label){db.sql("insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,content_hash,payload_json,receipt_ref) values(:h,'run','ing','graph','NODE',:h,:h,'{}',:r)").param("h",handoff).param("r","udp://"+handoff).update();UUID contribution=UUID.randomUUID(),relationship=UUID.randomUUID(),revision=UUID.randomUUID();db.sql("insert into ouf_udp.relationship_contribution(contribution_id,handoff_id,source_object_id,relation_iri,source_value,source_value_hash,strategy_ref,policy_ref,access_label,provenance_json) values(:i,:h,:s,:r,'{}',:h,'MANUAL','policy://graph',:l,'{}')").param("i",contribution).param("h",handoff).param("s",source).param("r",relation).param("l",label).update();db.sql("insert into ouf_udp.urban_relationship(relationship_id,source_object_id,relation_iri,target_object_id) values(:i,:s,:r,:t)").param("i",relationship).param("s",source).param("r",relation).param("t",target).update();db.sql("insert into ouf_udp.relationship_revision(relationship_revision_id,relationship_id,revision_no,contribution_id,evidence_hash,resolution_evidence,access_label) values(:i,:r,1,:c,:h,'{}',:l)").param("i",revision).param("r",relationship).param("c",contribution).param("h","hash-"+handoff).param("l",label).update();db.sql("update ouf_udp.urban_relationship set current_revision_id=:v where relationship_id=:r").param("v",revision).param("r",relationship).update();}
   private static ServingAuthorizationContext context(String correlation){return new ServingAuthorizationContext("AI_AGENT","agent","default",Set.of("urban.graph.neighbors","urban.graph.traverse"),Set.of("OPEN","ANONYMOUS"),"authz://graph",correlation);}
-  @Test void httpGraphAndRelatedSearchCannotBypassTargetOrSourcePolicy()throws Exception{
+  @Test @DisplayName("UDP-60m-11 Ammissione HTTP e policy su oggetti e relazioni")
+  void httpGraphAndRelatedSearchCannotBypassTargetOrSourcePolicy()throws Exception{
     UUID a=object(),b=object(),c=object();edge("http-ab",a,b,"ouf:child","OPEN");edge("http-bc",b,c,"ouf:child","OPEN");db.sql("update ouf_udp.urban_object set tenant_id='tenant-a'").update();
     Set<String> caps=Set.of("urban.object.read","urban.graph.neighbors","urban.graph.traverse","urban.object.related_search");
     for(String route:List.of("neighbors","traverse","related-search")){
@@ -46,16 +74,19 @@ class GraphQueryRuntimeTest {
       String url=route.equals("related-search")?"/api/udp/v1/objects/related-search":"/api/udp/v1/graph/"+route;
       Map<String,Object> body=route.equals("related-search")?Map.of("anchorObjectId",a,"anchorType","ouf:Node","relationIri","ouf:child","direction","OUTBOUND","targetTypes",List.of("ouf:Node"),"maxResults",10):Map.of("startObjectId",a,"relationTypes",List.of("ouf:child"),"maxNodes",10,"maxEdges",10,"maxDepth",2,"purpose","RECURSIVE_HIERARCHY");
       String json=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(body);
-      http.perform(post(url).contentType("application/json").content(json).with(policy(caps,null,null,null,Map.of())))
+      http.perform(routePost(url,json,caps).with(policy(caps,null,null,null,Map.of())))
         .andExpect(status().isOk()).andExpect(content().string(org.hamcrest.Matchers.containsString(b.toString())));
-      for(boolean targetDeny:List.of(true,false))http.perform(post(url).contentType("application/json").content(json).with(policy(caps,targetDeny?"urban.object.read":cap,targetDeny?"object":"relationship",targetDeny?b.toString():null,targetDeny?Map.of():Map.of("sourceRef","graph","jobRef","run"))))
+      for(boolean targetDeny:List.of(true,false))http.perform(routePost(url,json,caps).with(policy(caps,targetDeny?"urban.object.read":cap,targetDeny?"object":"relationship",targetDeny?b.toString():null,targetDeny?Map.of():Map.of("sourceRef","graph","jobRef","run"))))
         .andExpect(status().isOk()).andExpect(jsonPath("$.partial").value(true))
         .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(b.toString()))))
         .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString(c.toString()))));
+      if(route.equals("related-search"))http.perform(post(url).contentType("application/json").content(json).with(policy(caps,null,null,null,Map.of())))
+        .andExpect(status().isForbidden()).andExpect(status().reason("INVALID_UDP_SEARCH_RECEIPT_OR_POLICY"));
     }
   }
   private org.springframework.test.web.servlet.request.RequestPostProcessor policy(Set<String> caps,String denyCap,String type,String id,Map<String,String> scope){return request->{
     TestAuthorization.bind(request,"reader","HUMAN",caps);
+    if (request.getHeader(SearchReceiptFixture.HEADER) != null) request.setUserPrincipal(null);
     request.setAttribute("ouf.allowedDataLabels",Set.of("OPEN","RESTRICTED"));
     if(denyCap!=null){var engine=(LocalAuthorization)request.getServletContext().getAttribute(ServletAuthorization.RUNTIME);var old=engine.currentSnapshot().bundle();var g=old.grants().stream().filter(x->x.capabilityId().equals(denyCap)).findFirst().orElseThrow();var grants=new ArrayList<>(old.grants());
       grants.add(new Grant("query-deny",denyCap,g.tenantId(),g.subjectId(),null,null,g.validFrom(),g.validUntil(),new GrantConstraints("DENY",null,type,id,scope,Set.of("OPEN"),Set.of(),null,Set.of(),null)));
