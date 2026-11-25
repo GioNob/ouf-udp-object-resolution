@@ -49,6 +49,63 @@ public class SpatialMaterializer {
     if(advance){db.sql("insert into ouf_udp.urban_geometry_role_current(urban_object_id,geometry_role,geometry_revision_id) values(:u,:role,:g) on conflict(urban_object_id,geometry_role) do update set geometry_revision_id=excluded.geometry_revision_id").param("u",object).param("role",profile.geometry().geometryRole()).param("g",id).update();}
     if(advance&&"PRIMARY".equals(profile.geometry().geometryRole()))db.sql("insert into ouf_udp.urban_geometry_current(urban_object_id,geometry_revision_id) values(:u,:g) on conflict(urban_object_id) do update set geometry_revision_id=excluded.geometry_revision_id").param("u",object).param("g",id).update();return id;
   }
+  /** Rebuild roles whose provider disappeared, using only applied, valid support. */
+  void refreshWithdrawn(UUID object,String handoff,UdpPorts.MaterializationProfile profile){
+    var roles=db.sql("""
+        select r.geometry_role,g.evidence_json->>'sourceField' field from ouf_udp.urban_geometry_role_current r
+        join ouf_udp.urban_geometry g using(geometry_revision_id) where r.urban_object_id=:u
+        and exists(select 1 from ouf_udp.geometry_observation x join ouf_udp.api_withdrawn_support w using(handoff_id)
+          where x.geometry_revision_id=g.geometry_revision_id and w.withdrawn_by=:h)
+        """).param("u",object).param("h",handoff).query().listOfRows();
+    for(var role:roles){
+      String name=(String)role.get("geometry_role");
+      var order=profile.properties().stream().filter(r->r.sourceField().equals(role.get("field")))
+          .findFirst().map(UdpPorts.PropertyRule::authorityOrder).orElse(List.of());
+      var rows=db.sql("""
+          select distinct on (h.source_id,h.type_code,h.source_object_id) x.geometry_revision_id,h.source_id,g.access_label,
+            encode(ST_AsEWKB(g.geometry),'hex') shape
+          from ouf_udp.geometry_observation x join ouf_udp.urban_geometry g using(geometry_revision_id)
+          join ouf_udp.handoff_intake h on h.handoff_id=x.handoff_id
+          where g.urban_object_id=:u and g.geometry_role=:role
+            and (x.handoff_id=:h or exists(select 1 from ouf_udp.materialization_observation m where m.handoff_id=x.handoff_id))
+            and not exists(select 1 from ouf_udp.api_withdrawn_support w where w.handoff_id=x.handoff_id)
+            and (g.valid_from is null or g.valid_from<=transaction_timestamp()) and (g.valid_to is null or g.valid_to>transaction_timestamp())
+          order by h.source_id,h.type_code,h.source_object_id,x.observed_at desc nulls last,h.received_at desc,h.handoff_id
+          """)
+          .param("u",object).param("role",name).param("h",handoff).query().listOfRows();
+      int best=Integer.MAX_VALUE; Map<String,Object> winner=null;boolean ambiguous=false;
+      for(var row:rows){
+        int rank=order.indexOf(row.get("source_id"));if(rank<0)rank=10000;
+        if(rank<best){best=rank;winner=row;ambiguous=false;}
+        else if(rank==best && (!winner.get("shape").equals(row.get("shape")) || !winner.get("access_label").equals(row.get("access_label"))))ambiguous=true;
+      }
+      if(ambiguous)throw new IllegalStateException("UDP_SPATIAL_AUTHORITY_CONFLICT");
+      db.sql("delete from ouf_udp.urban_geometry_role_current where urban_object_id=:u and geometry_role=:role").param("u",object).param("role",name).update();
+      if(name.equals("PRIMARY"))db.sql("delete from ouf_udp.urban_geometry_current where urban_object_id=:u").param("u",object).update();
+      if(winner!=null){
+        var id=winner.get("geometry_revision_id");
+        db.sql("insert into ouf_udp.urban_geometry_role_current(urban_object_id,geometry_role,geometry_revision_id) values(:u,:role,:g)")
+            .param("u",object).param("role",name).param("g",id).update();
+        if(name.equals("PRIMARY"))db.sql("insert into ouf_udp.urban_geometry_current(urban_object_id,geometry_revision_id) values(:u,:g)").param("u",object).param("g",id).update();
+      }
+    }
+    // Spatial edges have immutable contributions but no relationship reconciliation task.
+    db.sql("""
+        with affected as (
+          select r.relationship_id from ouf_udp.urban_relationship r join ouf_udp.relationship_revision v on v.relationship_revision_id=r.current_revision_id
+          join ouf_udp.relationship_contribution c using(contribution_id) join ouf_udp.api_withdrawn_support w using(handoff_id)
+          where r.source_object_id=:u and w.withdrawn_by=:h and jsonb_exists(c.provenance_json,'geometryRevisionRef')
+        ), replacements as (
+          select a.relationship_id,(select v.relationship_revision_id from ouf_udp.relationship_revision v
+            join ouf_udp.relationship_contribution c using(contribution_id)
+            join ouf_udp.urban_geometry_role_current g on ('geometry://'||g.geometry_revision_id::text)=(c.provenance_json->>'geometryRevisionRef')
+            where v.relationship_id=a.relationship_id and g.urban_object_id=:u
+              and not exists(select 1 from ouf_udp.api_withdrawn_support w where w.handoff_id=c.handoff_id)
+            order by v.revision_no desc limit 1) id from affected a
+        ) update ouf_udp.urban_relationship r set status=case when x.id is null then 'SUPERSEDED' else 'ACTIVE' end,
+          current_revision_id=coalesce(x.id,r.current_revision_id) from replacements x where r.relationship_id=x.relationship_id
+        """).param("u",object).param("h",handoff).update();
+  }
   OffsetDateTime validityNow(){return OffsetDateTime.now();}
   OffsetDateTime futureStart(Map<String,Object> payload){
     var start=time(HandoffIntakeService.object(payload,"sourceIdentity").get("validFrom"));

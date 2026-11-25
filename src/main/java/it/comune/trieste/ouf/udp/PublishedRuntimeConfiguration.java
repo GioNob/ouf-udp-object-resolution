@@ -29,6 +29,11 @@ public class PublishedRuntimeConfiguration {
   public Profiles resolve(String ref,String type){
     return resolve(ref,type,publication(ref),null);
   }
+  Profiles resolveForSource(String ref,String type,String source){
+    var envelope=publication(ref);
+    if(!source.equals(envelope.get("sourceId")))throw new IllegalStateException("UDP_API_PUBLICATION_SOURCE_MISMATCH");
+    return resolve(ref,type,envelope,null);
+  }
   private Map<String,Object> publication(String ref){
     return read(exchange("/api/onboarding/v1/runtime/publications/resolve?bundleRef="+escape(ref),null));
   }

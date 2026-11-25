@@ -11,7 +11,19 @@ import org.springframework.web.server.ResponseStatusException;
 @Component
 public class RuntimeIntakeAuthorization {
   private final String tenant;
-  public RuntimeIntakeAuthorization(@Value("${ouf.udp.lake.tenant-id:}") String tenant){this.tenant=tenant;}
+  private final String ingestionWorkload;
+  @org.springframework.beans.factory.annotation.Autowired
+  public RuntimeIntakeAuthorization(@Value("${ouf.udp.lake.tenant-id:}") String tenant,
+      @Value("${ouf.udp.ingestion-workload:}") String ingestionWorkload){
+    this.tenant=tenant; this.ingestionWorkload=ingestionWorkload;
+  }
+  RuntimeIntakeAuthorization(String tenant){this(tenant,"");}
+  String requireOutcomes(HttpServletRequest request,String source,String run){
+    admit(request,"udp.candidate.write");
+    if(ingestionWorkload.isBlank() || !ingestionWorkload.equals(OwnerAuthorization.bind(request).principal().servicePrincipalId()))
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_RUNTIME_INTAKE_DENIED");
+    return require(request,"udp.candidate.write",source,run);
+  }
   public void admit(HttpServletRequest request,String capability){
     try{var owner=OwnerAuthorization.bind(request);if(tenant.isBlank()||!tenant.equals(owner.principal().tenantId())||owner.principal().actorType()!=PrincipalContext.ActorType.SERVICE||!owner.candidates().contains(capability))throw new SecurityException();}
     catch(SecurityException failure){throw new ResponseStatusException(HttpStatus.FORBIDDEN,"UDP_RUNTIME_INTAKE_DENIED");}

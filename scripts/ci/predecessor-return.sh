@@ -63,13 +63,13 @@ start(){
     -e OUF_UDP_LAKE_REQUIRED=true -e OUF_UDP_RAW_RETENTION_DAYS=1 \
     -e OUF_UDP_RAW_RETENTION_CLASS=AUDIT -e OUF_UDP_RAW_ACCESS_LABEL=OPEN -e OUF_UDP_TENANT_ID=tenant-ci \
     -e OUF_UDP_LAKE_MAINTENANCE_INITIAL_DELAY_MS="$maintenance_delay" \
-    -e OUF_UDP_IAM_ENABLED=true -e OUF_UDP_IAM_ISSUER=http://127.0.0.1:18083 -e OUF_UDP_IAM_AUDIENCE=udp-ci \
+    -e OUF_UDP_INGESTION_WORKLOAD=ci-ingestion -e OUF_UDP_IAM_ENABLED=true -e OUF_UDP_IAM_ISSUER=http://127.0.0.1:18083 -e OUF_UDP_IAM_AUDIENCE=udp-ci \
     -e OUF_AUTHORIZATION_BUNDLE_FILE=/tmp/policy.json -e OUF_AUTHORIZATION_BUNDLE_ID=return-fixture \
     -e OUF_AUTHORIZATION_BUNDLE_VERSION=1 -e OUF_AUTHORIZATION_BUNDLE_SHA256="$(sha256sum "$FIXTURE_DIR/policy.json" | cut -d' ' -f1)" \
     -v "$FIXTURE_DIR/policy.json:/tmp/policy.json:ro" -v "$FIXTURE_DIR/gateway-token:/tmp/gateway-token:ro" \
     -e OUF_UDP_EXECUTION_ENABLED=true -e OUF_UDP_EXECUTION_GATEWAY_URL=http://127.0.0.1:18083 \
     -e OUF_UDP_EXECUTION_TOKEN_FILE=/tmp/gateway-token "udp-return:$sha" \
-    '--spring.flyway.ignore-migration-patterns=*:future' >/dev/null
+    '--spring.flyway.ignore-migration-patterns=*:future' "--ouf.udp.execution.initial-delay-ms=${4:-1000}" >/dev/null
   for attempt in {1..120}; do
     if curl -fsS http://127.0.0.1:18080/actuator/health/readiness 2>/dev/null | jq -e '.status=="UP"' >/dev/null; then
       test "$(sql "select version from ouf_udp.flyway_schema_history where version is not null and success order by installed_rank desc limit 1")" = "$version"
@@ -100,7 +100,7 @@ verified_type(){
 start "$PREDECESSOR" "$PREDECESSOR_SCHEMA"
 node scripts/ci/predecessor-scenario.mjs seed
 cp "$FIXTURE_DIR/reference-methods" "$evidence/references-predecessor.txt"
-test "$(sort -u "$evidence/references-predecessor.txt")" = GET
+test "$(sort -u "$evidence/references-predecessor.txt")" = POST
 : > "$FIXTURE_DIR/reference-methods"
 history > "$evidence/flyway-predecessor.txt"
 stop
@@ -143,11 +143,14 @@ copy_lineage > "$evidence/copies-candidate.txt"
 head -n 1 "$evidence/copies-candidate.txt" | diff -u "$evidence/copy-quarantined.txt" -
 history > "$evidence/flyway-candidate.txt"
 stop
+start "$candidate" "$CANDIDATE_SCHEMA" 3600000 3600000
+node scripts/ci/predecessor-scenario.mjs pending
+stop
 start "$PREDECESSOR" "$CANDIDATE_SCHEMA"
 touch "$FIXTURE_DIR/unavailable-once"
 node scripts/ci/predecessor-scenario.mjs return "$object_id"
 cp "$FIXTURE_DIR/reference-methods" "$evidence/references-return.txt"
-test "$(sort -u "$evidence/references-return.txt")" = GET
+test "$(sort -u "$evidence/references-return.txt")" = POST
 : > "$FIXTURE_DIR/reference-methods"
 verified_type > "$evidence/materialization-type-return.txt"
 diff -u "$evidence/materialization-type-candidate.txt" "$evidence/materialization-type-return.txt"
@@ -167,8 +170,18 @@ test "$(source_raw after-return copy_no)" = 0
 test "$(sql 'select count(*) from ouf_udp.lake_object where copy_no>0')" = 1
 test "$(sql "select count(*) from ouf_udp.source_binding b join ouf_udp.urban_object u using(urban_object_id)
   where u.status='ACTIVE' and u.canonical_key='ci-reused' and b.source_object_id in ('ci-reused','ci-new-binding')")" = 2
-test "$(sql 'select count(*) from ouf_udp.materialization_observation')" = 6
-test "$(sql "select count(*) from ouf_udp.materialization_job where state='SUCCEEDED'")" = 6
+test "$(sql 'select count(*) from ouf_udp.materialization_observation')" = 7
+test "$(sql "select count(*) from ouf_udp.materialization_job where state='SUCCEEDED'")" = 7
 history > "$evidence/flyway-return.txt"
 diff -u "$evidence/flyway-candidate.txt" "$evidence/flyway-return.txt"
-echo 'PASS: A/B/A history, B8 copies and lineage, scoped canonical key, bridge read/write and idempotent retries' > "$evidence/result.txt"
+test "$(sql "select attempts from ouf_udp.materialization_job where handoff_id='pending-api'")" = 0
+test "$(sql "select count(*) from ouf_udp.api_handoff_outcome where handoff_id='pending-api'")" = 0
+# The V39 intake admits an API handoff without api_tenant_id; the V40 trigger still fences it.
+node scripts/ci/predecessor-scenario.mjs admit
+test "$(sql "select state||':'||attempts||':'||api_semantics||':'||(api_tenant_id is null) from ouf_udp.materialization_job
+  where handoff_id='return-api'")" = 'PAUSED:0:true:true'
+stop
+start "$candidate" "$CANDIDATE_SCHEMA"
+node scripts/ci/predecessor-scenario.mjs resume
+sql "select handoff_id,outcome from ouf_udp.api_handoff_outcome order by position" > "$evidence/api-outcomes.txt"
+echo 'PASS: V39 extension intake, fenced pending and V39-admitted API jobs, V40 resume and adoption, A/B/A history, B8 copies and lineage, scoped canonical key, bridge read/write and idempotent retries' > "$evidence/result.txt"

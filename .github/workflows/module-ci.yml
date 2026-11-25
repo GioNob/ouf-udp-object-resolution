@@ -7,16 +7,16 @@ on:
       predecessor:
         description: Full commit of the supported predecessor
         type: string
-        default: e18f703263c5e3727f7e623cd59cbfcde3ed3d7d
+        default: 256a0ef3e108cf95210d123eb2db248887e4e18f
 permissions: {contents: read}
 jobs:
   predecessor-return:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      PREDECESSOR: ${{ inputs.predecessor || 'e18f703263c5e3727f7e623cd59cbfcde3ed3d7d' }}
+      PREDECESSOR: ${{ inputs.predecessor || '256a0ef3e108cf95210d123eb2db248887e4e18f' }}
       PREDECESSOR_SCHEMA: '39'
-      CANDIDATE_SCHEMA: '39'
+      CANDIDATE_SCHEMA: '40'
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0, persist-credentials: false}

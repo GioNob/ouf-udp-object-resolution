@@ -8,6 +8,15 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 
 class RuntimeIntakeAuthorizationTest {
+  @Test void outcomeRequiresTheConfiguredWorkloadAndTenantGrant(){
+    var guard=new RuntimeIntakeAuthorization("tenant-a","ingestion");
+    var request=new MockHttpServletRequest();
+    TestAuthorization.bind(request,"ingestion","SERVICE",Set.of("udp.candidate.write"));
+    assertThat(guard.requireOutcomes(request,"roads","run")).isEqualTo("tenant-a");
+    for(var other:java.util.List.of(new RuntimeIntakeAuthorization("tenant-b","ingestion"),
+        new RuntimeIntakeAuthorization("tenant-a","other"),new RuntimeIntakeAuthorization("tenant-a","")))
+      assertThatThrownBy(()->other.requireOutcomes(request,"roads","run")).isInstanceOf(ResponseStatusException.class);
+  }
   @Test void onlyServiceWithExactTenantAndCapabilityCanWrite(){
     var guard=new RuntimeIntakeAuthorization("tenant-a");
     var service=new MockHttpServletRequest();TestAuthorization.bind(service,"ingestion","SERVICE",Set.of("datalake.write"));

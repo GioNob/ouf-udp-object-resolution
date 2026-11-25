@@ -68,7 +68,7 @@ public class PublicationDependencyRecovery {
     return true;
   }
   private Map<String,Object> lock(ResolutionRepository.Claim claim){
-    var rows=db.sql("select *,transaction_timestamp() observed_at from ouf_udp.materialization_job where job_id=:j and handoff_id=:h and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>clock_timestamp() for update")
+    var rows=db.sql("select *,transaction_timestamp() observed_at from ouf_udp.materialization_job where job_id=:j and handoff_id=:h and state='RUNNING' and claimed_by=:w and state_version=:v and coalesce(api_dispatch_at,lease_until)>clock_timestamp() for update")
       .param("j",claim.jobId()).param("h",claim.handoffId()).param("w",claim.worker()).param("v",claim.stateVersion()).query().listOfRows();
     if(rows.size()!=1)throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
     return rows.getFirst();

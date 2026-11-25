@@ -81,3 +81,5 @@ ouf.udp.gateway-retry:
 ouf.udp.publication-recovery:
   max-attempts: ${OUF_UDP_PUBLICATION_RECOVERY_MAX_ATTEMPTS:128}
   max-elapsed-ms: ${OUF_UDP_PUBLICATION_RECOVERY_MAX_ELAPSED_MS:86400000}
+
+ouf.udp.ingestion-workload: ${OUF_UDP_INGESTION_WORKLOAD:}

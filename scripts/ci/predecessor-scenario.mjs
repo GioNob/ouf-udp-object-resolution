@@ -37,7 +37,7 @@ async function retry(entry) {
   assert.deepEqual(two, expected);
   assert.deepEqual(await api(lake, entry.upload), entry.raw);
 }
-async function materialize(id, value, code = 'ci-row', sourceObjectId = code) {
+async function materialize(id, value, code = 'ci-row', sourceObjectId = code, observation = false, wait = true) {
   const runId = randomUUID();
   const content = Buffer.from(`code,name\n${code},${value}\n`);
   const contentHash = 'sha256:' + createHash('sha256').update(content).digest('hex');
@@ -55,9 +55,15 @@ async function materialize(id, value, code = 'ci-row', sourceObjectId = code) {
     canonicalPayload: {code, name: value}, rawObjectRef: raw.objectRef, contractRefs: refs,
     lineageId: 'lineage-' + id, contentHash, acquiredAt: timestamp, correlationId: runId,
     changeRepresentation: {mode: 'FULL_SNAPSHOT', canonicalContentHash: contentHash}};
+  if (observation) {
+    payload.sourceIdentity.sourceRevision = '1';
+    payload.apiObservation = {schema: 'ouf.api-observation.v1', kind: 'EVENT', epoch: 'one',
+      renderedSchemaVersion: '1', itemSha256: contentHash.slice(7), generation: null, snapshotAt: null};
+  }
   const receipt = await api(handoffs, payload);
   assert.deepEqual(receipt, {durable: true, duplicate: false, receiptRef: 'udp://handoffs/' + id});
   const entry = {upload, raw, payload, receipt};
+  if (!wait) return entry;
   for (let attempt = 0; attempt < 90; attempt++) {
     if (await checkProcessed(entry)) return entry;
     await delay(500);
@@ -66,7 +72,8 @@ async function materialize(id, value, code = 'ci-row', sourceObjectId = code) {
 }
 switch (phase) {
   case 'seed':
-    state.seed = await materialize('return-seed', 'A');
+    state.seed = await materialize('return-seed', 'A', 'ci-row', 'ci-row', true);
+    assert.equal((await api(handoffs + '/return-seed')).outcome, undefined);
     break;
   case 'candidate':
     assert.equal(await checkProcessed(state.seed), true);
@@ -76,10 +83,30 @@ switch (phase) {
     assert.notEqual(state.restored.raw.objectRef, state.seed.raw.objectRef);
     await materialize('return-reused-key', 'original', 'ci-reused');
     await retry(state.changed);
+    state.api = await materialize('candidate-api', 'first', 'api-row', 'api-row', true);
+    assert.equal((await api(handoffs + '/candidate-api')).outcome, 'APPLIED');
     break;
+  case 'pending':
+    state.pending = await materialize('pending-api', 'second', 'pending-row', 'pending-row', true, false);
+    break;
+  case 'admit':
+    state.admitted = await materialize('return-api', 'third', 'return-row', 'return-row', true, false);
+    assert.equal(await checkProcessed(state.admitted), false);
+    break;
+  case 'resume': {
+    for (const entry of [state.pending, state.admitted]) {
+      for (let i = 0; i < 90 && !await checkProcessed(entry); i++) await delay(500);
+      assert.equal((await api(handoffs + '/' + entry.payload.handoffId)).outcome, 'APPLIED');
+      await retry(entry);
+    }
+    break;
+  }
   case 'return': {
     assert.equal(await checkProcessed(state.changed), true);
     assert.equal(await checkProcessed(state.restored), true);
+    await retry(state.api);
+    await retry(state.pending);
+    assert.equal(await checkProcessed(state.pending), false);
     const path = '/api/udp/v1/objects/' + objectId;
     const current = await api(path);
     assert.equal(current.properties.name, 'A');
