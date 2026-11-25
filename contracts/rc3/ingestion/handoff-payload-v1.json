@@ -314,6 +314,63 @@
         "string",
         "null"
       ]
+    },
+    "apiObservation": {
+      "type": "object",
+      "required": [
+        "schema",
+        "kind",
+        "epoch",
+        "renderedSchemaVersion",
+        "itemSha256",
+        "generation",
+        "snapshotAt"
+      ],
+      "properties": {
+        "schema": {
+          "const": "ouf.api-observation.v1"
+        },
+        "kind": {
+          "enum": [
+            "EVENT",
+            "PRESENCE",
+            "SNAPSHOT_DELETE",
+            "ABSENCE"
+          ]
+        },
+        "epoch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "renderedSchemaVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "itemSha256": {
+          "type": "string",
+          "pattern": "^(sha256:)?[0-9a-f]{64}$"
+        },
+        "generation": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9223372036854775807
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshotAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "allOf": [
@@ -331,6 +388,186 @@
       "then": {
         "required": [
           "canonicalPayload"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "apiObservation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "sourceIdentity": {
+            "required": [
+              "sourceRevision",
+              "observedAt"
+            ],
+            "properties": {
+              "sourceRevision": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              "sourceObjectId": {
+                "maxLength": 256,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+              },
+              "observedAt": {
+                "type": "string"
+              }
+            }
+          },
+          "operation": {
+            "enum": [
+              "UPSERT",
+              "TOMBSTONE"
+            ]
+          },
+          "changeRepresentation": {
+            "properties": {
+              "mode": {
+                "const": "FULL_SNAPSHOT"
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "operation": {
+                  "const": "TOMBSTONE"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "canonicalPayload"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "apiObservation": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "PRESENCE"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "operation": {
+                  "const": "UPSERT"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "apiObservation": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "ABSENCE",
+                        "SNAPSHOT_DELETE"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "operation": {
+                  "const": "TOMBSTONE"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "apiObservation": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "EVENT"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "apiObservation": {
+                  "properties": {
+                    "generation": {
+                      "type": "null"
+                    },
+                    "snapshotAt": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "changeRepresentation": {
+                  "properties": {
+                    "eventSequence": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "apiObservation": {
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "ABSENCE",
+                        "SNAPSHOT_DELETE",
+                        "PRESENCE"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "apiObservation": {
+                  "properties": {
+                    "generation": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9223372036854775807
+                    },
+                    "snapshotAt": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "changeRepresentation": {
+                  "required": [
+                    "eventSequence"
+                  ]
+                }
+              }
+            }
+          }
         ]
       }
     }

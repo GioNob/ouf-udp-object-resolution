@@ -69,13 +69,34 @@ public class GovernedIdentityIndexBackfill {
       String observedCoverageRef){
     if(policy==null||objectId==null||observedCoverageRef==null||!observedCoverageRef.startsWith("indexed-snapshot://"))
       throw invalid("REFRESH_PRECONDITION");
+    updateObject(policy,objectId,observedCoverageRef,null);
+  }
+
+  record Coverage(String reference,String transaction) {}
+  Coverage beforeBindingChange(GovernedIdentityEngine.Policy policy){
+    locks.acquire(policy.tenantId(),policy.canonicalClass());
+    return db.sql("""
+        select coverage_ref,txid_current()::text from ouf_udp.identity_lookup_coverage
+        where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version
+          and complete and policy_fingerprint=:fingerprint for update
+        """).param("tenant",policy.tenantId()).param("type",policy.canonicalClass()).param("policy",policy.ref())
+        .param("version",policy.version()).param("fingerprint",ScopedIdentityCandidateRepository.fingerprint(policy))
+        .query((r,n)->new Coverage(r.getString(1),r.getString(2))).optional()
+        .orElseThrow(()->invalid("REFRESH_COVERAGE_STALE"));
+  }
+  void refreshBindingChange(GovernedIdentityEngine.Policy policy,UUID object,Coverage before){
+    updateObject(policy,object,null,Objects.requireNonNull(before));
+  }
+  private void updateObject(GovernedIdentityEngine.Policy policy,UUID objectId,String observedCoverageRef,Coverage before){
     locks.acquire(policy.tenantId(),policy.canonicalClass());
     Map<String,Object> coverage=db.sql("select coverage_ref,policy_fingerprint,field_set_hash,indexed_objects from ouf_udp.identity_lookup_coverage where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version for update")
         .param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version()).query().singleRow();
     String ref=String.valueOf(coverage.get("coverage_ref"));
     String currentTx=db.sql("select txid_current()::text").query(String.class).single();
-    if(!observedCoverageRef.startsWith("indexed-snapshot://"+ref+"/"+currentTx+"/")
+    boolean sameEvidence=before==null?observedCoverageRef.startsWith("indexed-snapshot://"+ref+"/"+currentTx+"/")
+        :before.reference().equals(ref)&&before.transaction().equals(currentTx);
+    if(!sameEvidence
         ||!ScopedIdentityCandidateRepository.fingerprint(policy).equals(coverage.get("policy_fingerprint"))
         ||!ScopedIdentityCandidateRepository.hash(String.join("\u0000",new TreeSet<>(
             policy.signals().stream().map(GovernedIdentityEngine.Signal::id).toList())))
@@ -102,15 +123,17 @@ public class GovernedIdentityIndexBackfill {
     db.sql("delete from ouf_udp.identity_lookup_shape where urban_object_id=:id and tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
         .param("id",objectId).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version()).update();
-    Map<String,Object> object=db.sql("select current_revision_id from ouf_udp.urban_object where urban_object_id=:id and tenant_id=:tenant and canonical_type=:type and status='ACTIVE'")
+    Map<String,Object> object=db.sql("select current_revision_id,status from ouf_udp.urban_object where urban_object_id=:id and tenant_id=:tenant and canonical_type=:type")
         .param("id",objectId).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .query().listOfRows().stream().findFirst().orElseThrow(()->invalid("REFRESH_OBJECT_SCOPE"));
     UUID revision=(UUID)object.get("current_revision_id");
     if(revision==null)throw invalid("REFRESH_UNMATERIALIZED");
     Map<String,GovernedIdentityEngine.Signal> signals=new HashMap<>();
     policy.signals().forEach(signal->signals.put(signal.id(),signal));
-    indexObject(policy,signals,objectId,revision);
-    long count=((Number)coverage.get("indexed_objects")).longValue()+(previous.isEmpty()?1:0);
+    boolean active="ACTIVE".equals(object.get("status"));
+    if(active)indexObject(policy,signals,objectId,revision);
+    else if(before==null || !"RETIRED".equals(object.get("status")))throw invalid("REFRESH_OBJECT_SCOPE");
+    long count=((Number)coverage.get("indexed_objects")).longValue()+(active?1:0)-(previous.isEmpty()?0:1);
     db.sql("update ouf_udp.identity_lookup_coverage set indexed_objects=:count,complete=true,updated_at=transaction_timestamp() where tenant_id=:tenant and canonical_class=:type and policy_ref=:policy and policy_version=:version")
         .param("count",count).param("tenant",policy.tenantId()).param("type",policy.canonicalClass())
         .param("policy",policy.ref()).param("version",policy.version()).update();

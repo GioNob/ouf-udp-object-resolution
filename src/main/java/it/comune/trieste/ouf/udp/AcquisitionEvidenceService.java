@@ -25,7 +25,11 @@ public class AcquisitionEvidenceService {
     var rows=db.sql("""
       select h.handoff_id,h.ingestion_run_id,h.state intake_state,h.content_hash,h.received_at,h.processed_at,h.failure_code,
         h.receipt_ref _receipt,h.payload_json->>'lineageId' lineage_id,
-        h.payload_json->'dataAccessLabels' _labels,j.state job_state,j.attempts job_attempts,
+        h.payload_json->'dataAccessLabels' _labels,
+        -- V40 parks a queued API job as PAUSED without a failure code (D-080 fence): it is READY, not blocked.
+        case when j.api_semantics and j.state='PAUSED' and j.safe_failure_code is null and not exists(select 1
+          from ouf_udp.api_source_block b where b.source_id=h.source_id and b.tenant_id=j.api_tenant_id)
+          then 'READY' else j.state end job_state,j.attempts job_attempts,
         d.outcome resolution_outcome,d.resolution_decision_id,
         o.observation_id,o.urban_object_id,o.revision_id,o.material_change,
         u.revision current_revision,u.status object_status,
@@ -102,15 +106,17 @@ public class AcquisitionEvidenceService {
     // The durable receipt, tenant and job state are read from the same snapshot as the page.
     var query=db.sql("""
         select h.source_id,h.ingestion_run_id,h.payload_json->'dataAccessLabels' _labels,
-          least(3600,greatest(5,ceil(extract(epoch from j.next_integrity_check_at-transaction_timestamp()))))::int poll_after
+          least(3600,greatest(5,ceil(extract(epoch from coalesce(j.next_integrity_check_at,j.api_dispatch_at)-transaction_timestamp()))))::int poll_after
         from ouf_udp.materialization_job j join ouf_udp.handoff_intake h using(handoff_id)
         join ouf_udp.lake_object raw on raw.lake_object_id=h.raw_lake_object_id
         where raw.tenant_id=:tenant and raw.tier='RAW' and raw.source_id=h.source_id and raw.type_code=h.type_code
           and h.state in ('DURABLE','PROCESSING') and btrim(h.receipt_ref)<>''
           and (j.state in ('READY','RUNNING') and (j.safe_failure_code is null
               or j.safe_failure_code in ('UDP_PUBLICATION_UNAVAILABLE','UDP_GEOMETRY_NOT_YET_VALID'))
-            or (j.state='PAUSED' and j.next_integrity_check_at is not null
-            and j.safe_failure_code in ('UDP_PUBLICATION_UNAVAILABLE','UDP_GEOMETRY_NOT_YET_VALID')))
+            or (j.state='PAUSED' and coalesce(j.next_integrity_check_at,j.api_dispatch_at) is not null
+            and j.safe_failure_code in ('UDP_PUBLICATION_UNAVAILABLE','UDP_GEOMETRY_NOT_YET_VALID'))
+            or (j.api_semantics and j.state='PAUSED' and j.safe_failure_code is null and not exists(select 1
+              from ouf_udp.api_source_block b where b.source_id=h.source_id and b.tenant_id=j.api_tenant_id)))
           and not exists(select 1 from ouf_udp.materialization_observation o where o.handoff_id=h.handoff_id)
           and
         """+(scope==null?"""
@@ -119,7 +125,7 @@ public class AcquisitionEvidenceService {
         """:"""
         h.source_id=:source and h.ingestion_run_id=:run
         """)+"""
-        order by j.next_integrity_check_at nulls first,h.handoff_id limit 100
+        order by coalesce(j.next_integrity_check_at,j.api_dispatch_at) nulls first,h.handoff_id limit 100
         """).param("tenant",actor.tenantId());
     var scoped=scope==null?query.param("type",canonicalType):
       query.param("source",scope.sourceId()).param("run",scope.runId().toString());

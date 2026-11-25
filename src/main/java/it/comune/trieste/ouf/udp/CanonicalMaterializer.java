@@ -32,12 +32,45 @@ public class CanonicalMaterializer {
       Object tenant=handoff.get("tenantId");if(tenant!=null&&!tenant.equals(scope.get("tenant_id")))throw new IllegalArgumentException("UDP_PROPERTY_TENANT_MISMATCH");
     }
     List<Map<String,Object>> old=db.sql("select observation_id,revision_id,material_change from ouf_udp.materialization_observation where handoff_id=:h").param("h",handoffId).query().listOfRows();if(!refresh&&!old.isEmpty())return new Result((UUID)old.getFirst().get("revision_id"),(Boolean)old.getFirst().get("material_change"),true);
-    if(!refresh)validatePayload(handoff,profile);
-    Map<String,Object> change=HandoffIntakeService.object(handoff,"changeRepresentation");String changeFingerprint=fingerprint(change);FastCurrent fast=fastCurrent(urbanObjectId);if(!refresh&&profile.properties().stream().noneMatch(r->r.reconciliation()!=null)&&changeFingerprint!=null&&fast!=null&&Objects.equals(fast.bundleRef(),HandoffIntakeService.object(handoff,"contractRefs").get("bundleRef"))&&changeFingerprint.equals(fast.changeFingerprint())){observe(handoffId,urbanObjectId,fast.revisionId(),false,fast.canonicalHash(),changeFingerprint);return new Result(fast.revisionId(),false,false);}
+    boolean api=handoff.containsKey("apiObservation");
+    boolean retirement=api && "TOMBSTONE".equals(handoff.get("operation"));
+    if(!refresh && !retirement)validatePayload(handoff,profile);
+    Map<String,Object> change=HandoffIntakeService.object(handoff,"changeRepresentation");String changeFingerprint=fingerprint(change);FastCurrent fast=fastCurrent(urbanObjectId);if(!api&&!refresh&&profile.properties().stream().noneMatch(r->r.reconciliation()!=null)&&changeFingerprint!=null&&fast!=null&&Objects.equals(fast.bundleRef(),HandoffIntakeService.object(handoff,"contractRefs").get("bundleRef"))&&changeFingerprint.equals(fast.changeFingerprint())){observe(handoffId,urbanObjectId,fast.revisionId(),false,fast.canonicalHash(),changeFingerprint);return new Result(fast.revisionId(),false,false);}
     Map<String,Object> source=HandoffIntakeService.object(handoff,"sourceIdentity"),payload=HandoffIntakeService.object(handoff,"canonicalPayload"),refs=HandoffIntakeService.object(handoff,"contractRefs");String sourceId=HandoffIntakeService.text(source,"sourceId"),mode=HandoffIntakeService.text(change,"mode");OffsetDateTime observed=parse(source.get("observedAt"));Current current=current(urbanObjectId);if(!refresh)validateBase(mode,change,current);
-    if(!refresh)contribute(handoffId,urbanObjectId,handoff,profile,payload,sourceId,observed);Map<String,Object> values=new TreeMap<>(current.values);Map<String,String> labels=new TreeMap<>(current.labels);Map<String,UUID> winners=new TreeMap<>();Map<String,Object> authority=new TreeMap<>(current.authority);Map<String,LinkedPropertyReconciler.Result> reconciled=new TreeMap<>();selectWinners(urbanObjectId,profile,values,labels,winners,authority,reconciled);
+    if(!refresh && !retirement)contribute(handoffId,urbanObjectId,handoff,profile,payload,sourceId,observed);Map<String,Object> values=new TreeMap<>(current.values);Map<String,String> labels=new TreeMap<>(current.labels);Map<String,UUID> winners=new TreeMap<>();Map<String,Object> authority=new TreeMap<>(current.authority);Map<String,LinkedPropertyReconciler.Result> reconciled=new TreeMap<>();if(api && !refresh){
+      // Save the rules used for this observation, including policies without linked values.
+      db.sql("insert into ouf_udp.api_property_profile(handoff_id,profile) values(:h,cast(:p as jsonb)) on conflict do nothing")
+          .param("h",handoffId).param("p",write(profile)).update();
+      var affected=db.sql("select distinct c.property_iri from ouf_udp.property_contribution c join ouf_udp.api_withdrawn_support w using(handoff_id) where w.withdrawn_by=:h and c.urban_object_id=:u")
+          .param("h",handoffId).param("u",urbanObjectId).query(String.class).list();
+      var rules=new LinkedHashMap<String,UdpPorts.PropertyRule>();
+      for(var rule:profile.properties())rules.put(rule.propertyIri(),rule);
+      for(String iri:affected){
+        values.remove(iri);labels.remove(iri);authority.remove(iri);
+        if(!rules.containsKey(iri)){
+          var retained=db.sql("""
+              select pin.profile::text from ouf_udp.property_contribution c join ouf_udp.api_property_profile pin using(handoff_id)
+              left join ouf_udp.api_withdrawn_support w using(handoff_id)
+              where c.urban_object_id=:u and c.property_iri=:p and (w.handoff_id is null or w.withdrawn_by=:h)
+              order by (w.handoff_id is null) desc,c.created_at desc,c.contribution_id limit 1
+              """).param("u",urbanObjectId).param("p",iri).param("h",handoffId).query(String.class).optional();
+          if(retained.isPresent()){
+            var prior=json.convertValue(readMap(retained.get()),UdpPorts.MaterializationProfile.class);
+            prior.properties().stream().filter(r->r.propertyIri().equals(iri)).findFirst().ifPresent(r->rules.put(iri,r));
+          }
+        }
+      }
+      profile=new UdpPorts.MaterializationProfile(profile.policyRef(),List.copyOf(rules.values()),profile.bitemporalProperties(),profile.checkpointInterval());
+    }
+    selectWinners(urbanObjectId,profile,values,labels,winners,authority,reconciled);
+    if(api && !refresh)db.sql("update ouf_udp.property_bitemporal_interval set system_to=transaction_timestamp() where urban_object_id=:u and system_to is null and not jsonb_exists(cast(:v as jsonb),property_iri)")
+        .param("u",urbanObjectId).param("v",write(values)).update();
     recordGeometryVisibility(profile,values,winners,authority,current.authority);
-    String canonicalHash=hash(Map.of("values",values,"labels",labels)),authorityHash=hash(authority);if(canonicalHash.equals(current.canonicalHash)&&authorityHash.equals(current.authorityHash)&&datatypesMatch(current.revisionId,profile,winners)){if(!refresh)observe(handoffId,urbanObjectId,current.revisionId,false,canonicalHash,changeFingerprint);return new Result(current.revisionId,false,false);}
+    boolean lifecycle=retirement || api && db.sql("""
+        select exists(select 1 from ouf_udp.api_source_object where urban_object_id=:u and state='RETIRED'
+          and source_id=:s and type_code=:t and source_object_id=:o)
+        """).param("u",urbanObjectId).param("s",sourceId).param("t",source.get("typeCode")).param("o",source.get("sourceObjectId")).query(Boolean.class).single();
+    String canonicalHash=hash(Map.of("values",values,"labels",labels)),authorityHash=hash(authority);if(!lifecycle&&canonicalHash.equals(current.canonicalHash)&&authorityHash.equals(current.authorityHash)&&datatypesMatch(current.revisionId,profile,winners)){if(!refresh)observe(handoffId,urbanObjectId,current.revisionId,false,canonicalHash,changeFingerprint);return new Result(current.revisionId,false,false);}
     UUID revision=UUID.randomUUID();long number=db.sql("select coalesce(max(revision_no),0)+1 from ouf_udp.object_revision where urban_object_id=:u").param("u",urbanObjectId).query(Long.class).single();boolean checkpoint=current.revisionId==null||(number-1)%profile.checkpointInterval()==0;Map<String,Object> delta=checkpoint?null:delta(current.values,values);String representation=checkpoint?"FULL_CHECKPOINT":"DELTA_PATCH";
     db.sql("insert into ouf_udp.object_revision(revision_id,urban_object_id,revision_no,canonical_hash,authority_hash,authority_state,canonical_payload,access_labels,source_handoff_id,bundle_ref,semantic_publication_ref,observed_at,valid_from,valid_to,representation,base_revision_id,canonical_delta,change_fingerprint) values(:i,:u,:n,:c,:a,cast(:z as jsonb),cast(:p as jsonb),cast(:l as jsonb),:h,:b,:s,:o,:f,:t,:representation,:base,cast(:delta as jsonb),:fingerprint)")
       .param("i",revision).param("u",urbanObjectId).param("n",number).param("c",canonicalHash).param("a",authorityHash).param("z",write(authority)).param("p",checkpoint?write(values):null,Types.VARCHAR).param("l",write(labels)).param("h",handoffId).param("b",HandoffIntakeService.text(refs,"bundleRef")).param("s",HandoffIntakeService.text(refs,"semanticPublicationSetRef")).param("o",observed,Types.TIMESTAMP_WITH_TIMEZONE).param("f",parse(source.get("validFrom")),Types.TIMESTAMP_WITH_TIMEZONE).param("t",parse(source.get("validTo")),Types.TIMESTAMP_WITH_TIMEZONE).param("representation",representation).param("base",checkpoint?null:current.revisionId,Types.OTHER).param("delta",checkpoint?null:write(delta),Types.VARCHAR).param("fingerprint",changeFingerprint,Types.VARCHAR).update();
@@ -135,7 +168,7 @@ public class CanonicalMaterializer {
   }
   private Map<String,Object> geometryCurrentWinner(UUID object,UdpPorts.PropertyRule rule,String policy){
     boolean binary64=CanonicalValueType.GEO.equals(rule.datatype());
-    var rows=db.sql("select c.contribution_id,c.value_json::text value_json,c.value_hash,c.access_label,c.source_id,c.authority_rank,g.geometry_revision_id,g.source_geometry_json::text source_geometry_json from ouf_udp.urban_geometry_role_current role_view join ouf_udp.urban_geometry g on g.geometry_revision_id=role_view.geometry_revision_id join ouf_udp.property_contribution c on c.handoff_id=g.handoff_id and c.urban_object_id=g.urban_object_id where role_view.urban_object_id=:u and c.property_iri=:p and coalesce(g.evidence_json->>'sourceField','geometry')=:field and (c.value_json=g.source_geometry_json or :binary64 and g.source_geometry_json is not null) and (g.valid_from is null or g.valid_from<=transaction_timestamp()) and (g.valid_to is null or g.valid_to>transaction_timestamp())")
+    var rows=db.sql("select c.contribution_id,c.value_json::text value_json,c.value_hash,c.access_label,c.source_id,c.authority_rank,g.geometry_revision_id,g.source_geometry_json::text source_geometry_json from ouf_udp.urban_geometry_role_current role_view join ouf_udp.urban_geometry g on g.geometry_revision_id=role_view.geometry_revision_id join ouf_udp.current_property_contribution c on c.handoff_id=g.handoff_id and c.urban_object_id=g.urban_object_id where role_view.urban_object_id=:u and c.property_iri=:p and coalesce(g.evidence_json->>'sourceField','geometry')=:field and (c.value_json=g.source_geometry_json or :binary64 and g.source_geometry_json is not null) and (g.valid_from is null or g.valid_from<=transaction_timestamp()) and (g.valid_to is null or g.valid_to>transaction_timestamp())")
       .param("u",object).param("p",rule.propertyIri()).param("field",rule.sourceField()).param("binary64",binary64).query().listOfRows();
     if(binary64)rows=rows.stream().filter(row->Objects.equals(
         rule.normalizeGeometry(readValue((String)row.get("value_json"))),

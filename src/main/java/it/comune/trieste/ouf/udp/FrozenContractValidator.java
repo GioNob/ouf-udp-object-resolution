@@ -20,6 +20,10 @@ public final class FrozenContractValidator {
     if(schema.has("$ref")){String raw=schema.get("$ref").asText();Path ref=base.resolve(raw).normalize();try(InputStream in=getClass().getResourceAsStream("/"+ref)){if(in==null)throw new IOException();validateNode(json.readTree(in),value,path,ref.getParent());return;}catch(IOException e){throw new ContractViolation("UDP_CONTRACT_REF_UNAVAILABLE",List.of(path));}}
     if(schema.has("oneOf")){int valid=0;for(JsonNode option:schema.get("oneOf"))if(isValid(option,value,path,base))valid++;if(valid!=1)fail(path);return;}
     if(schema.has("type")&&!matchesType(schema.get("type"),value))fail(path);
+    if(schema.has("not")&&isValid(schema.get("not"),value,path,base))fail(path);
+    if(value.isTextual()&&schema.has("maxLength")&&value.textValue().codePointCount(0,value.textValue().length())>schema.get("maxLength").intValue())fail(path);
+    if(value.isTextual()&&schema.has("pattern")&&!java.util.regex.Pattern.compile(schema.get("pattern").asText()).matcher(value.textValue()).find())fail(path);
+    if(value.isNumber()&&schema.has("maximum")&&value.decimalValue().compareTo(schema.get("maximum").decimalValue())>0)fail(path);
     if(schema.has("const")&&!schema.get("const").equals(value))fail(path);
     if(schema.has("enum")){boolean found=false;for(JsonNode item:schema.get("enum"))found|=item.equals(value);if(!found)fail(path);}
     if(value.isTextual()&&schema.path("minLength").isInt()&&value.textValue().length()<schema.get("minLength").intValue())fail(path);

@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import it.comune.trieste.ouf.authorization.*;
 import it.comune.trieste.ouf.authorization.AuthorizationPolicy.*;
 import java.nio.charset.StandardCharsets;
@@ -163,6 +164,29 @@ class SearchOutcomeRuntimeTest {
     assertThat((Integer)result.get("pollAfterSeconds")).isBetween(870,901);
   }
 
+  @Test void task61iQueuedApiJobIsPendingUntilItsSourceIsBlocked() {
+    var scope=scope(50);
+    var job=handoff(scope,"a","tenant-a","OPEN","READY",true);
+    // The V40 fence parks a queued API job outside the V39 claim; the evidence still reports it as queued.
+    assertThat(db.sql("select state||':'||api_semantics from ouf_udp.materialization_job where handoff_id=:h")
+        .param("h",job.handoffId()).query(String.class).single()).isEqualTo("PAUSED:true");
+    var actor=actor(scope.sourceId());
+    var queued=evidence.read(scope,actor);
+    assertThat(queued).containsEntry("outcome",MATERIALIZATION_PENDING).containsEntry("pollAfterSeconds",5);
+    assertThat((List<?>)queued.get("items")).first().asInstanceOf(InstanceOfAssertFactories.MAP).containsEntry("job_state","READY");
+    var evidenceRow=handoff(scope,"b","tenant-a","OPEN","SUCCEEDED");
+    db.sql("""
+        insert into ouf_udp.api_handoff_outcome(handoff_id,tenant_id,source_id,type_code,source_object_id,ingestion_run_id,
+          epoch,kind,revision,rendering,item_sha256,operation,outcome)
+        values(:h,'tenant-a',:s,'asset',:h,:run,'epoch','EVENT',1,'1','x','UPSERT','APPLIED')
+        """).param("h",evidenceRow.handoffId()).param("s",scope.sourceId()).param("run",scope.runId().toString()).update();
+    db.sql("insert into ouf_udp.api_source_block(tenant_id,source_id,evidence_handoff) values('tenant-a',:s,:h)")
+        .param("s",scope.sourceId()).param("h",evidenceRow.handoffId()).update();
+    var blocked=evidence.read(scope,actor);
+    assertThat(blocked).containsEntry("outcome",INCOMPLETE).doesNotContainKey("pollAfterSeconds");
+    assertThat((List<?>)blocked.get("items")).first().asInstanceOf(InstanceOfAssertFactories.MAP).containsEntry("job_state","PAUSED");
+  }
+
   private com.fasterxml.jackson.databind.JsonNode readAcquisition(AcquisitionEvidenceApi.Query query) throws Exception {
     var args=new LinkedHashMap<String,Object>();
     args.put("sourceId",query.sourceId());args.put("runId",query.runId());args.put("limit",query.limit());
@@ -207,6 +231,10 @@ class SearchOutcomeRuntimeTest {
   }
 
   private ResolutionRepository.Claim handoff(AcquisitionEvidenceApi.Query scope,String suffix,String tenant,String label,String state) {
+    return handoff(scope,suffix,tenant,label,state,false);
+  }
+
+  private ResolutionRepository.Claim handoff(AcquisitionEvidenceApi.Query scope,String suffix,String tenant,String label,String state,boolean api) {
     UUID raw=UUID.randomUUID(),job=UUID.randomUUID();
     String handoff=scope.runId()+"-"+suffix;
     db.sql("""
@@ -219,14 +247,15 @@ class SearchOutcomeRuntimeTest {
         insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,
           content_hash,payload_json,receipt_ref,raw_lake_object_id,state)
         values(:h,:run,:h,:source,'asset',:h,:h,jsonb_build_object('dataAccessLabels',
-          jsonb_build_array(jsonb_build_object('labelId',cast(:label as text)))),:receipt,:raw,:state)
+          jsonb_build_array(jsonb_build_object('labelId',cast(:label as text))))
+          ||case when :api then jsonb_build_object('apiObservation',jsonb_build_object()) else '{}'::jsonb end,:receipt,:raw,:state)
         """).param("h",handoff).param("run",scope.runId().toString()).param("source",scope.sourceId()).param("label",label)
-      .param("receipt","udp://handoffs/"+handoff).param("raw",raw).param("state","SUCCEEDED".equals(state)?"PROCESSED":"DURABLE").update();
+      .param("api",api).param("receipt","udp://handoffs/"+handoff).param("raw",raw).param("state","SUCCEEDED".equals(state)?"PROCESSED":"DURABLE").update();
     db.sql("""
-        insert into ouf_udp.materialization_job(job_id,handoff_id,state,claimed_by,lease_until)
+        insert into ouf_udp.materialization_job(job_id,handoff_id,state,claimed_by,lease_until,api_tenant_id)
         values(:job,:h,:state,case when :state='RUNNING' then 'test-worker' end,
-          case when :state='RUNNING' then transaction_timestamp()+interval '10 minutes' end)
-        """).param("job",job).param("h",handoff).param("state",state).update();
+          case when :state='RUNNING' then transaction_timestamp()+interval '10 minutes' end,case when :api then cast(:tenant as text) end)
+        """).param("job",job).param("h",handoff).param("state",state).param("api",api).param("tenant",tenant).update();
     return new ResolutionRepository.Claim(job,handoff,"asset",Map.of(),"test-worker",null,0,0);
   }
 

@@ -20,10 +20,11 @@ public class RelationshipReconciliation {
     if(!db.sql("select task_id from ouf_udp.relationship_reconciliation where handoff_id=:h and source_object_id=:s").param("h",handoff).param("s",source).query(UUID.class).list().isEmpty())return;
     // A delayed older observation must not restore a superseded edge or policy.
     long newer=db.sql("select count(*) from ouf_udp.relationship_reconciliation t join ouf_udp.handoff_intake old on old.handoff_id=t.handoff_id join ouf_udp.handoff_intake incoming on incoming.handoff_id=:h where t.binding_key=:b and t.active and (cast(old.payload_json->'sourceIdentity'->>'observedAt' as timestamptz),old.received_at,old.handoff_id) > (cast(incoming.payload_json->'sourceIdentity'->>'observedAt' as timestamptz),incoming.received_at,incoming.handoff_id)").param("h",handoff).param("b",binding).query(Long.class).single();
-    if(newer>0)return;
+    if(newer>0 && !payload.containsKey("apiObservation"))return;
     db.sql("update ouf_udp.relationship_issue set state='SUPERSEDED' where state='OPEN' and handoff_id in(select handoff_id from ouf_udp.relationship_reconciliation where binding_key=:b and active)").param("b",binding).update();
     db.sql("update ouf_udp.relationship_current_support set active=false where task_id in(select task_id from ouf_udp.relationship_reconciliation where binding_key=:b and active)").param("b",binding).update();
     db.sql("update ouf_udp.relationship_reconciliation set active=false where binding_key=:b and active").param("b",binding).update();
+    if("TOMBSTONE".equals(payload.get("operation")) && payload.containsKey("apiObservation")){refresh(source);return;}
     UUID task=UUID.randomUUID();
     db.sql("insert into ouf_udp.relationship_reconciliation(task_id,handoff_id,source_object_id,binding_key,profile_json) values(:i,:h,:s,:b,cast(:p as jsonb))").param("i",task).param("h",handoff).param("s",source).param("b",binding).param("p",write(profile==null?new UdpPorts.RelationshipProfile("policy://relationships/none",List.of()):profile)).update();
     resolve(task,handoff,source,payload,profile);refresh(source);

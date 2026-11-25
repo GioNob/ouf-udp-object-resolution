@@ -19,3 +19,21 @@ Il custode dell'installazione UDP gestisce questi parametri nella configurazione
 | `OUF_UDP_PUBLICATION_RECOVERY_MAX_ELAPSED_MS` | ms, 86400000 | Scadenza complessiva, da 1 ms a 24 ore. |
 
 Catturare le chiavi effettive con la revisione della ConfigMap, il digest dell'immagine e la versione del contratto. Ripristinarle prima di avviare il worker, insieme al binding del Gateway e del tenant. Il journal di recupero del job resta nello schema UDP e va ripristinato con il database. Per la prova di ripristino verificare i limiti di byte sul filo, il rifiuto di una busta oltre il limite e la ripresa con un nuovo worker dal tentativo persistito. Le prove del modulo sono `SemanticReferenceBatchTest` e `PublicationDependencyRecoveryRuntimeTest`. I default sono definiti in [application.yml](../src/main/resources/application.yml).
+
+## udp.api-observation@1 (V40, `ouf.delta-position.v1`)
+
+Parametri e stato per le sorgenti API (task-61i). La classe è configurazione d'installazione; i valori effettivi stanno nella distinta privata dell'installazione, mai nel repository.
+
+| Parametro | Unità e default del modulo | Uso |
+|---|---|---|
+| `OUF_UDP_INGESTION_WORKLOAD` (`ouf.udp.ingestion-workload`) | identificativo del principal di servizio, vuoto | Principal M2M dell'Ingestion autorizzato a leggere gli esiti per handoff (`GET /api/internal/v1/handoffs/{id}` con `outcome`, `GET /api/internal/v1/handoffs/outcomes`). Vuoto = lettura degli esiti negata. Deve coincidere con il client IAM del workload Ingestion dell'installazione. |
+| `OUF_UDP_TENANT_ID` (`ouf.udp.lake.tenant-id`) | tenant, nessun default | Già esistente. Per le sorgenti API è obbligatorio: senza tenant l'intake rifiuta `apiObservation` e il worker mette in quarantena (`UDP_API_BINDING_DRIFT`). |
+
+Stato durevole nuovo (schema `ouf_udp`, da ripristinare con il database, mai da ricostruire):
+- `api_source_object`: stato per oggetto sorgente (`lastRevision`, `ACTIVE`/`RETIRED`, `retiredBy`, `absenceSnapshotAt`, epoca, binding storico). Non scade mai: perderlo farebbe risorgere oggetti con eventi tardivi.
+- `api_handoff_outcome`: un esito immutabile per handoff, con `position` crescente nell'ordine di commit per sorgente.
+- `api_source_block`: blocco `EVENT_CONFLICT` per sorgente (R4), con la prova.
+- `api_withdrawn_support`, `api_property_profile`: contributi ritirati e regole usate, per il ricalcolo dai sostegni superstiti.
+- `materialization_job.api_tenant_id`, `api_semantics`, `api_dispatch_at`: recinto D-080 verso i worker V39 (trigger `fence_api_dispatch`).
+
+Prove del modulo: `ApiObservationRuntimeTest`, `HandoffOutcomeApiTest`, `RuntimeIntakeAuthorizationTest`; ritorno al predecessore in `scripts/ci/predecessor-return.sh`. Dettagli in [API_OBSERVATIONS.md](API_OBSERVATIONS.md).

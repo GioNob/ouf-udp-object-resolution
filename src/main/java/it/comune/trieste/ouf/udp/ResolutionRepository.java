@@ -10,11 +10,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class ResolutionRepository {
-  private static final String CURRENT_CLAIM="job_id=:j and handoff_id=:handoff and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>clock_timestamp()";
+  private static final String CURRENT_CLAIM="job_id=:j and handoff_id=:handoff and state='RUNNING' and claimed_by=:w and state_version=:v and coalesce(api_dispatch_at,lease_until)>clock_timestamp()";
   private final JdbcClient db;private final ObjectMapper json;public ResolutionRepository(JdbcClient db,ObjectMapper json){this.db=db;this.json=json;}
   @Transactional public Optional<Claim> claim(String worker,Duration lease){
-    return db.sql("with candidate as (select job_id from ouf_udp.materialization_job where state='READY' or (state='RUNNING' and lease_until<transaction_timestamp()) or (state='PAUSED' and next_integrity_check_at<=transaction_timestamp()) order by created_at for update skip locked limit 1) update ouf_udp.materialization_job j set state='RUNNING',state_version=state_version+1,claimed_by=:w,lease_until=transaction_timestamp()+(:m*interval '1 millisecond'),attempts=attempts+1,updated_at=transaction_timestamp() from candidate c,ouf_udp.handoff_intake h where j.job_id=c.job_id and h.handoff_id=j.handoff_id returning j.job_id,j.handoff_id,h.type_code,h.payload_json::text,j.integrity_baseline_hash,j.integrity_attempts,j.state_version,j.updated_at,j.lease_until")
-      .param("w",worker).param("m",lease.toMillis()).query((r,n)->new Claim(r.getObject(1,UUID.class),r.getString(2),r.getString(3),read(r.getString(4)),worker,r.getString(5),r.getInt(6),r.getLong(7),r.getTimestamp(8).toInstant(),r.getTimestamp(9).toInstant())).optional();
+    return claim(worker,lease,false);
+  }
+  @Transactional public Optional<Claim> claimPublished(String worker,Duration lease){
+    return claim(worker,lease,true);
+  }
+  private Optional<Claim> claim(String worker,Duration lease,boolean published){
+    return db.sql("with candidate as (select job_id from ouf_udp.materialization_job where (:published and api_semantics and state in ('PAUSED','RUNNING') and api_dispatch_at<=transaction_timestamp() and not exists(select 1 from ouf_udp.handoff_intake admitted join ouf_udp.api_source_block b on b.source_id=admitted.source_id where admitted.handoff_id=materialization_job.handoff_id and b.tenant_id=materialization_job.api_tenant_id)) or (not api_semantics and (state='READY' or (state='RUNNING' and lease_until<transaction_timestamp()) or (state='PAUSED' and next_integrity_check_at<=transaction_timestamp()))) order by created_at for update skip locked limit 1) update ouf_udp.materialization_job j set state='RUNNING',state_version=state_version+1,claimed_by=:w,lease_until=transaction_timestamp()+(:m*interval '1 millisecond'),attempts=attempts+1,updated_at=transaction_timestamp() from candidate c,ouf_udp.handoff_intake h where j.job_id=c.job_id and h.handoff_id=j.handoff_id returning j.job_id,j.handoff_id,h.type_code,h.payload_json::text,j.integrity_baseline_hash,j.integrity_attempts,j.state_version,j.updated_at,coalesce(j.api_dispatch_at,j.lease_until)")
+      .param("published",published).param("w",worker).param("m",lease.toMillis()).query((r,n)->new Claim(r.getObject(1,UUID.class),r.getString(2),r.getString(3),read(r.getString(4)),worker,r.getString(5),r.getInt(6),r.getLong(7),r.getTimestamp(8).toInstant(),r.getTimestamp(9).toInstant())).optional();
   }
   public void lockClaim(Claim claim){
     if(db.sql("select 1 from ouf_udp.materialization_job where "+CURRENT_CLAIM+" for update")
