@@ -1,5 +1,6 @@
 spring:
   http.converters.preferred-json-mapper: jackson2
+  jackson2.deserialization.use-big-decimal-for-floats: true
   application.name: ouf-udp-object-resolution
   datasource:
     url: ${OUF_UDP_DB_URL}
@@ -64,3 +65,19 @@ ouf.udp.search:
 
 ouf.udp.materialization-recovery:
   enabled: ${OUF_UDP_MATERIALIZATION_RECOVERY_ENABLED:false}
+ouf.udp.reference-batch:
+  request-bytes: ${OUF_UDP_REFERENCE_BATCH_REQUEST_BYTES:262144}
+  items: ${OUF_UDP_REFERENCE_BATCH_ITEMS:1000}
+  # One class, 1024 column properties and up to 1024 composition outputs.
+  references: ${OUF_UDP_PUBLICATION_MAX_REFERENCES:2049}
+  bundle-bytes: ${OUF_UDP_PUBLICATION_BUNDLE_BYTES:3145728}
+  verification-attempts: ${OUF_UDP_REFERENCE_VERIFICATION_ATTEMPTS:3}
+  fallback-interval-ms: ${OUF_UDP_REFERENCE_GET_INTERVAL_MS:50}
+  gateway-interval-ms: ${OUF_UDP_PUBLICATION_GATEWAY_INTERVAL_MS:50}
+ouf.udp.gateway-retry:
+  # Upper bound of a server-requested deferral (Retry-After or X-RateLimit-Reset) and its jitter.
+  max-delay-ms: ${OUF_UDP_GATEWAY_RETRY_MAX_DELAY_MS:60000}
+  jitter-ms: ${OUF_UDP_GATEWAY_RETRY_JITTER_MS:1000}
+ouf.udp.publication-recovery:
+  max-attempts: ${OUF_UDP_PUBLICATION_RECOVERY_MAX_ATTEMPTS:128}
+  max-elapsed-ms: ${OUF_UDP_PUBLICATION_RECOVERY_MAX_ELAPSED_MS:86400000}

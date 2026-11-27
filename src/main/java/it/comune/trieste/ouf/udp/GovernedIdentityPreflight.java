@@ -30,9 +30,26 @@ public class GovernedIdentityPreflight {
     if(!sourceId.equals(source.get("sourceId")))throw invalid("SOURCE");
     var udp=object(object(object(configuration,"extractionProfile"),"runtime"),"udp");
     var resolution=object(udp,"resolution");
-    var materialization=json.convertValue(object(udp,"materialization"),UdpPorts.MaterializationProfile.class);
-    Set<String> mapped=new HashSet<>();
-    if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||mappings.isEmpty())throw invalid("MAPPING");
+    var compositions=PublishedRuntimeConfiguration.compositions(semantic);
+    var types=new PublishedValueTypes();
+    if(configuration.get("semanticReferenceBindings") instanceof List<?> bindings){
+      for(Object item:bindings){
+        var binding=PublishedValueTypes.object(item);
+        if(PublishedValueTypes.hasEmbeddedDefinition(binding)){
+          types.embedded(binding,definition->PublishedRuntimeConfiguration.canonicalPublicationHash(json,definition));
+          continue;
+        }
+        types.recordReference(binding);
+        if(binding.containsKey("definition")){
+          var definition=PublishedValueTypes.object(binding.get("definition"));
+          if(!(definition.get("vocabularyRef") instanceof String vocabulary) || !CanonicalValueType.absolute(vocabulary))
+            throw CanonicalValueType.definitionError();
+        }
+      }
+    }
+    var materialization=PublishedRuntimeConfiguration.materialization(json,object(udp,"materialization"),compositions,types);
+    Set<String> mapped=new HashSet<>(compositions.keySet());
+    if(!(semantic.get("propertyMappings") instanceof List<?> mappings)||(mappings.isEmpty()&&mapped.isEmpty()))throw invalid("MAPPING");
     for(Object entry:mappings){if(!(entry instanceof Map<?,?> mapping)
         ||!(mapping.get("targetPropertyIri") instanceof String iri)||iri.isBlank()
         ||!mapped.add(iri))throw invalid("MAPPING");}
@@ -48,6 +65,7 @@ public class GovernedIdentityPreflight {
             &&canonicalClass.equals(target.get("classIri"))))throw invalid("CLASS");
     var policy=PublishedIdentityPolicy.decode(json,resolution,actor.tenantId(),sourceId,
         canonicalClass,mapped);
+    PublishedRuntimeConfiguration.validateComparators(policy,materialization);
     // Serialize with existing scope materialization/rebuild writers. Repeated delivery of
     // the same immutable review reconciles its live proof instead of replacing coverage.
     locks.acquire(policy.tenantId(),policy.canonicalClass());
@@ -66,6 +84,29 @@ public class GovernedIdentityPreflight {
         .param("version",policy.version()).param("fingerprint",fingerprint)
         .param("coverage",rebuilt.coverageRef()).param("count",rebuilt.indexedObjects())
         .param("actor",actor.subject()).update();
+    // Only identity reviews whose original publication and scope can use this proof.
+    // The normal worker reopens their pinned profiles and regenerates the choices.
+    db.sql("""
+        with eligible as (
+          select i.issue_id,j.job_id from ouf_udp.resolution_issue i
+          join ouf_udp.resolution_decision d using(resolution_decision_id)
+          join ouf_udp.materialization_job j on j.handoff_id=i.handoff_id
+          join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id
+          where i.state='OPEN' and not i.reevaluation_pending and i.tenant_id=:tenant
+            and h.source_id=:source and d.strategy_id='GOVERNED_IDENTITY'
+            and d.policy_ref=:policy and d.strategy_version=:version
+            and i.evidence_refs->0->>'canonicalClass'=:type and j.state='QUARANTINED'
+            and j.safe_failure_code in ('UDP_RESOLUTION_REVIEW_REQUIRED','UDP_IDENTITY_REVIEW_REQUIRED')
+          for update of i,j skip locked
+        ), queued as (
+          update ouf_udp.materialization_job j set state='READY',state_version=state_version+1,
+            updated_at=transaction_timestamp(),safe_failure_code=null from eligible e
+          where j.job_id=e.job_id returning e.issue_id
+        )
+        update ouf_udp.resolution_issue i set reevaluation_pending=true,version=version+1
+        from queued q where i.issue_id=q.issue_id
+        """).param("tenant",policy.tenantId()).param("source",sourceId).param("policy",policy.ref())
+        .param("version",policy.version()).param("type",policy.canonicalClass()).update();
     return status(id,actor);
   }
 

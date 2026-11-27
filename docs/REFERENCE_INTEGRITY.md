@@ -10,13 +10,15 @@ references present in the HandoffPayload. Resolution uses the governed catalog
 mounted through `OUF_UDP_HISTORICAL_CONTRACT_CATALOG_PATH`; it never substitutes
 an `ACTIVE` version.
 
-Missing or revoked references move the job to `PAUSED`. A persisted exponential
+Missing or revoked local catalog references move the job to `PAUSED`. A persisted exponential
 backoff makes the job eligible for a later worker claim. After
 `OUF_UDP_REFERENCE_INTEGRITY_MAX_ATTEMPTS` unsuccessful checks the job becomes
 `QUARANTINED`. Malformed contract data, an invalid catalog, or a content-hash
 change for a reference already checked by the job is quarantined immediately.
 
-Evidence contains only the baseline hash, hashed missing-reference identifiers,
-the attempt number and a safe failure code. Resolution and materialization ports
+Local catalog evidence includes the baseline hash, hashed missing-reference identifiers,
+the attempt number and a safe failure code. The live publication gate records
+the failed semantic pin in the authorized job review and quarantine event.
+See [published semantic references](NATIVE_SEMANTIC_REFERENCE_BOUND.md). Resolution and materialization ports
 are not invoked on a failed gate. Kubernetes readiness remains local and does
 not synchronously ping all cross-module dependencies.

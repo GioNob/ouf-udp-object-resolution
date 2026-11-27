@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the deployed UDP Flyway history immutable while extending R4a."""
+"""Keep deployed UDP Flyway checksums and the candidate sequence pinned."""
 
 from pathlib import Path
 import re
@@ -18,7 +18,7 @@ for path in files:
         raise SystemExit(f"MIGRATION_VERSION_REUSED={version}")
     versions[version] = path
 
-if set(versions) != set(range(1, 37)):
+if set(versions) != set(range(1, 40)):
     raise SystemExit("MIGRATION_SEQUENCE_INCOMPLETE")
 
 # V22 is pinned to the live image 944c2f5. V23–V26 were also checked
@@ -29,6 +29,9 @@ deployed = {
     24: ("V24__human_geometry_decisions.sql", -835784960),
     25: ("V25__human_property_decisions.sql", -1491487699),
     26: ("V26__geometry_roles_and_validity.sql", -369310849),
+    37: ("V37__repeatable_materialization.sql", 1985595747),  # Bridge 7809a0fd
+    38: ("V38__lake_copy_and_active_identity_contract.sql", -81279437),  # D-080 ebc5a322
+    39: ("V39__lake_failed_restage.sql", -1862540699),  # D-080 e18f7032
 }
 for version, (filename, expected) in deployed.items():
     path = versions[version]
@@ -40,5 +43,5 @@ for version, (filename, expected) in deployed.items():
     if path.name != filename or signed != expected:
         raise SystemExit(f"DEPLOYED_MIGRATION_CHANGED={version}")
 
-print("LIVE_MIGRATIONS_V22_TO_V26_IMMUTABLE=PASS NEXT=V27_TO_V36")
+print("LIVE_MIGRATIONS_V22_TO_V26_AND_V37_TO_V39_IMMUTABLE=PASS LATEST=V39")
 

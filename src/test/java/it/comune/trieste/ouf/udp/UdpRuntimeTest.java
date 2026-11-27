@@ -21,7 +21,7 @@ class UdpRuntimeTest {
 
   @Test void invalidHandoffIsRejectedBeforePersistence(){Map<String,Object> invalid=handoff("h-invalid","o","R1","Main");((Map<?,?>)invalid.get("sourceIdentity")).remove("sourceId");assertThatThrownBy(()->intake.accept(invalid)).isInstanceOf(FrozenContractValidator.ContractViolation.class).extracting("paths").asList().contains("$.sourceIdentity.sourceId");assertThat(db.sql("select count(*) from ouf_udp.handoff_intake").query(Long.class).single()).isZero();}
 
-  @Test void resolutionCreatesThenMatchesByDeterministicEvidence(){Map<String,Object> first=handoff("h-new","o-1","R1","Main Street");intake.accept(first);var created=resolution.resolve("h-new",first,profile);assertThat(created.outcome()).isEqualTo("NEW_OBJECT");UUID target=db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='o-1'").query(UUID.class).single();Map<String,Object> second=handoff("h-match","o-2","R2","Main Street");intake.accept(second);var matched=resolution.resolve("h-match",second,profile);assertThat(matched.outcome()).isEqualTo("MATCH");assertThat(matched.targetUrbanObjectId()).isEqualTo(target);assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();}
+  @Test void resolutionCreatesThenMatchesByDeterministicEvidence(){Map<String,Object> first=handoff("h-new","o-1","R1","Main Street");intake.accept(first);var created=resolution.resolve("h-new",first,profile);assertThat(created.outcome()).isEqualTo("NEW_OBJECT");UUID target=db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='o-1'").query(UUID.class).single();Map<String,Object> second=handoff("h-match","o-2","R1","Main Street");intake.accept(second);var matched=resolution.resolve("h-match",second,profile);assertThat(matched.outcome()).isEqualTo("MATCH");assertThat(matched.targetUrbanObjectId()).isEqualTo(target);assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();}
 
   @Test void ambiguousCandidatesCreateReviewIssueWithoutArbitraryBinding(){seed("R1","same");seed("R2","same");Map<String,Object> payload=handoff("h-review","o-3","R3","Same");intake.accept(payload);var decision=resolution.resolve("h-review",payload,profile);assertThat(decision.outcome()).isEqualTo("REVIEW_REQUIRED");assertThat(db.sql("select reason_code from ouf_udp.resolution_issue").query(String.class).single()).isEqualTo("UDP_RESOLUTION_AMBIGUOUS");assertThat(db.sql("select count(*) from ouf_udp.source_binding where source_object_id='o-3'").query(Long.class).single()).isZero();}
 
@@ -66,6 +66,23 @@ class UdpRuntimeTest {
     var b=handoff("h-inactive-new","inactive-row","R1","Main");intake.accept(b);
     assertThat(resolution.resolve("h-inactive-new",b,profile).outcome()).isEqualTo("REVIEW_REQUIRED");
     assertThat(db.sql("select count(*) from ouf_udp.urban_object").query(Long.class).single()).isOne();
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={true,false})
+  void canonicalKeyCanBeReusedOutsideTheActiveTenantScope(boolean foreignTenant){
+    seed("reserved","old match");
+    db.sql(foreignTenant?"update ouf_udp.urban_object set tenant_id='other'":
+        "update ouf_udp.urban_object set status='RETIRED'").update();
+    var incoming=handoff("new-handoff","new-row","reserved","new match");
+    intake.accept(incoming);
+    var decision=resolution.resolve("new-handoff",incoming,profile);
+    assertThat(decision.outcome()).isEqualTo("NEW_OBJECT");
+    assertThat(db.sql("select urban_object_id from ouf_udp.urban_object where tenant_id='default' and status='ACTIVE' and canonical_key='reserved'")
+        .query(UUID.class).single()).isEqualTo(decision.targetUrbanObjectId());
+    assertThat(db.sql("select urban_object_id from ouf_udp.source_binding").query(UUID.class).single())
+        .isEqualTo(decision.targetUrbanObjectId());
+    assertThat(db.sql("select count(*) from ouf_udp.urban_object where canonical_key='reserved'").query(Long.class).single()).isEqualTo(2);
   }
 
   @Test void duplicateReplayCannotBypassCurrentNatureGuard(){

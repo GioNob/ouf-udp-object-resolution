@@ -8,7 +8,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Durable bounded retry of publication GETs; never repeats a canonical mutation. */
+/** Durable bounded retry of idempotent publication and registry reads; never repeats a canonical mutation. */
 @Service
 public class PublicationDependencyRecovery {
   private final JdbcClient db;private final int maximumAttempts;private final long maximumMillis;
@@ -35,13 +35,20 @@ public class PublicationDependencyRecovery {
     int attempts=((Number)row.get("dependency_attempts")).intValue();
     Instant started;
     if(row.get("dependency_started_at")==null){
-      started=time(row,"updated_at");attempts=1;
-      db.sql("update ouf_udp.materialization_job set dependency_episode_id=gen_random_uuid(),dependency_started_at=updated_at,dependency_attempts=1,dependency_cumulative_attempts=dependency_cumulative_attempts+1 where job_id=:j")
-        .param("j",claim.jobId()).update();
+      started=claim.claimedAt()==null ? time(row,"updated_at") : claim.claimedAt();attempts=1;
+      db.sql("update ouf_udp.materialization_job set dependency_episode_id=gen_random_uuid(),dependency_started_at=:started,dependency_attempts=1,dependency_cumulative_attempts=dependency_cumulative_attempts+1 where job_id=:j")
+        .param("started",started.atOffset(ZoneOffset.UTC)).param("j",claim.jobId()).update();
     }else started=time(row,"dependency_started_at");
     var deadline=started.plusMillis(maximumMillis);
+    if(failure.retryNotBefore()!=null && !failure.retryNotBefore().isBefore(deadline)){
+      stop(claim,"UDP_PUBLICATION_RETRY_EXHAUSTED",attempts);return;
+    }
     var due=now.plusMillis(delayMillis(attempts,ThreadLocalRandom.current().nextDouble(.8,1.2)));
-    if(failure.retryNotBefore()!=null&&failure.retryNotBefore().isAfter(due))due=failure.retryNotBefore();
+    if(failure.retryNotBefore()!=null && failure.retryNotBefore().isAfter(due)){
+      // Spread workers beyond the admission floor, even when the server delay dominates.
+      long spread=delayMillis(attempts,1.0)/5;
+      due=failure.retryNotBefore().plusMillis(ThreadLocalRandom.current().nextLong(spread+1));
+    }
     if(attempts>=maximumAttempts||!due.isBefore(deadline)){
       stop(claim,"UDP_PUBLICATION_RETRY_EXHAUSTED",attempts);return;
     }
@@ -49,15 +56,20 @@ public class PublicationDependencyRecovery {
       .param("due",OffsetDateTime.ofInstant(due,ZoneOffset.UTC)).param("j",claim.jobId()).update();
     event(claim,"PUBLICATION_DEPENDENCY_RETRY_WAIT",attempts);
   }
-  @Transactional public void recovered(ResolutionRepository.Claim claim){
-    var row=lock(claim);if(row.get("dependency_started_at")==null)return;
+  @Transactional public boolean recovered(ResolutionRepository.Claim claim){
+    var row=lock(claim);if(row.get("dependency_started_at")==null)return true;
+    if(!time(row,"observed_at").isBefore(time(row,"dependency_started_at").plusMillis(maximumMillis))){
+      stop(claim,"UDP_PUBLICATION_RETRY_EXHAUSTED",((Number)row.get("dependency_attempts")).intValue());
+      return false;
+    }
     event(claim,"PUBLICATION_DEPENDENCY_RECOVERED",((Number)row.get("dependency_attempts")).intValue());
     db.sql("update ouf_udp.materialization_job set dependency_episode_id=null,dependency_started_at=null,dependency_attempts=0 where job_id=:j")
       .param("j",claim.jobId()).update();
+    return true;
   }
   private Map<String,Object> lock(ResolutionRepository.Claim claim){
-    var rows=db.sql("select *,transaction_timestamp() observed_at from ouf_udp.materialization_job where job_id=:j and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>transaction_timestamp() for update")
-      .param("j",claim.jobId()).param("w",claim.worker()).param("v",claim.stateVersion()).query().listOfRows();
+    var rows=db.sql("select *,transaction_timestamp() observed_at from ouf_udp.materialization_job where job_id=:j and handoff_id=:h and state='RUNNING' and claimed_by=:w and state_version=:v and lease_until>clock_timestamp() for update")
+      .param("j",claim.jobId()).param("h",claim.handoffId()).param("w",claim.worker()).param("v",claim.stateVersion()).query().listOfRows();
     if(rows.size()!=1)throw new IllegalStateException("UDP_RESOLUTION_LEASE_LOST");
     return rows.getFirst();
   }

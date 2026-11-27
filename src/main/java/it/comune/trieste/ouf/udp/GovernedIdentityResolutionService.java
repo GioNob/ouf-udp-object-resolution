@@ -34,14 +34,15 @@ public class GovernedIdentityResolutionService {
         .param("h",handoffId).query().singleRow();
     if(!policy.sourceId().equals(stored.get("source_id"))||!type.equals(stored.get("type_code"))
         ||!sourceObject.equals(stored.get("source_object_id")))throw invalid();
-    List<Map<String,Object>> binding=db.sql("select b.urban_object_id,b.state,o.tenant_id,o.canonical_type,o.status object_status from ouf_udp.source_binding b join ouf_udp.urban_object o on o.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b")
+    GovernedIdentityScopeLock.lockBinding(db,policy.sourceId(),type,sourceObject);
+    List<Map<String,Object>> binding=db.sql("select b.urban_object_id,b.first_handoff_id,b.state,o.tenant_id,o.canonical_type,o.status object_status from ouf_udp.source_binding b join ouf_udp.urban_object o on o.urban_object_id=b.urban_object_id where b.source_id=:s and b.type_code=:t and b.source_object_id=:o for update of b")
         .param("s",policy.sourceId()).param("t",type).param("o",sourceObject).query().listOfRows();
     UUID bound=binding.isEmpty()?null:(UUID)binding.getFirst().get("urban_object_id");
     boolean healthy=bound!=null&&"ACTIVE".equals(binding.getFirst().get("state"))
         &&"ACTIVE".equals(binding.getFirst().get("object_status"))
         &&policy.tenantId().equals(binding.getFirst().get("tenant_id"))
         &&policy.canonicalClass().equals(binding.getFirst().get("canonical_type"));
-    List<Map<String,Object>> prior=db.sql("select d.outcome,d.strategy_id,d.policy_ref,d.strategy_version,i.state issue_state,i.issue_id,i.evidence_refs::text issue_evidence,hd.action human_action from ouf_udp.resolution_decision d left join ouf_udp.resolution_issue i on i.resolution_decision_id=d.resolution_decision_id left join lateral (select action from ouf_udp.human_resolution_decision where issue_id=i.issue_id order by decided_at desc,decision_id desc limit 1) hd on true where d.handoff_id=:h")
+    List<Map<String,Object>> prior=db.sql("select d.outcome,d.target_urban_object_id,d.strategy_id,d.policy_ref,d.strategy_version,i.state issue_state,i.reevaluation_pending,i.version issue_version,i.tenant_id issue_tenant,i.issue_id,i.evidence_refs::text issue_evidence,hd.action human_action,hd.target_urban_object_id human_target from ouf_udp.resolution_decision d left join ouf_udp.resolution_issue i on i.resolution_decision_id=d.resolution_decision_id left join lateral (select action,target_urban_object_id from ouf_udp.human_resolution_decision where issue_id=i.issue_id order by decided_at desc,decision_id desc limit 1) hd on true where d.handoff_id=:h")
         .param("h",handoffId).query().listOfRows();
     if(!prior.isEmpty()){
       var old=prior.getFirst();
@@ -50,14 +51,20 @@ public class GovernedIdentityResolutionService {
         throw new IllegalStateException("UDP_IDENTITY_DECISION_CONFLICT");
       String outcome=String.valueOf(old.get("outcome"));
       if("REVIEW_REQUIRED".equals(outcome)){
+        if("OPEN".equals(old.get("issue_state"))&&Boolean.TRUE.equals(old.get("reevaluation_pending"))&&policy.tenantId().equals(old.get("issue_tenant"))){
+          refreshReview(old,policy,subject,candidates.retrieve(policy,subject),healthy?bound:null,!binding.isEmpty());
+          return new Result("REVIEW_REQUIRED",null,false);
+        }
         if(!"RESOLVED".equals(old.get("issue_state")))
           return new Result("REVIEW_REQUIRED",null,true);
         if("CREATE_NEW".equals(old.get("human_action"))&&!healthy){
-          if(!binding.isEmpty())throw new IllegalStateException("UDP_IDENTITY_BINDING_CONFLICT");
           var coverage=candidates.retrieve(policy,subject);
-          if(!coverage.complete())throw new IllegalStateException("UDP_IDENTITY_COVERAGE_UNVERIFIED");
-          if(!sameReviewedCoverage(String.valueOf(old.get("issue_evidence")),coverage.coverageRef())){
-            reopenStaleReview((UUID)old.get("issue_id"),policy,subject,coverage);
+          if(!binding.isEmpty()){
+            refreshReview(old,policy,subject,coverage,null,true);
+            return new Result("REVIEW_REQUIRED",null,false);
+          }
+          if(!coverage.complete()||!sameReviewedCoverage(String.valueOf(old.get("issue_evidence")),coverage.coverageRef(),engine.decide(policy,subject,coverage))){
+            refreshReview(old,policy,subject,coverage,null,false);
             return new Result("REVIEW_REQUIRED",null,false);
           }
           UUID created=UUID.randomUUID();
@@ -69,17 +76,17 @@ public class GovernedIdentityResolutionService {
           if(inserted!=1)throw new IllegalStateException("UDP_IDENTITY_BINDING_RACE");
           return new Result("NEW_OBJECT",created,false,coverage.coverageRef());
         }
-        if(!healthy)return new Result("REVIEW_REQUIRED",null,true);
-        boolean materialized=db.sql("select exists(select 1 from ouf_udp.materialization_observation where handoff_id=:h)")
-            .param("h",handoffId).query(Boolean.class).single();
-        if("CREATE_NEW".equals(old.get("human_action"))&&!materialized)
-          throw new IllegalStateException("UDP_NEW_IDENTITY_BINDING_CONFLICT");
-        if(materialized)return new Result("MATCH",bound,true);
-        var coverage=candidates.retrieve(policy,subject);
-        return new Result("MATCH",bound,false,coverage.complete()?coverage.coverageRef():null);
+        boolean created="CREATE_NEW".equals(old.get("human_action"));
+        if(!healthy||(created?!handoffId.equals(binding.getFirst().get("first_handoff_id")):!bound.equals(old.get("human_target")))){
+          refreshReview(old,policy,subject,candidates.retrieve(policy,subject),healthy?bound:null,!binding.isEmpty());
+          return new Result("REVIEW_REQUIRED",null,false);
+        }
+        return resume(created?"NEW_OBJECT":"MATCH",handoffId,bound,policy,subject);
       }
-      if(!healthy)throw new IllegalStateException("UDP_IDENTITY_BINDING_MISSING");
-      return new Result(outcome,bound,true);
+      if(!healthy||("MATCH".equals(outcome)?!bound.equals(old.get("target_urban_object_id")):
+          !handoffId.equals(binding.getFirst().get("first_handoff_id"))))
+        throw new IllegalStateException("UDP_IDENTITY_BINDING_MISSING");
+      return resume(outcome,handoffId,bound,policy,subject);
     }
     // An ACTIVE source binding is continuity evidence in its own right. A changed
     // observation may change properties without changing the canonical identity.
@@ -143,12 +150,27 @@ public class GovernedIdentityResolutionService {
     }
     return new Result(decision.outcome().name(),target,false,retrieved.coverageRef());
   }
+  private Result resume(String outcome,String handoff,UUID bound,GovernedIdentityEngine.Policy policy,
+      GovernedIdentityEngine.Subject subject){
+    var observed=db.sql("select urban_object_id from ouf_udp.materialization_observation where handoff_id=:h")
+        .param("h",handoff).query(UUID.class).optional();
+    if(observed.isPresent()){
+      if(!bound.equals(observed.get()))throw new IllegalStateException("UDP_IDENTITY_OBSERVATION_CONFLICT");
+      return new Result(outcome,bound,true);
+    }
+    var coverage=candidates.retrieve(policy,subject);
+    return new Result(outcome,bound,false,coverage.complete()?coverage.coverageRef():null,true);
+  }
   private String write(Object value){try{return json.writeValueAsString(value);}
     catch(JsonProcessingException failure){throw new IllegalStateException("UDP_IDENTITY_EVIDENCE_INVALID",failure);}}
-  private boolean sameReviewedCoverage(String encoded,String current){
+  private boolean sameReviewedCoverage(String encoded,String current,GovernedIdentityEngine.Decision currentDecision){
     try{
       var evidence=json.readTree(encoded);
       if(!evidence.isArray()||evidence.isEmpty()||!evidence.get(0).path("complete").asBoolean(false))return false;
+      if(!evidence.get(0).path("assessments").isArray())return false;
+      var reviewed=json.convertValue(evidence.get(0).path("assessments"),
+          new com.fasterxml.jackson.core.type.TypeReference<List<GovernedIdentityEngine.Assessment>>(){});
+      if(!currentDecision.assessments().equals(reviewed))return false;
       String observed=evidence.get(0).path("coverageRef").asText();
       String prefix="indexed-snapshot://";
       if(current==null||!current.startsWith(prefix)||!observed.startsWith(prefix))return false;
@@ -157,26 +179,33 @@ public class GovernedIdentityResolutionService {
       if(transactionSeparator<=prefix.length())return false;
       String currentRef=current.substring(prefix.length(),transactionSeparator);
       return observed.startsWith(prefix+currentRef+"/");
-    }catch(Exception failure){throw new IllegalStateException("UDP_IDENTITY_EVIDENCE_INVALID",failure);}
+    }catch(com.fasterxml.jackson.core.JsonProcessingException|IllegalArgumentException invalid){return false;}
   }
-  private void reopenStaleReview(UUID issueId,GovernedIdentityEngine.Policy policy,
-      GovernedIdentityEngine.Subject subject,GovernedIdentityEngine.Candidates coverage){
+  private void refreshReview(Map<String,Object> old,GovernedIdentityEngine.Policy policy,
+      GovernedIdentityEngine.Subject subject,GovernedIdentityEngine.Candidates coverage,UUID activeBinding,boolean bindingPresent){
     var decision=engine.decide(policy,subject,coverage);
     List<UUID> selectable=coverage.complete()
         ?coverage.rows().stream().map(GovernedIdentityEngine.Candidate::objectId)
             .filter(id->decision.assessments().stream().noneMatch(a->a.objectId().equals(id)&&a.excluded()))
             .toList():List.of();
+    if(bindingPresent)selectable=activeBinding==null||!coverage.complete()?List.of():List.of(activeBinding);
+    String reason="RESOLVED".equals(old.get("issue_state"))?"NEW_IDENTITY_EVIDENCE_STALE":
+        bindingPresent?(activeBinding==null?"SOURCE_BINDING_CONFLICT":"ACTIVE_SOURCE_BINDING"):decision.reason();
     Map<String,Object> evidence=new LinkedHashMap<>();
+    evidence.put("activeBindingTarget",activeBinding);
     evidence.put("policyRef",policy.ref());evidence.put("policyVersion",policy.version());
     evidence.put("tenantId",policy.tenantId());evidence.put("canonicalClass",policy.canonicalClass());
     evidence.put("coverageRef",coverage.coverageRef());evidence.put("complete",coverage.complete());
-    evidence.put("outcome","REVIEW_REQUIRED");evidence.put("reason","NEW_IDENTITY_EVIDENCE_STALE");
+    evidence.put("outcome",decision.outcome().name());evidence.put("reason",reason);
     evidence.put("assessments",decision.assessments());
-    db.sql("update ouf_udp.resolution_issue set state='OPEN',version=version+1,reason_code='NEW_IDENTITY_EVIDENCE_STALE',candidate_refs=cast(:c as jsonb),evidence_refs=cast(:e as jsonb),resolved_at=null,resolved_by_subject=null,resolution_reason=null,authorization_decision_ref=null where issue_id=:i and state='RESOLVED'")
-        .param("i",issueId).param("c",write(selectable)).param("e",write(List.of(evidence))).update();
+    int changed=db.sql("update ouf_udp.resolution_issue set state='OPEN',version=version+1,reevaluation_pending=false,reason_code=:reason,candidate_refs=cast(:c as jsonb),evidence_refs=cast(:e as jsonb),resolved_at=null,resolved_by_subject=null,resolution_reason=null,authorization_decision_ref=null where issue_id=:i and state=:state and version=:v and tenant_id=:tenant")
+        .param("i",old.get("issue_id")).param("state",old.get("issue_state")).param("v",old.get("issue_version"))
+        .param("tenant",policy.tenantId()).param("reason",reason).param("c",write(selectable)).param("e",write(List.of(evidence))).update();
+    if(changed!=1)throw new IllegalStateException("UDP_ISSUE_VERSION_CONFLICT");
   }
   private static IllegalArgumentException invalid(){return new IllegalArgumentException("UDP_IDENTITY_HANDOFF_MISMATCH");}
-  public record Result(String outcome,UUID targetUrbanObjectId,boolean duplicate,String coverageRef){
+  public record Result(String outcome,UUID targetUrbanObjectId,boolean duplicate,String coverageRef,boolean resumed){
+    public Result(String outcome,UUID target,boolean duplicate,String coverage){this(outcome,target,duplicate,coverage,false);}
     public Result(String outcome,UUID targetUrbanObjectId,boolean duplicate){this(outcome,targetUrbanObjectId,duplicate,null);}
   }
 }

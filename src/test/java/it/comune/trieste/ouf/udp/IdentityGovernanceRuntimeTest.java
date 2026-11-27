@@ -63,7 +63,7 @@ class IdentityGovernanceRuntimeTest {
     UUID selected=object("candidate");
     intake.accept(handoff("governed-review","incoming","same"));
     var retrieved=new GovernedIdentityEngine.Candidates("policy://identity/1","1","default","ouf:Road",
-        "postgres-snapshot://test",true,List.of(new GovernedIdentityEngine.Candidate(selected,"default","ouf:Road",Map.of())));
+        "indexed-snapshot://coverage://review-test/1/snapshot",true,List.of(new GovernedIdentityEngine.Candidate(selected,"default","ouf:Road",Map.of())));
     var review=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,null,
         "UNRESOLVED_IDENTITY","policy://identity/1","1",List.of(
             new GovernedIdentityEngine.Assessment(selected,List.of(
@@ -80,6 +80,7 @@ class IdentityGovernanceRuntimeTest {
     assertThat(db.sql("select state from ouf_udp.resolution_issue where issue_id=:id").param("id",issue)
         .query(String.class).single()).isEqualTo("OPEN");
     db.sql("update ouf_udp.urban_object set tenant_id='default' where urban_object_id=:id").param("id",selected).update();
+    currentReviewCoverage();
     governance.decideResolutionIssue(issue,0,"APPROVE","checked current object",selected,human);
     assertThat(db.sql("select urban_object_id from ouf_udp.source_binding where source_object_id='incoming'")
         .query(UUID.class).single()).isEqualTo(selected);
@@ -102,7 +103,7 @@ class IdentityGovernanceRuntimeTest {
     UUID selected=object("candidate");
     intake.accept(handoff("governed-stale","incoming","same"));
     var retrieved=new GovernedIdentityEngine.Candidates("policy://identity/1","1","default","ouf:Road",
-        "postgres-snapshot://test",true,List.of(new GovernedIdentityEngine.Candidate(selected,"default","ouf:Road",Map.of())));
+        "indexed-snapshot://coverage://review-test/1/snapshot",true,List.of(new GovernedIdentityEngine.Candidate(selected,"default","ouf:Road",Map.of())));
     var review=new GovernedIdentityEngine.Decision(GovernedIdentityEngine.Outcome.REVIEW_REQUIRED,null,
         "UNRESOLVED_IDENTITY","policy://identity/1","1",List.of(
             new GovernedIdentityEngine.Assessment(selected,List.of(
@@ -115,6 +116,7 @@ class IdentityGovernanceRuntimeTest {
         List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("roads")))));
     UUID issue=db.sql("select issue_id from ouf_udp.resolution_issue where handoff_id='governed-stale'")
         .query(UUID.class).single();
+    currentReviewCoverage();
     assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","stale evidence",selected,human))
         .hasMessage("UDP_GOVERNED_EVIDENCE_STALE");
   }
@@ -281,6 +283,68 @@ class IdentityGovernanceRuntimeTest {
     assertThatThrownBy(()->packages.confirm(view.snapshotHash(),List.of(choice),actor)).hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
   }
 
+  @Test void correctedLegacyBindingIsSelectableOnSameVersionedIssue(){
+    var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");
+    var first=handoff("original-row","stable","Main");intake.accept(first);
+    UUID target=resolution.resolve("original-row",first,profile).targetUrbanObjectId();
+    var second=handoff("reconsider-row","stable","Updated");intake.accept(second);
+    db.sql("update ouf_udp.urban_object set status='RETIRED' where urban_object_id=:u").param("u",target).update();
+    assertThat(resolution.resolve("reconsider-row",second,profile).outcome()).isEqualTo("REVIEW_REQUIRED");
+    var issue=db.sql("select issue_id from ouf_udp.resolution_issue where handoff_id='reconsider-row'").query(UUID.class).single();
+    db.sql("update ouf_udp.materialization_job set state='QUARANTINED',safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED' where handoff_id='reconsider-row'").update();
+    db.sql("update ouf_udp.urban_object set status='ACTIVE' where urban_object_id=:u").param("u",target).update();
+    governance.decideResolutionIssue(issue,0,"REEVALUATE","Binding corrected",null,human);
+    assertThat(resolution.resolve("reconsider-row",second,profile).outcome()).isEqualTo("REVIEW_REQUIRED");
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,0,"APPROVE","stale",target,human)).hasMessageContaining("UDP_ISSUE_VERSION_CONFLICT");
+    governance.decideResolutionIssue(issue,2,"APPROVE","Confirmed current binding",target,human);
+    UUID selected=resolution.resolve("reconsider-row",second,profile).targetUrbanObjectId();
+    assertThat(selected).isEqualTo(target);
+    materializer.materialize("reconsider-row",selected,second,new UdpPorts.MaterializationProfile("policy://authority",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of("roads")))));
+    assertThat(db.sql("select urban_object_id from ouf_udp.materialization_observation where handoff_id='reconsider-row'").query(UUID.class).single()).isEqualTo(target);
+  }
+  @Test void pendingChoicesAreArchivedAndAReviewParkedByV36CanBeRequeued(){
+    seedCandidate("a","same");seedCandidate("b","same");
+    UUID issue=reviewIssue();
+    String park="update ouf_udp.materialization_job set state='QUARANTINED',safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED' where handoff_id='review-h'";
+    db.sql(park).update();
+    governance.decideResolutionIssue(issue,0,"REEVALUATE","Refresh choices",null,human);
+    assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.resolution_issue_evidence_history where issue_id=:i and version=0")
+        .param("i",issue).query(Integer.class).single()).isEqualTo(2);
+    assertThat(db.sql("select jsonb_array_length(candidate_refs) from ouf_udp.resolution_issue where issue_id=:i")
+        .param("i",issue).query(Integer.class).single()).isZero();
+    assertThatThrownBy(()->governance.decideResolutionIssue(issue,1,"REEVALUATE","Still queued",null,human))
+        .hasMessageContaining("UDP_REVIEW_JOB_CHANGED");
+    db.sql(park).update();
+    governance.decideResolutionIssue(issue,1,"REEVALUATE","Resume after return",null,human);
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='review-h'").query(String.class).single())
+        .isEqualTo("READY");
+  }
+
+  @Test void historicalUnattributedIssueDoesNotBlockEitherTenant(){
+    seedCandidate("A","same");seedCandidate("B","same");
+    UUID historical=reviewIssue();
+    db.sql("update ouf_udp.resolution_issue set tenant_id=null where issue_id=:i").param("i",historical).update();
+    for(String tenant:List.of("default","second")){
+      var payload=handoff("visible-"+tenant,"row-"+tenant,"same");intake.accept(payload);
+      var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");
+      resolution.resolve("visible-"+tenant,payload,profile);
+      db.sql("update ouf_udp.resolution_issue set tenant_id=:t where handoff_id=:h").param("t",tenant).param("h","visible-"+tenant).update();
+    }
+    for(String tenant:List.of("default","second")){
+      var actor=new TrustedHumanContext("HUMAN","reviewer",tenant,Set.of("resolution.issue.read","resolution.match.approve"),"authz://review","package");
+      var view=packages.prepare(actor);
+      assertThat(view.issues()).hasSize(1);
+      var card=view.issues().getFirst();
+      assertThat(card.issueId()).isNotEqualTo(historical);
+      packages.confirm(view.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(card.issueId(),card.version(),"DISMISS","reviewed",null,card.reviewHash())),actor);
+    }
+    assertThat(db.sql("select issue_id from ouf_udp.unattributed_resolution_issue").query(UUID.class).single()).isEqualTo(historical);
+  }
+
+  private void currentReviewCoverage(){
+    db.sql("insert into ouf_udp.identity_lookup_coverage(tenant_id,canonical_class,policy_ref,policy_version,coverage_ref,policy_fingerprint,field_set_hash,indexed_objects,complete) values('default','ouf:Road','policy://identity/1','1','coverage://review-test','fixture','fixture',1,true) on conflict(tenant_id,canonical_class,policy_ref,policy_version) do update set coverage_ref=excluded.coverage_ref,complete=true,policy_fingerprint='fixture'")
+        .update();
+  }
   private UUID reviewIssue(){
     Map<String,Object> payload=handoff("review-h","incoming","same");intake.accept(payload);
     var profile=new UdpPorts.ResolutionProfile("ATTRIBUTE_EXACT","1","policy://resolution/1","ouf:Road","identity","name");

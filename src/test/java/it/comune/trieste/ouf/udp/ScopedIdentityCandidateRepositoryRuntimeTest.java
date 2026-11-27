@@ -85,6 +85,46 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     assertThat(db.sql("select indexed_objects from ouf_udp.identity_lookup_coverage where policy_ref=:p")
         .param("p",policy.ref()).query(Long.class).single()).isOne();
   }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+  void versionedReevaluationReplacesEmptyChoicesAndMaterializesOriginalHandoff(boolean overflow){
+    clearObjects();
+    var policy=policy();var existing=materialize("first-row","Alpha");
+    db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-first-row'").update();
+    UUID extra=null;
+    if(overflow){
+      extra=materialize("additional-row","Alpha");
+      db.sql("update ouf_udp.materialization_job set state='SUCCEEDED' where handoff_id='candidate-additional-row'").update();
+      backfill.rebuild(policy);
+    }
+    var config=org.mockito.Mockito.mock(PublishedRuntimeConfiguration.class);
+    var gate=org.mockito.Mockito.mock(MaterializationReferenceGate.class);
+    org.mockito.Mockito.when(gate.verify(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    org.mockito.Mockito.when(config.resolve("bundle://road/1","ROAD")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),null,mapping,null,null,policy));
+    var loop=new PublishedResolutionLoop(jobs,config,gate,resolver,materializer,null,db,tx,null,governed,backfill);
+    intake.accept(envelope("second-row","Alpha"));loop.tick();
+    var human=new TrustedHumanContext("HUMAN","reviewer","default",Set.of("resolution.issue.read","resolution.match.approve"),"authz://review","reevaluate");
+    var before=packages.prepare(human);var old=before.issues().getFirst();
+    assertThat(old.candidateRefs()).isEmpty();
+    assertThat(old.reevaluation().action()).isEqualTo("REEVALUATE");
+    assertThat(old.reevaluation().prerequisite()).isEqualTo(overflow?"NARROW_CANDIDATE_SCOPE":"IDENTITY_PREFLIGHT");
+    if(overflow)db.sql("update ouf_udp.urban_object set status='RETIRED' where urban_object_id=:id").param("id",extra).update();
+    backfill.rebuild(policy);
+    packages.confirm(before.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(old.issueId(),old.version(),"REEVALUATE",null,null,old.reviewHash())),human);
+    loop.tick();
+    var current=packages.prepare(human);var card=current.issues().getFirst();
+    assertThat(card.issueId()).isEqualTo(old.issueId());
+    assertThat(card.version()).isGreaterThan(old.version());
+    assertThat(card.candidateRefs()).containsExactly(existing.toString());
+    assertThatThrownBy(()->packages.confirm(before.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(old.issueId(),old.version(),"APPROVE",null,existing,old.reviewHash())),human))
+        .hasMessageContaining("UDP_REVIEW_PACKAGE_STALE");
+    packages.confirm(current.snapshotHash(),List.of(new ResolutionReviewPackageService.Choice(card.issueId(),card.version(),"APPROVE",null,existing,card.reviewHash())),human);
+    loop.tick();
+    assertThat(db.sql("select urban_object_id from ouf_udp.materialization_observation where handoff_id='candidate-second-row'").query(UUID.class).single()).isEqualTo(existing);
+    assertThat(db.sql("select state from ouf_udp.materialization_job where handoff_id='candidate-second-row'").query(String.class).single()).isEqualTo("SUCCEEDED");
+  }
+
   @Test void humanApprovedReviewResumesAndMaterializesTheObservation(){
     clearObjects();
     UUID existing=materializeWithAddress("review-target","Alpha","Via Roma");
@@ -188,6 +228,39 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
         .param("p",policy.ref()).query(Boolean.class).single()).isTrue();
   }
 
+  @Test void d084TypedCandidateTokensMatchTheIncomingSignal(){
+    clearObjects();
+    String integer="999999999999999999999999999999999999999999999";
+    var mapping=new UdpPorts.MaterializationProfile("policy://typed",List.of(
+        new UdpPorts.PropertyRule("key","key",CanonicalValueType.XSD+"integer","OPEN",List.of()),
+        new UdpPorts.PropertyRule("flag","flag",CanonicalValueType.XSD+"boolean","OPEN",List.of()),
+        new UdpPorts.PropertyRule("items","items","list","OPEN",List.of(),null,CanonicalValueType.base("decimal",true)),
+        new UdpPorts.PropertyRule("location","location",CanonicalValueType.GEO,"OPEN",List.of())));
+    var payload=envelope("typed","record");
+    var point=Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",
+        List.of(new java.math.BigDecimal("13.75000000000000001"),45,5)));
+    payload.put("canonicalPayload",Map.of("code","record","key",integer,"flag",false,"items",List.of("1.2","7"),"location",point));
+    intake.accept(payload);
+    UUID object=resolver.resolve("candidate-typed",payload,new UdpPorts.ResolutionProfile(
+        "CANONICAL_KEY","1","policy://resolution/1","ouf:Road","code","code")).targetUrbanObjectId();
+    materializer.materialize("candidate-typed",object,payload,mapping);
+    assertThat(db.sql("select value_json #>> '{geoJson,coordinates}' from ouf_udp.property_value where property_iri='location'")
+        .query(String.class).single()).isEqualTo("[13.75, 45, 5]");
+    assertThat(db.sql("select canonical_payload #>> '{location,geoJson,coordinates}' from ouf_udp.urban_object_current_state where urban_object_id=:id")
+        .param("id",object).query(String.class).single()).isEqualTo("[13.75, 45, 5]");
+    var signals=mapping.properties().stream().map(rule->new GovernedIdentityEngine.Signal(rule.propertyIri(),
+        rule.propertyIri()+"@semantic://publication/1",rule.canonicalType().comparator(),false,false,"assertion://"+rule.propertyIri())).toList();
+    var policy=new GovernedIdentityEngine.Policy("policy://identity/typed","1","default","ouf:Road","registry",5,true,signals,
+        List.of(new GovernedIdentityEngine.SufficientRule("all",Set.of("key","flag","items","location"),"assertion://all")));
+    assertThat(backfill.rebuild(policy).indexedObjects()).isOne();
+    var equivalent=Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",
+        List.of(new java.math.BigDecimal("13.74999999999999999"),45,5)));
+    payload.put("canonicalPayload",Map.of("code","record","key",integer,"flag",false,"items",List.of("1.2","7"),"location",equivalent));
+    var incoming=new GovernedIdentitySubjectMapper().map("candidate-typed",payload,mapping,policy);
+    var retrieved=candidates.retrieve(policy,incoming);
+    assertThat(retrieved.rows()).extracting(GovernedIdentityEngine.Candidate::objectId).containsExactly(object);
+    assertThat(new GovernedIdentityEngine().decide(policy,incoming,retrieved).outcome()).isEqualTo(GovernedIdentityEngine.Outcome.MATCH);
+  }
   @Test void structuredCanonicalValuesAreIndexedAndComparedAcrossJsonKeyOrder(){
     clearObjects();
     Map<String,Object> envelope=envelope("json","ignored");
@@ -259,7 +332,12 @@ class ScopedIdentityCandidateRepositoryRuntimeTest {
     db.sql("update ouf_udp.urban_object_current_state set updated_at=transaction_timestamp()")
         .update();
     assertThat(preflight.status(attestation.attestationId(),admin).valid()).isFalse();
+    var paused=envelope("waiting-for-preflight","Alpha");intake.accept(paused);
+    var mapping=new UdpPorts.MaterializationProfile("policy://authority/1",List.of(new UdpPorts.PropertyRule("name","ouf:name","string","OPEN",List.of("registry"))));
+    assertThat(governed.resolve("candidate-waiting-for-preflight",paused,mapping,policy).outcome()).isEqualTo("REVIEW_REQUIRED");
+    db.sql("update ouf_udp.materialization_job set state='QUARANTINED',safe_failure_code='UDP_RESOLUTION_REVIEW_REQUIRED' where handoff_id='candidate-waiting-for-preflight'").update();
     var refreshed=preflight.prepare("registry",hash,configuration,admin);
+    assertThat(db.sql("select j.state from ouf_udp.materialization_job j join ouf_udp.resolution_issue i using(handoff_id) where j.handoff_id='candidate-waiting-for-preflight' and i.reevaluation_pending").query(String.class).single()).isEqualTo("READY");
     assertThat(refreshed.valid()).isTrue();
     assertThat(refreshed.attestationId()).isNotEqualTo(attestation.attestationId());
     assertThat(refreshed.coverageRef()).isNotEqualTo(attestation.coverageRef());

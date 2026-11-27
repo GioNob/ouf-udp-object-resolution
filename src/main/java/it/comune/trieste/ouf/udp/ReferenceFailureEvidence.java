@@ -4,7 +4,7 @@ import java.util.*;
 
 /** Retain only explicitly safe symbolic diagnostics, never raw exception messages. */
 final class ReferenceFailureEvidence {
-  private static final Set<String> CODES=Set.of("UDP_PINNED_PROFILE_INVALID",
+  private static final Set<String> CODES=Set.of("UDP_PINNED_PROFILE_INVALID","UDP_SEMANTIC_REGISTRY_VERSION_UNSTABLE",
       "UDP_GOVERNED_IDENTITY_PROFILE_INVALID","UDP_RESOLUTION_PROFILE_UNSUPPORTED",
       "UDP_GATEWAY_INVALID","UDP_CONTRACT_REFS_REQUIRED","UDP_CONTRACT_REF_REQUIRED",
       "UDP_CONTRACT_REF_INVALID","UDP_HISTORICAL_CATALOG_INVALID","UDP_HISTORICAL_CATALOG_DUPLICATE",

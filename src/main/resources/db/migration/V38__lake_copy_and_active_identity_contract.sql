@@ -1,0 +1,5 @@
+-- V37 already supplies lake_object_scoped_copy_key and urban_object_active_canonical_key.
+alter table ouf_udp.lake_object
+  drop constraint lake_object_tenant_id_tier_content_hash_source_id_type_code_key;
+alter table ouf_udp.urban_object
+  drop constraint urban_object_canonical_type_canonical_key_key;

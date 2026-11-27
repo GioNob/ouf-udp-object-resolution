@@ -198,18 +198,28 @@ public final class GovernedIdentityEngine {
       case CONCEPT -> raw; // Published concept ID, exact and case sensitive.
       case TEXT_V1 -> Normalizer.normalize(raw, Normalizer.Form.NFKC).strip()
           .replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
-      case DECIMAL_V1 -> new BigDecimal(raw.strip()).stripTrailingZeros().toPlainString();
+      case DECIMAL_V1 -> {
+        try {yield new BigDecimal(raw.strip()).stripTrailingZeros().toPlainString();}
+        catch (NumberFormatException invalid) {throw new IllegalArgumentException("UDP_IDENTITY_DECIMAL_INVALID");}
+      }
       case JSON_V1 -> canonicalJson(raw);
     };
   }
+  private static final ObjectMapper EXACT_JSON=new ObjectMapper()
+      .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
   private static String canonicalJson(String raw) {
     try {
-      ObjectMapper json=new ObjectMapper();
-      return json.writeValueAsString(sortedJson(json.readValue(raw,Object.class)));
-    } catch(Exception invalid) { throw new IllegalArgumentException("UDP_IDENTITY_JSON_INVALID",invalid); }
+      return EXACT_JSON.writeValueAsString(sortedJson(EXACT_JSON.readValue(raw,Object.class)));
+    } catch(Exception invalid) { throw new IllegalArgumentException("UDP_IDENTITY_JSON_INVALID"); }
   }
   private static Object sortedJson(Object value) {
     if(value instanceof Map<?,?> map){
+      // Recognize the D-084 envelope by its complete geometry shape. Ordinary
+      // structured components (including canonical decimal strings) stay exact.
+      if(CanonicalGeometry.isEnvelope(map)) {
+        try {map=CanonicalGeometry.normalize(map);}
+        catch(IllegalArgumentException notGeometry) { /* A JSON_V1 object can have the same field names. */ }
+      }
       Map<String,Object> sorted=new TreeMap<>();
       map.forEach((key,item)->sorted.put(String.valueOf(key),sortedJson(item)));
       return sorted;

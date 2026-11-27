@@ -41,12 +41,26 @@ public class IdentityGovernanceService {
     if(reason!=null&&reason.length()>1000)throw new IllegalArgumentException("UDP_REASON_TOO_LONG");
     reason=reason==null?"":reason.strip();
     boolean approve="APPROVE".equals(action),create="CREATE_NEW".equals(action);
-    if(!approve&&!create&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
-    Map<String,Object> issue=db.sql("select i.handoff_id,i.tenant_id,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,d.evidence_refs::text legacy_evidence,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
+    boolean reevaluate="REEVALUATE".equals(action);
+    if(!approve&&!create&&!reevaluate&&!"DISMISS".equals(action))throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
+    Map<String,Object> issue=db.sql("select i.handoff_id,i.tenant_id,i.reevaluation_pending,i.reason_code,i.candidate_refs::text candidates,i.evidence_refs::text evidence,d.strategy_id,d.evidence_refs::text legacy_evidence,h.source_id,h.type_code,h.source_object_id from ouf_udp.resolution_issue i join ouf_udp.resolution_decision d on d.resolution_decision_id=i.resolution_decision_id join ouf_udp.handoff_intake h on h.handoff_id=i.handoff_id where i.issue_id=:i and i.state='OPEN' and i.version=:v for update of i")
         .param("i",issueId).param("v",expectedVersion).query().listOfRows().stream().findFirst()
         .orElseThrow(()->new ResponseStatusException(HttpStatus.CONFLICT,"UDP_ISSUE_VERSION_CONFLICT"));
     if(!actor.tenantId().equals(issue.get("tenant_id")))
       throw new SecurityException("UDP_REVIEW_TENANT_REQUIRED");
+    // A V36 worker may have returned an unfinished reassessment to quarantine.
+    // Only the guarded QUARANTINED -> READY transition below can queue it again.
+    if(Boolean.TRUE.equals(issue.get("reevaluation_pending"))&&!reevaluate)throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_REEVALUATION_PENDING");
+    if(reevaluate){
+      if(target!=null)throw new IllegalArgumentException("UDP_ISSUE_ACTION_INVALID");
+      int queued=db.sql("update ouf_udp.materialization_job set state='READY',state_version=state_version+1,safe_failure_code=null,updated_at=transaction_timestamp() where handoff_id=:h and state='QUARANTINED' and safe_failure_code in ('UDP_RESOLUTION_REVIEW_REQUIRED','UDP_IDENTITY_REVIEW_REQUIRED')")
+          .param("h",issue.get("handoff_id")).update();
+      if(queued!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_REVIEW_JOB_CHANGED");
+      db.sql("update ouf_udp.resolution_issue set reevaluation_pending=true,version=version+1 where issue_id=:i and version=:v")
+          .param("i",issueId).param("v",expectedVersion).update();
+      audit("REEVALUATE",null,actor,reason,hash(Map.of("issueId",issueId,"version",expectedVersion)));
+      return;
+    }
     if(approve){
       Object rawCandidates=readAny(String.valueOf(issue.get("candidates")));
       if(target==null||!(rawCandidates instanceof List<?> candidates)
@@ -54,22 +68,28 @@ public class IdentityGovernanceService {
         throw new IllegalArgumentException("UDP_TARGET_NOT_A_CANDIDATE");
       if("GOVERNED_IDENTITY".equals(issue.get("strategy_id")))verifyGovernedReviewTarget(issue,target);
       else requireIssueScope(issue,target,actor);
-      int changed=db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict(source_id,type_code,source_object_id) do update set urban_object_id=excluded.urban_object_id,state='ACTIVE' where source_binding.state='UNRESOLVED'")
+      GovernedIdentityScopeLock.lockBinding(db,issue.get("source_id"),issue.get("type_code"),issue.get("source_object_id"));
+      int changed=db.sql("insert into ouf_udp.source_binding(source_id,type_code,source_object_id,urban_object_id,first_handoff_id) values(:s,:t,:o,:u,:h) on conflict(source_id,type_code,source_object_id) do update set urban_object_id=excluded.urban_object_id,state='ACTIVE' where source_binding.state='UNRESOLVED' or (source_binding.state='ACTIVE' and source_binding.urban_object_id=excluded.urban_object_id)")
           .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
           .param("o",issue.get("source_object_id")).param("u",target)
           .param("h",issue.get("handoff_id")).update();
       if(changed!=1)throw new IllegalStateException("UDP_BINDING_CONFLICT");
     }
     if(create){
-      if(target!=null||!"GOVERNED_IDENTITY".equals(issue.get("strategy_id")))
+      if(target!=null)
         throw new IllegalArgumentException("UDP_NEW_IDENTITY_DECISION_INVALID");
-      Map<?,?> evidence=governedReviewEvidence(issue);
-      identityScope.acquire(String.valueOf(evidence.get("tenantId")),String.valueOf(evidence.get("canonicalClass")));
-      if(!Boolean.TRUE.equals(evidence.get("complete"))
-          ||!currentIdentityCoverage(evidence)
-          ||db.sql("select 1 from ouf_udp.source_binding where source_id=:s and type_code=:t and source_object_id=:o")
-              .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
-              .param("o",issue.get("source_object_id")).query(Integer.class).optional().isPresent())
+      if("GOVERNED_IDENTITY".equals(issue.get("strategy_id"))){
+        Map<?,?> evidence=governedReviewEvidence(issue);
+        identityScope.acquire(String.valueOf(evidence.get("tenantId")),String.valueOf(evidence.get("canonicalClass")));
+        if("RESOLUTION_TOO_BROAD".equals(evidence.get("outcome"))||!Boolean.TRUE.equals(evidence.get("complete"))
+            ||!currentIdentityCoverage(evidence))
+          throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_NEW_IDENTITY_EVIDENCE_STALE");
+      }else if(!"UDP_LEGACY_NEW_IDENTITY_AVAILABLE".equals(issue.get("reason_code")))
+        throw new IllegalArgumentException("UDP_NEW_IDENTITY_DECISION_INVALID");
+      GovernedIdentityScopeLock.lockBinding(db,issue.get("source_id"),issue.get("type_code"),issue.get("source_object_id"));
+      if(db.sql("select 1 from ouf_udp.source_binding where source_id=:s and type_code=:t and source_object_id=:o")
+          .param("s",issue.get("source_id")).param("t",issue.get("type_code"))
+          .param("o",issue.get("source_object_id")).query(Integer.class).optional().isPresent())
         throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_NEW_IDENTITY_EVIDENCE_STALE");
     }
     String state=approve||create?"RESOLVED":"DISMISSED",decisionAction=approve?"APPROVE_MATCH":create?"CREATE_NEW":"DISMISS";
@@ -128,6 +148,14 @@ public class IdentityGovernanceService {
         .param("u",target).param("tenant",tenant).param("type",canonicalClass)
         .query(Integer.class).optional().isEmpty())
       throw new IllegalStateException("UDP_GOVERNED_TARGET_STALE");
+    if(!Boolean.TRUE.equals(evidence.get("complete"))||!currentIdentityCoverage(evidence))
+      throw new ResponseStatusException(HttpStatus.CONFLICT,"UDP_GOVERNED_EVIDENCE_STALE");
+    if(target.toString().equals(evidence.get("activeBindingTarget"))){
+      if(db.sql("select 1 from ouf_udp.source_binding where source_id=:s and type_code=:t and source_object_id=:o and state='ACTIVE' and urban_object_id=:u for update")
+          .param("s",issue.get("source_id")).param("t",issue.get("type_code")).param("o",issue.get("source_object_id"))
+          .param("u",target).query(Integer.class).optional().isEmpty())throw new IllegalStateException("UDP_BINDING_CONFLICT");
+      return;
+    }
     if(!(evidence.get("assessments") instanceof List<?> assessments))
       throw new IllegalStateException("UDP_GOVERNED_EVIDENCE_STALE");
     Map<?,?> selected=null;
@@ -178,8 +206,6 @@ public class IdentityGovernanceService {
     if(tenants.size()!=1||types.size()!=1||tenants.getFirst().isBlank()||types.getFirst().isBlank())throw new IllegalArgumentException("UDP_RESOLUTION_ISSUE_SCOPE_UNPROVEN");
     if(!tenants.getFirst().equals(actor.tenantId()))throw new SecurityException("UDP_IDENTITY_TENANT_MISMATCH");
     identityScope.acquire(tenants.getFirst(),types.getFirst());
-    db.sql("select pg_advisory_xact_lock(hashtextextended(:key,0))")
-      .param("key","source-binding:"+write(List.of(issue.get("source_id"),issue.get("type_code"),issue.get("source_object_id")))).query().singleRow();
     List<Map<String,Object>> rows=db.sql("select tenant_id,canonical_type,status from ouf_udp.urban_object where urban_object_id=:t for update").param("t",target).query().listOfRows();
     if(rows.size()!=1||!tenants.getFirst().equals(rows.getFirst().get("tenant_id"))||!types.getFirst().equals(rows.getFirst().get("canonical_type"))||!"ACTIVE".equals(rows.getFirst().get("status")))throw new IllegalArgumentException("UDP_RESOLUTION_TARGET_SCOPE_MISMATCH");
   }

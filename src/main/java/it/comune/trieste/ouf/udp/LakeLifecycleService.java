@@ -15,7 +15,141 @@ public class LakeLifecycleService {
   private final LakeCatalogRepository catalog;private final ObjectProvider<LakeObjectStoragePort> storageProvider;
   public LakeLifecycleService(LakeCatalogRepository catalog,ObjectProvider<LakeObjectStoragePort> storageProvider){this.catalog=catalog;this.storageProvider=storageProvider;}
 
-  public LakeCatalogRepository.LakeObject store(byte[] content,String tenant,String source,String type,String tier,String mediaType,String retentionClass,String accessLabel,OffsetDateTime retentionUntil,String correlation){validate(tier,retentionClass,retentionUntil);String hash=hash(content),key="lake/"+tenant+"/"+tier.toLowerCase(Locale.ROOT)+"/"+hash.substring(7);UUID id=UUID.randomUUID();var staged=catalog.stage(id,tenant,source,type,tier,hash,mediaType,content.length,key,retentionClass,accessLabel,retentionUntil,correlation);if("VERIFIED".equals(staged.state()))return staged;if(!"STAGED".equals(staged.state()))throw new IllegalStateException("UDP_LAKE_DUPLICATE_NOT_USABLE");try{var receipt=storage().put(key,content,mediaType,hash);if(!receipt.durable()||!key.equals(receipt.locator())||!hash.equals(receipt.contentHash())||receipt.sizeBytes()!=content.length)throw new IllegalStateException("UDP_LAKE_DURABILITY_PROOF_INVALID");var durable=catalog.transition(staged.id(),staged.version(),"STAGED","DURABLE","SYSTEM","",correlation,Map.of("locatorFingerprint",fingerprint(receipt.locator())));var head=storage().head(receipt.locator()).orElseThrow(()->new IllegalStateException("UDP_LAKE_OBJECT_MISSING_AFTER_PUT"));if(!hash.equals(head.contentHash())||head.sizeBytes()!=content.length)throw new IllegalStateException("UDP_LAKE_CHECKSUM_MISMATCH");return catalog.transition(durable.id(),durable.version(),"DURABLE","VERIFIED","SYSTEM","",correlation,Map.of("locatorFingerprint",fingerprint(receipt.locator())));}catch(RuntimeException failure){LakeCatalogRepository.LakeObject current=catalog.get(staged.id());if("STAGED".equals(current.state()))catalog.transition(current.id(),current.version(),"STAGED","FAILED","SYSTEM","",correlation,Map.of("safeErrorCode","UDP_LAKE_WRITE_FAILED"));else if("DURABLE".equals(current.state()))catalog.transition(current.id(),current.version(),"DURABLE","QUARANTINED","SYSTEM","",correlation,Map.of("safeErrorCode","UDP_LAKE_VERIFY_FAILED"));throw failure;}}
+  public LakeCatalogRepository.LakeObject store(byte[] content,String tenant,String source,String type,String tier,
+      String mediaType,String retentionClass,String accessLabel,OffsetDateTime retentionUntil,String correlation){
+    validate(tier,retentionClass,retentionUntil);
+    String hash=hash(content);UUID id=UUID.randomUUID();
+    String locator="lake/"+tenant+"/"+tier.toLowerCase(Locale.ROOT)+"/"+hash.substring(7)+("RAW".equals(tier)?"/"+id:"");
+    boolean recoverInPlace="NORMALIZED".equals(tier)||"CURATED".equals(tier);
+    LakeCatalogRepository.LakeObject object;
+    try{
+      object=catalog.stage(id,tenant,source,type,tier,hash,mediaType,content.length,locator,retentionClass,
+          accessLabel,retentionUntil,correlation);
+    }catch(LakeCatalogRepository.CopyPolicyConflict conflict){
+      if(!recoverInPlace)throw conflict;
+      throw new StoreRejected(HttpStatus.CONFLICT,conflict.getMessage());
+    }
+    if("VERIFIED".equals(object.state()))return object;
+    if(!recoverInPlace)return storeCopy(object,content,correlation);
+    return storeWithLease(object,content,id.toString(),correlation);
+  }
+
+  private LakeCatalogRepository.LakeObject storeWithLease(LakeCatalogRepository.LakeObject object,byte[] content,
+      String owner,String correlation){
+    requireWritable(object);
+    var storage=storage();
+    var claim=catalog.claimWrite(object,owner,correlation);
+    if(claim.isEmpty())return currentOrRetry(object.id());
+    object=claim.get();
+    if("STAGED".equals(object.state())){
+      try{
+        put(storage,object,content);
+      }catch(RuntimeException failure){
+        if(catalog.advanceWrite(object,"FAILED",correlation,Map.of("safeErrorCode","UDP_LAKE_WRITE_FAILED")).isEmpty())
+          return currentOrRetry(object.id());
+        throw failure;
+      }
+      var durable=catalog.advanceWrite(object,"DURABLE",correlation,Map.of("locatorFingerprint",fingerprint(object.locator())));
+      if(durable.isEmpty())return currentOrRetry(object.id());
+      object=durable.get();
+    }
+    String proofError;
+    try{
+      proofError=invalidProof(storage,object,content);
+    }catch(RuntimeException failure){
+      if(catalog.advanceWrite(object,"DURABLE",correlation,Map.of("safeErrorCode","UDP_LAKE_VERIFICATION_INTERRUPTED")).isEmpty())
+        return currentOrRetry(object.id());
+      throw failure;
+    }
+    if(proofError!=null){
+      if(catalog.advanceWrite(object,"QUARANTINED",correlation,Map.of("safeErrorCode",proofError)).isEmpty())
+        return currentOrRetry(object.id());
+      throw quarantined();
+    }
+    var verified=catalog.advanceWrite(object,"VERIFIED",correlation,Map.of("locatorFingerprint",fingerprint(object.locator())));
+    return verified.isPresent()?verified.get():currentOrRetry(object.id());
+  }
+
+  private LakeCatalogRepository.LakeObject storeCopy(LakeCatalogRepository.LakeObject object,byte[] content,String correlation){
+    if("STAGED".equals(object.state())){
+      try{
+        put(storage(),object,content);
+      }catch(RuntimeException failure){
+        catalog.transition(object.id(),object.version(),"STAGED","FAILED","SYSTEM","",correlation,
+            Map.of("safeErrorCode","UDP_LAKE_WRITE_FAILED"));
+        throw failure;
+      }
+      object=advanceCopy(object,"DURABLE",correlation);
+    }
+    if("VERIFIED".equals(object.state()))return object;
+    if(!"DURABLE".equals(object.state()))throw new IllegalStateException("UDP_LAKE_DUPLICATE_NOT_USABLE");
+    try{
+      String proofError=invalidProof(storage(),object,content);
+      if(proofError!=null)throw new IllegalStateException(proofError);
+    }catch(RuntimeException failure){
+      catalog.transition(object.id(),object.version(),"DURABLE","QUARANTINED","SYSTEM","",correlation,
+          Map.of("safeErrorCode","UDP_LAKE_VERIFY_FAILED"));
+      throw failure;
+    }
+    return advanceCopy(object,"VERIFIED",correlation);
+  }
+
+  private static void put(LakeObjectStoragePort storage,LakeCatalogRepository.LakeObject object,byte[] content){
+    var receipt=storage.put(object.locator(),content,object.mediaType(),object.hash());
+    if(!receipt.durable()||!object.locator().equals(receipt.locator())||!object.hash().equals(receipt.contentHash())
+        ||receipt.sizeBytes()!=content.length)throw new IllegalStateException("UDP_LAKE_DURABILITY_PROOF_INVALID");
+  }
+
+  private static String invalidProof(LakeObjectStoragePort storage,LakeCatalogRepository.LakeObject object,byte[] content){
+    var head=storage.head(object.locator()).orElse(null);
+    if(head==null)return "UDP_LAKE_OBJECT_MISSING_AFTER_PUT";
+    if(!head.durable()||!object.hash().equals(head.contentHash())||head.sizeBytes()!=content.length
+        ||("RAW".equals(object.tier())&&!Arrays.equals(content,storage.read(object.locator()))))return "UDP_LAKE_CHECKSUM_MISMATCH";
+    return null;
+  }
+  LakeCatalogRepository.Segment verifyCompacted(LakeCatalogRepository.LakeObject input){
+    var segment=catalog.compactedSegment(input);
+    if(segment.packSize()>67_108_864L||segment.length()!=input.size()||segment.offset()>segment.packSize()-segment.length())
+      throw new IllegalStateException("UDP_LAKE_MANIFEST_UNVERIFIED");
+    byte[] pack=storage().read(segment.locator());
+    if(pack.length!=segment.packSize()||!hash(pack).equals(segment.hash())
+        ||!hash(Arrays.copyOfRange(pack,(int)segment.offset(),(int)(segment.offset()+segment.length()))).equals(input.hash()))
+      throw new IllegalStateException("UDP_LAKE_CHECKSUM_MISMATCH");
+    return segment;
+  }
+  private LakeCatalogRepository.LakeObject advanceCopy(LakeCatalogRepository.LakeObject object,String to,String correlation){
+    try{return catalog.transition(object.id(),object.version(),object.state(),to,"SYSTEM","",correlation,
+        Map.of("locatorFingerprint",fingerprint(object.locator())));}
+    catch(IllegalStateException conflict){
+      if(!"UDP_LAKE_STATE_CONFLICT".equals(conflict.getMessage()))throw conflict;
+      var current=catalog.get(object.id());
+      if(to.equals(current.state())||"VERIFIED".equals(current.state()))return current;
+      throw conflict;
+    }
+  }
+
+  private LakeCatalogRepository.LakeObject currentOrRetry(UUID id){
+    var current=catalog.get(id);
+    if("VERIFIED".equals(current.state()))return current;
+    requireWritable(current);
+    throw new StoreRejected(HttpStatus.SERVICE_UNAVAILABLE,"UDP_LAKE_WRITE_CONTENDED");
+  }
+
+  private static void requireWritable(LakeCatalogRepository.LakeObject object){
+    switch(object.state()){
+      case "FAILED", "STAGED", "DURABLE" -> { }
+      case "QUARANTINED" -> throw quarantined();
+      default -> throw new StoreRejected(HttpStatus.CONFLICT,"UDP_LAKE_OBJECT_NOT_WRITABLE");
+    }
+  }
+
+  private static StoreRejected quarantined(){
+    return new StoreRejected(HttpStatus.CONFLICT,"UDP_LAKE_OBJECT_QUARANTINED");
+  }
+
+  static final class StoreRejected extends ResponseStatusException {
+    StoreRejected(HttpStatus status,String code){super(status,code);}
+  }
 
   public LakeCatalogRepository.LakeObject authorizeDeletion(UUID id,long expected,String reason,TrustedHumanContext actor){if(reason==null||reason.isBlank())throw new IllegalArgumentException("UDP_LAKE_DELETION_REASON_REQUIRED");return catalog.requestDeletion(id,expected,OffsetDateTime.now().plusHours(1),reason,actor);}
 

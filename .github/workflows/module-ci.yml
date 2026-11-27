@@ -1,7 +1,33 @@
 name: UDP Object Resolution module CI
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      predecessor:
+        description: Full commit of the supported predecessor
+        type: string
+        default: e18f703263c5e3727f7e623cd59cbfcde3ed3d7d
 permissions: {contents: read}
 jobs:
+  predecessor-return:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PREDECESSOR: ${{ inputs.predecessor || 'e18f703263c5e3727f7e623cd59cbfcde3ed3d7d' }}
+      PREDECESSOR_SCHEMA: '39'
+      CANDIDATE_SCHEMA: '39'
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - name: Exercise predecessor, candidate and return on one populated database
+        run: bash scripts/ci/predecessor-return.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: udp-predecessor-return-${{ github.run_id }}
+          path: target/predecessor-return/
+          if-no-files-found: error
+          retention-days: 30
   java21-postgresql17:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -60,7 +86,50 @@ jobs:
           bash scripts/install-authorization-sdk.sh
           timeout --signal=TERM --kill-after=30s 20m mvn -B -ntp clean verify
       - name: Build non-root container
-        run: docker build -t ouf-udp:${{ github.sha }} . && test "$(docker image inspect ouf-udp:${{ github.sha }} --format '{{.Config.User}}')" = "10004:10004"
+        run: docker build --label org.opencontainers.image.revision=${{ github.sha }} --label org.opencontainers.image.source=https://github.com/GioNob/ouf-udp-object-resolution -t ouf-udp:${{ github.sha }} . && test "$(docker image inspect ouf-udp:${{ github.sha }} --format '{{.Config.User}}')" = "10004:10004"
+      - name: Preserve tested image for governed delivery
+        if: github.event_name == 'pull_request'
+        env:
+          OUF_REVIEWED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p target/governed-image
+          docker save "ouf-udp:${{ github.sha }}" | gzip -n > target/governed-image/image.tar.gz
+          python3 - <<'PYIMAGE'
+          import hashlib,json,os,re,subprocess
+          from pathlib import Path
+          root=Path('target/governed-image');archive=root/'image.tar.gz'
+          def command(*args):return subprocess.check_output(args,text=True).strip()
+          tested=command('git','rev-parse','HEAD');reviewed=os.environ['OUF_REVIEWED_SOURCE_COMMIT']
+          if not re.fullmatch('[a-f0-9]{40}',reviewed) or not re.fullmatch('[a-f0-9]{40}',tested):raise SystemExit(2)
+          checksum=hashlib.sha256()
+          with archive.open('rb') as stream:
+              for block in iter(lambda:stream.read(1048576),b''):checksum.update(block)
+          image='ouf-udp:'+os.environ['GITHUB_SHA']
+          migrations=sorted(Path('src/main/resources/db/migration').glob('V*.sql'))
+          value={'schema':'ouf.udp-tested-image.v1','repository':os.environ['GITHUB_REPOSITORY'],
+              'reviewedSourceCommit':reviewed,'testedCommit':tested,'testedTree':command('git','rev-parse','HEAD^{tree}'),
+              'workflowRunId':os.environ['GITHUB_RUN_ID'],'workflowRunAttempt':os.environ['GITHUB_RUN_ATTEMPT'],
+              'imageTag':image,'imageId':command('docker','image','inspect',image,'--format','{{.Id}}'),
+              'archiveName':archive.name,'archiveSha256':checksum.hexdigest(),'archiveBytes':archive.stat().st_size,
+              'flywayMigrations':[{'name':m.name,'sha256':hashlib.sha256(m.read_bytes()).hexdigest()} for m in migrations],
+              'imageRevisionLabel':command('docker','image','inspect',image,'--format','{{index .Config.Labels "org.opencontainers.image.revision"}}'),
+              'qualifiedInCiOnly':True,
+              'targetApplyAuthorized':False,'humanBudgetGranted':False,'releaseAcceptance':False}
+          (root/'manifest.json').write_text(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n')
+          (root/'SHA256SUMS').write_text(value['archiveSha256']+'  image.tar.gz\n')
+          print('Tested image preserved; target authorization remains false.')
+          PYIMAGE
+      - name: Upload tested image without publishing a release
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: udp-governed-image-${{ github.run_id }}
+          path: target/governed-image/
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
       - name: Verify runtime SDK packaging
         run: |
           jar tf target/udp-object-resolution-*.jar > target/sdk-packaging.txt

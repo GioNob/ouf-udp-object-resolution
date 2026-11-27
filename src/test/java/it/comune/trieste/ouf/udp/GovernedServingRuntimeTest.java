@@ -1,6 +1,8 @@
 package it.comune.trieste.ouf.udp;
 
 import static org.assertj.core.api.Assertions.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import java.util.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -40,6 +42,57 @@ class GovernedServingRuntimeTest {
   @BeforeEach void clean(){db.sql("truncate table ouf_udp.serving_access_audit,ouf_udp.merge_resolution_issue,ouf_udp.merge_property_contribution_link,ouf_udp.human_resolution_decision,ouf_udp.split_resolution_issue,ouf_udp.relationship_identity_history,ouf_udp.source_binding_history,ouf_udp.object_identity_history,ouf_udp.governance_audit,ouf_udp.governance_plan,ouf_udp.spatial_resolution_issue,ouf_udp.urban_geometry_current,ouf_udp.urban_geometry,ouf_udp.relationship_issue,ouf_udp.relationship_revision,ouf_udp.relationship_contribution,ouf_udp.urban_relationship,ouf_udp.property_conflict,ouf_udp.property_value,ouf_udp.materialization_observation,ouf_udp.property_contribution,ouf_udp.object_revision,ouf_udp.resolution_issue,ouf_udp.resolution_decision,ouf_udp.source_binding,ouf_udp.urban_object,ouf_udp.materialization_job,ouf_udp.handoff_event,ouf_udp.handoff_intake restart identity cascade").update();}
 
   @Test void currentOmitsUnauthorizedPropertyBeforeSerializationAndAuditsRedaction(){Fixture f=materialize("h-1","asset-1","Visible","classified",null);Map<String,Object> view=serving.current(f.objectId,open);Map<String,Object> properties=map(view.get("properties"));assertThat(properties).containsEntry("ouf:name","Visible").doesNotContainKey("ouf:secret");assertThat(view.toString()).doesNotContain("classified");assertThat(db.sql("select outcome from ouf_udp.serving_access_audit").query(String.class).single()).isEqualTo("REDACTED");}
+
+  @Test void d084CanonicalServingAndPostgisPointValidation() throws Exception {
+    String id="typed-handoff";
+    String decimal="999999999999999999999999.000000000000000001";
+    var payload=handoff(id,"typed-object","typed","classified",null);
+    var point=Map.of("crs","EPSG:4326","geoJson",Map.of("type","Point","coordinates",
+        List.of(new java.math.BigDecimal("13.75000000000000001"),new java.math.BigDecimal("45.6495"))));
+    var fields=map(payload.get("canonicalPayload"));
+    fields.put("amount",decimal);fields.put("point",point);
+    var scores=Map.of("scores",List.of(decimal));
+    var nested=Map.of("measurement",scores,"location",point);
+    fields.put("record",nested);
+    var member=new CanonicalValueType.Component(CanonicalValueType.base("decimal",true),true,Map.of(),Set.of());
+    var inner=new CanonicalValueType("urn:measurement@"+new UUID(0,1),false,Map.of("scores",member));
+    var outer=new CanonicalValueType("urn:record@"+new UUID(0,1),false,Map.of("measurement",
+        new CanonicalValueType.Component(inner,true,Map.of(),Set.of()),"location",
+        new CanonicalValueType.Component(CanonicalValueType.base("geometry",false),false,Map.of(),Set.of())));
+    var rules=new ArrayList<>(materialization.properties());
+    rules.add(new UdpPorts.PropertyRule("record","urn:hasRecord","urn:record","OPEN",List.of(),null,outer));
+    rules.add(new UdpPorts.PropertyRule("amount","urn:amount",CanonicalValueType.XSD+"decimal","OPEN",List.of()));
+    var pointShape=new PublishedValueTypes().composition(Map.of("kind","CONSTRUCTOR",
+        "constructorId","POINT_FROM_LAT_LON_V1"),CanonicalValueType.GEO);
+    rules.add(new UdpPorts.PropertyRule("point","urn:point",CanonicalValueType.GEO,"OPEN",List.of(),null,pointShape));
+    var profile=new UdpPorts.MaterializationProfile("policy://authority/1",rules);
+    intake.accept(payload);
+    UUID object=resolution.resolve(id,payload,resolutionProfile).targetUrbanObjectId();
+    canonical.materialize(id,object,payload,profile);
+    var auth=new ServingAuthorizationContext("HUMAN_USER","reader","default",Set.of("urban.object.read","urban.object.search","urban.geometry.read"),Set.of("OPEN"),"authz://geometry","point");
+    var json=new ObjectMapper().enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+    String expectedPoint="{\"crs\":\"EPSG:4326\",\"geoJson\":{\"coordinates\":[13.75,45.6495],\"type\":\"Point\"}}";
+    String expectedRecord="{\"location\":"+expectedPoint+",\"measurement\":{\"scores\":[\""+decimal+"\"]}}";
+    for(var view:List.of(serving.current(object,auth),serving.search("ouf:Asset",10,null,auth).items().getFirst())){
+      var properties=map(view.get("properties"));
+      assertThat(properties).containsEntry("urn:amount",decimal);
+      assertThat(json.writeValueAsString(properties.get("urn:point"))).isEqualTo(expectedPoint);
+      assertThat(json.writeValueAsString(properties.get("urn:hasRecord"))).isEqualTo(expectedRecord);
+      assertThat(map(view.get("propertyDatatypes"))).containsEntry("urn:amount",CanonicalValueType.XSD+"decimal")
+          .containsEntry("urn:hasRecord","urn:record").containsEntry("urn:point",CanonicalValueType.GEO).doesNotContainKey("ouf:secret");
+    }
+    var filtered=serving.current(object,open);
+    assertThat(map(filtered.get("properties"))).doesNotContainKeys("urn:point","urn:hasRecord");
+    assertThat(map(filtered.get("propertyDatatypes"))).doesNotContainKeys("urn:point","urn:hasRecord");
+    // A self-intersecting polygon reaches the same topology gate as the spatial materializer.
+    fields.put("point",Map.of("crs","EPSG:4326","geoJson",Map.of("type","Polygon","coordinates",List.of(
+        List.of(List.of(0,0),List.of(2,2),List.of(2,0),List.of(0,2),List.of(0,0))))));
+    var invalid=handoff("typed-invalid","typed-object","typed","classified",null);
+    map(invalid.get("canonicalPayload")).putAll(fields);
+    intake.accept(invalid);
+    assertThatThrownBy(()->canonical.materialize("typed-invalid",object,invalid,profile)).hasMessage("UDP_DATA_VALUE_NONCANONICAL");
+    assertThat(db.sql("select count(*) from ouf_udp.property_contribution where handoff_id='typed-invalid'").query(Long.class).single()).isZero();
+  }
 
   @Test void historyUsesOpaqueCursorAndSameSourceUpdateCreatesRevision(){Fixture first=materialize("h-old","asset-1","Old","s1",null);Fixture second=materialize("h-new","asset-1","New","s2",null);assertThat(second.objectId).isEqualTo(first.objectId);var page1=serving.history(first.objectId,1,null,null,open);assertThat(page1.items()).hasSize(1);assertThat(page1.nextCursor()).isNotBlank().doesNotContain("1");assertThat(map(page1.items().getFirst().get("properties"))).containsEntry("ouf:name","New");var page2=serving.history(first.objectId,1,page1.nextCursor(),null,open);assertThat(map(page2.items().getFirst().get("properties"))).containsEntry("ouf:name","Old");assertThat(db.sql("select count(*) from ouf_udp.property_conflict").query(Long.class).single()).isZero();}
 
@@ -107,6 +160,9 @@ class GovernedServingRuntimeTest {
     var json=new com.fasterxml.jackson.databind.ObjectMapper();
     var page1=json.readTree(firstPage.getResponse().getContentAsString());
     assertThat(page1.path("items").size()).isEqualTo(1);
+    assertThat(page1.path("outcome").asText()).isEqualTo("PARTIAL");
+    assertThat(page1.path("partial").asBoolean()).isFalse();
+    assertThat(page1.has("pollAfterSeconds")).isFalse();
     String cursor=page1.path("nextCursor").asText();
     assertThat(cursor).isNotBlank().doesNotContain(first.objectId.toString()).doesNotContain(second.objectId.toString());
     var secondPage=http.perform(searchPost(json.writeValueAsString(Map.of("type","ouf:Asset","pageSize",1,"cursor",cursor)))
@@ -114,6 +170,8 @@ class GovernedServingRuntimeTest {
       .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk()).andReturn();
     var page2=json.readTree(secondPage.getResponse().getContentAsString());
     assertThat(page2.path("items").size()).isEqualTo(1);
+    assertThat(page2.path("outcome").asText()).isEqualTo("COMPLETE");
+    assertThat(page2.has("pollAfterSeconds")).isFalse();
     assertThat(Set.of(page1.path("items").get(0).path("urbanObjectId").asText(),page2.path("items").get(0).path("urbanObjectId").asText()))
       .containsExactlyInAnyOrder(first.objectId.toString(),second.objectId.toString());
     assertThat(page2.path("nextCursor").isNull()).isTrue();

@@ -39,6 +39,7 @@ class MaterializationRecoveryRuntimeTest {
     r.add("spring.datasource.url",()->required("OUF_UDP_DB_URL"));
     r.add("spring.datasource.username",()->required("OUF_UDP_DB_USER"));
     r.add("spring.datasource.password",()->required("OUF_UDP_DB_PASSWORD"));
+    r.add("ouf.udp.lake.tenant-id",()->"tenant");
     r.add("ouf.udp.lake.required",()->"false");
   }
   @Autowired MaterializationRecoveryService recovery;
@@ -333,12 +334,57 @@ class MaterializationRecoveryRuntimeTest {
     db.sql("update ouf_udp.materialization_job set safe_failure_code='UDP_REFERENCE_INTEGRITY_MISSING',integrity_attempts=5,integrity_baseline_hash=:hash where job_id=:id").param("hash",HASH).param("id",job).update();return issue;
   }
   private String humanDecision(UUID issue){return db.sql("select to_jsonb(hd)::text from ouf_udp.human_resolution_decision hd where issue_id=:id").param("id",issue).query(String.class).single();}
-  private UUID fixture(String handoff){
-    UUID raw=UUID.randomUUID(),job=UUID.randomUUID();
+  @Autowired HandoffIntakeService intake;
+  @Autowired ObjectResolutionService resolver;
+  @Autowired CanonicalMaterializer materializer;
+  @Autowired org.springframework.transaction.support.TransactionTemplate transactions;
+
+  @Test void healthyFirstBindingSurvivesTechnicalQuarantineOfSecondHandoff(){
+    var config=mock(PublishedRuntimeConfiguration.class);
+    var rp=new UdpPorts.ResolutionProfile("CANONICAL_KEY","1","policy://r","Road","code","code");
+    var mp=new UdpPorts.MaterializationProfile("policy://a",List.of(new UdpPorts.PropertyRule("name","name","string","OPEN",List.of("roads"))));
+    when(config.resolve("bundle://road/1","ROAD")).thenReturn(new PublishedRuntimeConfiguration.Profiles(Map.of(),rp,mp,null));
+    var loop=new PublishedResolutionLoop(jobs,config,gate,resolver,materializer,null,db,transactions);
+    for(String id:List.of("pass-one","pass-two")){
+      intake.accept(CanonicalMaterializerRuntimeTest.handoff(id,"roads","row","R1",id,1));
+      db.sql("update ouf_udp.handoff_intake set raw_lake_object_id=:raw where handoff_id=:h").param("raw",sourceRaw()).param("h",id).update();
+      if(id.equals("pass-two"))doThrow(new IllegalArgumentException("UDP_CONTRACT_REF_INVALID")).when(catalog).resolve(anyMap());
+      loop.tick();
+    }
+    UUID job=db.sql("select job_id from ouf_udp.materialization_job where handoff_id='pass-two'").query(UUID.class).single();
+    assertThat(state(job)).isEqualTo("QUARANTINED");
+    doReturn(ready(HASH)).when(catalog).resolve(anyMap());
+    var view=recovery.review(job,human(),scope->{});
+    assertThat(view.retryEligible()).isTrue();
+    recovery.retry(job,request(view,UUID.randomUUID()),human(),scope->{});
+    loop.tick();
+    assertThat(state(job)).isEqualTo("SUCCEEDED");
+    assertThat(db.sql("select count(distinct urban_object_id) from ouf_udp.materialization_observation where handoff_id in ('pass-one','pass-two')").query(Long.class).single()).isOne();
+    assertThat(db.sql("select r.source_handoff_id from ouf_udp.materialization_observation o join ouf_udp.object_revision r using(revision_id) where o.handoff_id='pass-two'").query(String.class).single()).isEqualTo("pass-two");
+  }
+
+  @Test void authorizedReviewShowsOnlyRejectedPinCoordinates()throws Exception{
+    var job=fixture("review-pin");
+    String code="UDP_SEMANTIC_REFERENCE_UNRESOLVABLE", revision=new UUID(0,1008).toString();
+    db.sql("update ouf_udp.materialization_job set safe_failure_code=:code where job_id=:j").param("code",code).param("j",job).update();
+    db.sql("insert into ouf_udp.handoff_event(event_id,handoff_id,event_type,safe_detail) values(gen_random_uuid(),'review-pin','REFERENCE_INTEGRITY_QUARANTINED',cast(:detail as jsonb))")
+        .param("detail",json.writeValueAsString(Map.of("safeFailureCode",code,"index",1007,"semanticId","urn:p:1007",
+            "revisionId",revision,"unrelated","fixture-only"))).update();
+    var view=recovery.review(job,human(),scope->{});
+    assertThat(view.safeFailureCode()).isEqualTo(code);
+    assertThat(view.referenceFailure()).isEqualTo(Map.of("index",1007,"semanticId","urn:p:1007","revisionId",revision));
+  }
+
+  private UUID sourceRaw(){
+    UUID raw=UUID.randomUUID();
     db.sql("insert into ouf_udp.lake_object(lake_object_id,tenant_id,source_id,type_code,tier,content_hash,media_type,"
         +"logical_size_bytes,locator,state,retention_class,access_label,retention_until) "
         +"values(:id,'tenant','roads','ROAD','RAW',:hash,'application/json',100,'private-locator','VERIFIED','AUDIT','OPEN',transaction_timestamp()+interval '1 day')")
         .param("id",raw).param("hash","sha256:"+raw.toString().replace("-","").repeat(2)).update();
+    return raw;
+  }
+  private UUID fixture(String handoff){
+    UUID raw=sourceRaw(),job=UUID.randomUUID();
     db.sql("insert into ouf_udp.handoff_intake(handoff_id,ingestion_run_id,ingestion_id,source_id,type_code,source_object_id,"
         +"content_hash,payload_json,receipt_ref,raw_lake_object_id) values(:h,'run','ingestion','roads','ROAD',:h,:hash,"
         +"'{\"contractRefs\":{\"bundleRef\":\"bundle\",\"sourceSchemaRef\":\"schema\",\"semanticPublicationSetRef\":\"semantic\",\"adapterProfileRef\":\"adapter\"}}',:receipt,:raw)")
